@@ -52,7 +52,7 @@ export type Role = z.infer<typeof Role>;
 
 export const User = z.object({
   id: Id,
-  email: z.string().email(),
+  email: z.email(),
   name: z.string(),
   role: Role,
   // Deactivated users stay referenceable as assignees/authors (ClickUp
@@ -217,7 +217,7 @@ export const AuditEntry = z.object({
   actor: Actor,
   action: z.string(), // mutation name, e.g. "task.update"
   entity: z.string(), // e.g. "tk_abc123"
-  diff: z.record(z.unknown()).nullable(),
+  diff: z.record(z.string(), z.unknown()).nullable(),
   at: Ts,
 });
 export type AuditEntry = z.infer<typeof AuditEntry>;

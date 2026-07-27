@@ -28,7 +28,7 @@ export const Delta = z.object({
   entity: EntityKind,
   id: Id,
   // create: full object. update: changed fields only. delete: null.
-  data: z.record(z.unknown()).nullable(),
+  data: z.record(z.string(), z.unknown()).nullable(),
   actorUserId: Id,
   at: Ts,
 });

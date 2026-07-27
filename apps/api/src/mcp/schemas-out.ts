@@ -198,7 +198,7 @@ export const AuditEntryView = z.object({
   via: z.string(),
   apiKeyId: z.string().nullable(),
   automationRuleId: z.string().nullable(),
-  diff: z.record(z.unknown()).nullable(),
+  diff: z.record(z.string(), z.unknown()).nullable(),
 });
 
 export const GetAuditLogOut = z.object({

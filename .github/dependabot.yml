@@ -1,42 +1,26 @@
 version: 2
 updates:
-  # pnpm workspace root (dependabot resolves the shared pnpm-lock.yaml from here).
+  # One npm entry for the whole pnpm workspace — the shared lockfile lives at
+  # the root, and per-package entries just multiply every bump into five PRs.
   - package-ecosystem: npm
     directory: "/"
     schedule:
       interval: weekly
     groups:
-      minor-and-patch:
-        update-types:
-          - minor
-          - patch
-
-  - package-ecosystem: npm
-    directory: "/packages/shared"
-    schedule:
-      interval: weekly
-
-  - package-ecosystem: npm
-    directory: "/packages/core"
-    schedule:
-      interval: weekly
-
-  - package-ecosystem: npm
-    directory: "/apps/api"
-    schedule:
-      interval: weekly
-
-  - package-ecosystem: npm
-    directory: "/apps/web"
-    schedule:
-      interval: weekly
-
-  - package-ecosystem: npm
-    directory: "/apps/importer"
-    schedule:
-      interval: weekly
+      npm-dependencies:
+        patterns:
+          - "*"
+    ignore:
+      # TypeScript 7 is the Go-native rewrite; hold at 5.x until the tooling
+      # ecosystem (vitest, wrangler, editors) settles on it.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
