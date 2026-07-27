@@ -24,3 +24,8 @@ updates:
       actions:
         patterns:
           - "*"
+    ignore:
+      # action-setup v6 bundles a pnpm whose self-installer crashes against
+      # this repo's lockfile (verified in CI); stay on v4 until fixed upstream.
+      - dependency-name: "pnpm/action-setup"
+        update-types: ["version-update:semver-major"]
