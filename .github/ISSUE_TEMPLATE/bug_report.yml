@@ -1,0 +1,61 @@
+name: Bug report
+description: Something in Flow is broken or behaving unexpectedly.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill in what you can —
+        a solid repro is the fastest path to a fix.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what actually happened?
+      placeholder: When I drag a task between statuses, the board flashes and the task snaps back.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps that trigger the bug.
+      placeholder: |
+        1. Open a board with 2+ statuses
+        2. Drag a task to another column
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment type
+      description: Where is your Flow instance running?
+      options:
+        - Cloudflare Workers Paid plan (Durable Objects, Queues)
+        - Cloudflare Workers Free plan
+        - Local dev (wrangler dev)
+        - Other / not sure
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: e.g. Chrome 138, Safari 18.5
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or console output
+      description: |
+        Paste worker logs (`wrangler tail`) or browser console errors.
+        Redact hostnames, account IDs, and any tokens before pasting.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Flow version or commit
+      placeholder: e.g. v0.1.0 or a commit SHA

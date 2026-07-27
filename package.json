@@ -1,0 +1,19 @@
+{
+  "name": "flow",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Flow \u2014 fast task management on Cloudflare Workers",
+  "scripts": {
+    "dev": "pnpm --filter @flow/api dev",
+    "dev:web": "pnpm --filter @flow/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "deploy": "pnpm --filter @flow/web build && pnpm --filter @flow/api deploy"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  },
+  "packageManager": "pnpm@11.12.0"
+}

@@ -1,0 +1,10 @@
+# Cloudflare Workers static-assets header rules. Vite copies everything in
+# public/ into dist/ verbatim, and the assets binding in apps/api/wrangler.jsonc
+# points at that dist/, so this file ships as-is with the Worker.
+#
+# Vite content-hashes every filename under /assets/, so a changed file is a
+# changed URL and a year-long immutable cache can never serve stale code.
+# index.html is deliberately NOT listed: it is the one file whose URL does not
+# change, and it must be revalidated to pick up new asset hashes.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

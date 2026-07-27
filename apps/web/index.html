@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover so env(safe-area-inset-*) reports real values; the
+         comment composer and the mobile drawer pad themselves off it. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Flow</title>
+    <!-- Appearance, before the first paint, so a dark reload never flashes
+         white. src/lib/theme.ts owns the same contract at runtime; the storage
+         key and the two attribute values have to stay in step with it. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("flow.theme");
+          if (t === "dark" || t === "light") {
+            document.documentElement.setAttribute("data-theme", t);
+          }
+        } catch (e) {
+          /* private mode — fall through to the OS preference */
+        }
+      })();
+    </script>
+    <!-- Open the board socket now, not after the bundle downloads and parses.
+         Connection setup plus the server's snapshot build is the longest single
+         wait on a cold load, and none of it needs application code.
+
+         The seq comes out of the boot cache written by src/lib/boot-cache.ts —
+         key "flow.boot", a JSON record whose "seq" field is serialised BEFORE
+         "snapshot", which is what lets this read it with a regex instead of
+         parsing the whole board in <head>. Both sides of that contract are
+         commented; change one and you must change the other.
+
+         A stale seq is safe: src/store/ws.ts re-sends hello with null when it
+         adopts this socket and finds it could not restore the cache. Everything
+         that arrives before then is buffered on window.__flowWS (shape mirrored
+         in src/lib/early-ws.ts). -->
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem("flow.boot");
+          var m = raw && raw.slice(0, 200).match(/"seq":(\d+)/);
+          var seq = m ? parseInt(m[1], 10) : NaN;
+          var proto = location.protocol === "https:" ? "wss:" : "ws:";
+          var ws = new WebSocket(proto + "//" + location.host + "/ws");
+          var w = { socket: ws, frames: [], helloSent: false, onframe: null };
+          window.__flowWS = w;
+          ws.onopen = function () {
+            ws.send(
+              JSON.stringify({ type: "hello", sinceSeq: isFinite(seq) ? seq : null })
+            );
+            w.helloSent = true;
+          };
+          ws.onmessage = function (e) {
+            if (w.onframe) w.onframe(e.data);
+            else w.frames.push(e.data);
+          };
+        } catch (e) {
+          /* no WebSocket, no storage — the bundle opens its own socket */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+
+# Cloudflare / wrangler
+.wrangler/
+.dev.vars
+.dev.vars.*
+# Real deploy config stays local — copy wrangler.example.jsonc to wrangler.jsonc.
+apps/api/wrangler.jsonc
+
+# Environment files
+.env
+.env.*
+
+# Importer working data (raw ClickUp exports and transformed output)
+apps/importer/data/
+
+# OS / editor noise
+.DS_Store
+*.log
+*.local

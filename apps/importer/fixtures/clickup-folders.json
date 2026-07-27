@@ -1,0 +1,54 @@
+{
+ "90000000001": [
+  {
+   "id": "90200000001",
+   "name": "Production",
+   "orderindex": 0,
+   "override_statuses": false,
+   "hidden": false,
+   "space": {
+    "id": "90000000001",
+    "name": "Northwind Growth"
+   },
+   "task_count": "7",
+   "archived": false,
+   "statuses": [],
+   "lists": [
+    {
+     "id": "90100000001",
+     "name": "Content Refreshes",
+     "archived": false,
+     "orderindex": 0
+    },
+    {
+     "id": "90100000002",
+     "name": "Social & Distribution",
+     "archived": false,
+     "orderindex": 1
+    }
+   ],
+   "permission_level": "create"
+  }
+ ],
+ "90000000002": [
+  {
+   "id": "90200000002",
+   "name": "Archived",
+   "orderindex": 0,
+   "override_statuses": false,
+   "hidden": false,
+   "space": {
+    "id": "90000000002",
+    "name": "Globex Marketing"
+   },
+   "task_count": "0",
+   "archived": false,
+   "statuses": [],
+   "lists": [],
+   "permission_level": "create"
+  }
+ ],
+ "90000000003": [],
+ "90000000004": [],
+ "90000000005": []
+}

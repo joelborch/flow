@@ -1,0 +1,2699 @@
+[
+ {
+  "id": "9a1link001",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Bob: first-wave landing pages - exact meta descriptions and OG images",
+  "text_content": "Objective\n\nPage-level cleanup on the first-wave Northwind landing pages that are closest to launch.\n\nThis is not the navigation mega-menu task. That work already lives in the developer task:\n\nDeveloper task: https://app.clickup.com/t/9a1gone404\n\nScope\n\nSet the exact meta description on each first-wave page, assign a real OG image, and fix any related-links card that points at #. Anything blocked by a locked shared template gets a comment on this task instead of a silent skip.",
+  "description": "Objective\n\nPage-level cleanup on the first-wave Northwind landing pages that are closest to launch.\n\nThis is not the navigation mega-menu task. That work already lives in the developer task:\n\nDeveloper task: https://app.clickup.com/t/9a1gone404\n\nScope\n\nSet the exact meta description on each first-wave page, assign a real OG image, and fix any related-links card that points at #. Anything blocked by a locked shared template gets a comment on this task instead of a silent skip.",
+  "status": {
+   "status": "Closed",
+   "id": "sc90100000005_syn0020",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 3
+  },
+  "orderindex": "100.00000000000000000000000000000000",
+  "date_created": "1782224053285",
+  "date_updated": "1782224086506",
+  "date_closed": "1782224086506",
+  "date_done": "1782224086506",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1link001",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000005",
+   "name": "Bug Tracker",
+   "access": true
+  },
+  "project": {
+   "id": "90300000005",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000005",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000003"
+  },
+  "_fixtureReason": "clickup-link-in-description"
+ },
+ {
+  "id": "9a1link002",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Audit cross-links on the Globex pricing pages",
+  "text_content": "The pricing grid still links three cards to retired pages. Cross-check against the developer task before touching the template: https://app.clickup.com/t/9a1gone404",
+  "description": "The pricing grid still links three cards to retired pages. Cross-check against the developer task before touching the template: https://app.clickup.com/t/9a1gone404",
+  "status": {
+   "status": "Open",
+   "id": "sc90100000005_syn0017",
+   "color": "#d3d3d3",
+   "type": "open",
+   "orderindex": 0
+  },
+  "orderindex": "101.00000000000000000000000000000000",
+  "date_created": "1782300000000",
+  "date_updated": "1782300500000",
+  "date_closed": null,
+  "date_done": null,
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1link002",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000005",
+   "name": "Bug Tracker",
+   "access": true
+  },
+  "project": {
+   "id": "90300000005",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000005",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000003"
+  },
+  "_fixtureReason": "clickup-link-in-description"
+ },
+ {
+  "id": "9a1multi01",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Collect signed statement of work from Globex",
+  "text_content": "Countersigned copy filed in the shared drive.",
+  "description": "Countersigned copy filed in the shared drive.",
+  "status": {
+   "status": "complete",
+   "id": "sc90100000010_syn0039",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 2
+  },
+  "orderindex": "102.00000000000000000000000000000000",
+  "date_created": "1780900000000",
+  "date_updated": "1782900000000",
+  "date_closed": "1782900000000",
+  "date_done": "1782900000000",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   },
+   {
+    "id": 1000003,
+    "username": "Carol Diaz",
+    "color": "#536cfe",
+    "initials": "CD",
+    "email": "carol@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": "9a1par001",
+  "top_level_parent": "9a1par001",
+  "priority": {
+   "color": "#f8ae00",
+   "id": "2",
+   "orderindex": "2",
+   "priority": "high"
+  },
+  "due_date": "1782979200000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1multi01",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000010",
+   "name": "Client Onboarding",
+   "access": true
+  },
+  "project": {
+   "id": "90300000010",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000010",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000005"
+  },
+  "_fixtureReason": "multi-assignee"
+ },
+ {
+  "id": "9a1multi02",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Rotate the Globex social calendar for August",
+  "text_content": "Swap the July evergreen slots for the August launch posts.",
+  "description": "Swap the July evergreen slots for the August launch posts.",
+  "status": {
+   "status": "to do",
+   "id": "sc90100000003_syn0008",
+   "color": "#87909e",
+   "type": "open",
+   "orderindex": 0
+  },
+  "orderindex": "103.00000000000000000000000000000000",
+  "date_created": "1784000000000",
+  "date_updated": "1784100000000",
+  "date_closed": null,
+  "date_done": null,
+  "archived": false,
+  "creator": {
+   "id": 1000002,
+   "username": "Bob Rivera",
+   "color": "#4466ff",
+   "email": "bob@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000003,
+    "username": "Carol Diaz",
+    "color": "#536cfe",
+    "initials": "CD",
+    "email": "carol@example.com",
+    "profilePicture": null
+   },
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": {
+   "color": "#6fddff",
+   "id": "3",
+   "orderindex": "3",
+   "priority": "normal"
+  },
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1multi02",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000003",
+   "name": "Ongoing tasks",
+   "access": true
+  },
+  "project": {
+   "id": "90300000003",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000003",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000002"
+  },
+  "_fixtureReason": "multi-assignee"
+ },
+ {
+  "id": "9a1gdoc01",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Northwind service page: onboarding overview",
+  "text_content": "Page: /onboarding-overview/\nTitle Tag:\nPage Title:\n___________________________________________\nGoogle Doc Link: https://docs.google.com/document/d/1SynthAcmeDocAAAAAAAAAAAAAAAAAAAAAAAAAA01/edit?usp=drivesdk",
+  "description": "Page: /onboarding-overview/\nTitle Tag:\nPage Title:\n___________________________________________\nGoogle Doc Link: https://docs.google.com/document/d/1SynthAcmeDocAAAAAAAAAAAAAAAAAAAAAAAAAA01/edit?usp=drivesdk",
+  "status": {
+   "status": "published",
+   "id": "sc90100000008_syn0031",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 4
+  },
+  "orderindex": "104.00000000000000000000000000000000",
+  "date_created": "1779000000000",
+  "date_updated": "1783000000000",
+  "date_closed": "1783000000000",
+  "date_done": "1783000000000",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [
+   {
+    "name": "needs review",
+    "tag_fg": "#87909e",
+    "tag_bg": "#87909e",
+    "creator": 1000001
+   }
+  ],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [
+   {
+    "id": "f10000e7-2020-4c6e-846d-000000000001",
+    "name": "Google Doc",
+    "type": "text",
+    "type_config": {},
+    "date_created": "1706300000000",
+    "hide_from_guests": false,
+    "value": "https://docs.google.com/document/d/1SynthAcmeDocAAAAAAAAAAAAAAAAAAAAAAAAAA01/edit?usp=drivesdk",
+    "value_richtext": null,
+    "required": false
+   }
+  ],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1gdoc01",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000008",
+   "name": "Content Pipeline",
+   "access": true
+  },
+  "project": {
+   "id": "90300000008",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000008",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000001"
+  },
+  "_fixtureReason": "google-doc-custom-field"
+ },
+ {
+  "id": "9a1gdoc02",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Northwind service page: managed hosting",
+  "text_content": "Page: /managed-hosting/\nTitle Tag:\nPage Title:\n___________________________________________\nGoogle Doc Link: https://docs.google.com/document/d/1SynthAcmeDocAAAAAAAAAAAAAAAAAAAAAAAAAA02/edit?usp=drivesdk",
+  "description": "Page: /managed-hosting/\nTitle Tag:\nPage Title:\n___________________________________________\nGoogle Doc Link: https://docs.google.com/document/d/1SynthAcmeDocAAAAAAAAAAAAAAAAAAAAAAAAAA02/edit?usp=drivesdk",
+  "status": {
+   "status": "published",
+   "id": "sc90100000008_syn0031",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 4
+  },
+  "orderindex": "105.00000000000000000000000000000000",
+  "date_created": "1779100000000",
+  "date_updated": "1783100000000",
+  "date_closed": "1783100000000",
+  "date_done": "1783100000000",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [
+   {
+    "name": "needs review",
+    "tag_fg": "#87909e",
+    "tag_bg": "#87909e",
+    "creator": 1000001
+   }
+  ],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [
+   {
+    "id": "f10000e7-2020-4c6e-846d-000000000001",
+    "name": "Google Doc",
+    "type": "text",
+    "type_config": {},
+    "date_created": "1706300000000",
+    "hide_from_guests": false,
+    "value": "https://docs.google.com/document/d/1SynthAcmeDocAAAAAAAAAAAAAAAAAAAAAAAAAA02/edit?usp=drivesdk",
+    "value_richtext": null,
+    "required": false
+   }
+  ],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1gdoc02",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000008",
+   "name": "Content Pipeline",
+   "access": true
+  },
+  "project": {
+   "id": "90300000008",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000008",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000001"
+  },
+  "_fixtureReason": "google-doc-custom-field"
+ },
+ {
+  "id": "9a1gdempty",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Draft alt text for the refreshed hero images",
+  "text_content": "Alt text pass over the six new hero images.",
+  "description": "Alt text pass over the six new hero images.",
+  "status": {
+   "status": "published",
+   "id": "sc90100000008_syn0031",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 4
+  },
+  "orderindex": "106.00000000000000000000000000000000",
+  "date_created": "1779500000000",
+  "date_updated": "1783200000000",
+  "date_closed": "1783200000000",
+  "date_done": "1783200000000",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000003,
+    "username": "Carol Diaz",
+    "color": "#536cfe",
+    "initials": "CD",
+    "email": "carol@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": "9a1par002",
+  "top_level_parent": "9a1par002",
+  "priority": null,
+  "due_date": "1779955200000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [
+   {
+    "id": "f10000e7-2020-4c6e-846d-000000000001",
+    "name": "Google Doc",
+    "type": "text",
+    "type_config": {},
+    "date_created": "1706300000000",
+    "hide_from_guests": false,
+    "value": null,
+    "value_richtext": null,
+    "required": false
+   }
+  ],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1gdempty",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000008",
+   "name": "Content Pipeline",
+   "access": true
+  },
+  "project": {
+   "id": "90300000008",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000008",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000001"
+  },
+  "_fixtureReason": "google-doc-field-empty"
+ },
+ {
+  "id": "9a1mix000",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Initech launch checklist",
+  "text_content": "Track every pre-launch item for the Initech site in one place.",
+  "description": "Track every pre-launch item for the Initech site in one place.",
+  "status": {
+   "status": "in progress",
+   "id": "sc90100000006_syn0022",
+   "color": "#5f55ee",
+   "type": "custom",
+   "orderindex": 1
+  },
+  "orderindex": "107.00000000000000000000000000000000",
+  "date_created": "1780000000000",
+  "date_updated": "1783500000000",
+  "date_closed": null,
+  "date_done": null,
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": {
+   "color": "#6fddff",
+   "id": "3",
+   "orderindex": "3",
+   "priority": "normal"
+  },
+  "due_date": "1780344000000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1mix000",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000006",
+   "name": "Launch Checklist",
+   "access": true
+  },
+  "project": {
+   "id": "90300000006",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000006",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000004"
+  },
+  "_fixtureReason": "parent-with-mixed-subtasks"
+ },
+ {
+  "id": "9a1mix001",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Point DNS at the new host",
+  "text_content": "",
+  "description": "",
+  "status": {
+   "status": "in progress",
+   "id": "sc90100000006_syn0022",
+   "color": "#5f55ee",
+   "type": "custom",
+   "orderindex": 1
+  },
+  "orderindex": "108.00000000000000000000000000000000",
+  "date_created": "1780100000000",
+  "date_updated": "1780200000000",
+  "date_closed": null,
+  "date_done": null,
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": "9a1mix000",
+  "top_level_parent": "9a1mix000",
+  "priority": {
+   "color": "#6fddff",
+   "id": "3",
+   "orderindex": "3",
+   "priority": "normal"
+  },
+  "due_date": "1780344000000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1mix001",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000006",
+   "name": "Launch Checklist",
+   "access": true
+  },
+  "project": {
+   "id": "90300000006",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000006",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000004"
+  },
+  "_fixtureReason": "subtask-of-9a1mix000"
+ },
+ {
+  "id": "9a1mix002",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Set up 301 redirects from the legacy URLs",
+  "text_content": "",
+  "description": "",
+  "status": {
+   "status": "in progress",
+   "id": "sc90100000006_syn0022",
+   "color": "#5f55ee",
+   "type": "custom",
+   "orderindex": 1
+  },
+  "orderindex": "109.00000000000000000000000000000000",
+  "date_created": "1780100000000",
+  "date_updated": "1780200000000",
+  "date_closed": null,
+  "date_done": null,
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": "9a1mix000",
+  "top_level_parent": "9a1mix000",
+  "priority": {
+   "color": "#6fddff",
+   "id": "3",
+   "orderindex": "3",
+   "priority": "normal"
+  },
+  "due_date": "1780344000000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1mix002",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000006",
+   "name": "Launch Checklist",
+   "access": true
+  },
+  "project": {
+   "id": "90300000006",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000006",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000004"
+  },
+  "_fixtureReason": "subtask-of-9a1mix000"
+ },
+ {
+  "id": "9a1mix003",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Run the accessibility sweep on the top templates",
+  "text_content": "",
+  "description": "",
+  "status": {
+   "status": "in progress",
+   "id": "sc90100000006_syn0022",
+   "color": "#5f55ee",
+   "type": "custom",
+   "orderindex": 1
+  },
+  "orderindex": "110.00000000000000000000000000000000",
+  "date_created": "1780100000000",
+  "date_updated": "1780200000000",
+  "date_closed": null,
+  "date_done": null,
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": "9a1mix000",
+  "top_level_parent": "9a1mix000",
+  "priority": {
+   "color": "#6fddff",
+   "id": "3",
+   "orderindex": "3",
+   "priority": "normal"
+  },
+  "due_date": "1780344000000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1mix003",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000006",
+   "name": "Launch Checklist",
+   "access": true
+  },
+  "project": {
+   "id": "90300000006",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000006",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000004"
+  },
+  "_fixtureReason": "subtask-of-9a1mix000"
+ },
+ {
+  "id": "9a1mix004",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Verify analytics events fire on the contact form",
+  "text_content": "",
+  "description": "",
+  "status": {
+   "status": "complete",
+   "id": "sc90100000006_syn0023",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 2
+  },
+  "orderindex": "111.00000000000000000000000000000000",
+  "date_created": "1780100000000",
+  "date_updated": "1783400000000",
+  "date_closed": "1783400000000",
+  "date_done": "1783400000000",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": "9a1mix000",
+  "top_level_parent": "9a1mix000",
+  "priority": {
+   "color": "#6fddff",
+   "id": "3",
+   "orderindex": "3",
+   "priority": "normal"
+  },
+  "due_date": "1780344000000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1mix004",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000006",
+   "name": "Launch Checklist",
+   "access": true
+  },
+  "project": {
+   "id": "90300000006",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000006",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000004"
+  },
+  "_fixtureReason": "subtask-of-9a1mix000"
+ },
+ {
+  "id": "9a1mix005",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Compress and re-upload the hero video",
+  "text_content": "",
+  "description": "",
+  "status": {
+   "status": "complete",
+   "id": "sc90100000006_syn0023",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 2
+  },
+  "orderindex": "112.00000000000000000000000000000000",
+  "date_created": "1780100000000",
+  "date_updated": "1783400000000",
+  "date_closed": "1783400000000",
+  "date_done": "1783400000000",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": "9a1mix000",
+  "top_level_parent": "9a1mix000",
+  "priority": {
+   "color": "#6fddff",
+   "id": "3",
+   "orderindex": "3",
+   "priority": "normal"
+  },
+  "due_date": "1780344000000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1mix005",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000006",
+   "name": "Launch Checklist",
+   "access": true
+  },
+  "project": {
+   "id": "90300000006",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000006",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000004"
+  },
+  "_fixtureReason": "subtask-of-9a1mix000"
+ },
+ {
+  "id": "9a1alldone",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Fix the broken favicon on the Initech staging build",
+  "text_content": "Favicon 404s on every staging page; ship the corrected asset path.",
+  "description": "Favicon 404s on every staging page; ship the corrected asset path.",
+  "status": {
+   "status": "Closed",
+   "id": "sc90100000005_syn0020",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 3
+  },
+  "orderindex": "113.00000000000000000000000000000000",
+  "date_created": "1783000000000",
+  "date_updated": "1784000000000",
+  "date_closed": "1784000000000",
+  "date_done": "1784000000000",
+  "archived": false,
+  "creator": {
+   "id": 1000002,
+   "username": "Bob Rivera",
+   "color": "#4466ff",
+   "email": "bob@example.com",
+   "profilePicture": null
+  },
+  "assignees": [],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1alldone",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000005",
+   "name": "Bug Tracker",
+   "access": true
+  },
+  "project": {
+   "id": "90300000005",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000005",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000003"
+  },
+  "_fixtureReason": "parent-all-subtasks-done"
+ },
+ {
+  "id": "9a1done01",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Confirm the favicon renders in dark mode",
+  "text_content": "",
+  "description": "",
+  "status": {
+   "status": "Closed",
+   "id": "sc90100000005_syn0020",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 3
+  },
+  "orderindex": "114.00000000000000000000000000000000",
+  "date_created": "1783100000000",
+  "date_updated": "1783900000000",
+  "date_closed": "1783900000000",
+  "date_done": "1783900000000",
+  "archived": false,
+  "creator": {
+   "id": 1000002,
+   "username": "Bob Rivera",
+   "color": "#4466ff",
+   "email": "bob@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": "9a1alldone",
+  "top_level_parent": "9a1alldone",
+  "priority": null,
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1done01",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000005",
+   "name": "Bug Tracker",
+   "access": true
+  },
+  "project": {
+   "id": "90300000005",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000005",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000003"
+  },
+  "_fixtureReason": "subtask-done"
+ },
+ {
+  "id": "9a1open01",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Prepare the Initech kickoff agenda",
+  "text_content": "One page: goals, owners, and the first two sprint milestones.",
+  "description": "One page: goals, owners, and the first two sprint milestones.",
+  "status": {
+   "status": "to do",
+   "id": "sc90100000010_syn0037",
+   "color": "#87909e",
+   "type": "open",
+   "orderindex": 0
+  },
+  "orderindex": "115.00000000000000000000000000000000",
+  "date_created": "1784500000000",
+  "date_updated": "1784600000000",
+  "date_closed": null,
+  "date_done": null,
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": {
+   "color": "#f8ae00",
+   "id": "2",
+   "orderindex": "2",
+   "priority": "high"
+  },
+  "due_date": "1785571200000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1open01",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000010",
+   "name": "Client Onboarding",
+   "access": true
+  },
+  "project": {
+   "id": "90300000010",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000010",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000005"
+  },
+  "_fixtureReason": "status-type-open"
+ },
+ {
+  "id": "9a1cust01",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Intro call with the Northwind ops team",
+  "text_content": "Thirty minutes, their office, bring the capability one-pager.",
+  "description": "Thirty minutes, their office, bring the capability one-pager.",
+  "status": {
+   "status": "intro scheduled",
+   "id": "sc90100000004_syn0013",
+   "color": "#a875ff",
+   "type": "custom",
+   "orderindex": 2
+  },
+  "orderindex": "116.00000000000000000000000000000000",
+  "date_created": "1784200000000",
+  "date_updated": "1784700000000",
+  "date_closed": null,
+  "date_done": null,
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": "1785398400000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1cust01",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000004",
+   "name": "Globex CRM",
+   "access": true
+  },
+  "project": {
+   "id": "90300000004",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000004",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000005"
+  },
+  "_fixtureReason": "status-type-custom"
+ },
+ {
+  "id": "9a1clos01",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Send the revised Globex retainer proposal",
+  "text_content": "Sent and acknowledged; follow-up handled in the onboarding list.",
+  "description": "Sent and acknowledged; follow-up handled in the onboarding list.",
+  "status": {
+   "status": "complete",
+   "id": "sc90100000004_syn0016",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 5
+  },
+  "orderindex": "117.00000000000000000000000000000000",
+  "date_created": "1783800000000",
+  "date_updated": "1784800000000",
+  "date_closed": "1784800000000",
+  "date_done": "1784800000000",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1clos01",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000004",
+   "name": "Globex CRM",
+   "access": true
+  },
+  "project": {
+   "id": "90300000004",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000004",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000005"
+  },
+  "_fixtureReason": "status-type-closed"
+ },
+ {
+  "id": "9a1tags01",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Duplicate the case-study template for the new engagement",
+  "text_content": "Copied from the master template; fill in the client sections next.",
+  "description": "Copied from the master template; fill in the client sections next.",
+  "status": {
+   "status": "complete",
+   "id": "sc90100000007_syn0026",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 2
+  },
+  "orderindex": "118.00000000000000000000000000000000",
+  "date_created": "1783500000000",
+  "date_updated": "1784300000000",
+  "date_closed": "1784300000000",
+  "date_done": "1784300000000",
+  "archived": false,
+  "creator": {
+   "id": 1000002,
+   "username": "Bob Rivera",
+   "color": "#4466ff",
+   "email": "bob@example.com",
+   "profilePicture": null
+  },
+  "assignees": [],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [
+   {
+    "name": "template-copy",
+    "tag_fg": "#87909e",
+    "tag_bg": "#87909e",
+    "creator": 1000001
+   }
+  ],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1tags01",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000007",
+   "name": "Website Redesign",
+   "access": true
+  },
+  "project": {
+   "id": "90300000007",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000007",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000002"
+  },
+  "_fixtureReason": "has-tags"
+ },
+ {
+  "id": "9a1prio01",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Chase the overdue Initech contract signature",
+  "text_content": "Legal needs the countersigned copy before work starts Monday.",
+  "description": "Legal needs the countersigned copy before work starts Monday.",
+  "status": {
+   "status": "to do",
+   "id": "sc90100000010_syn0037",
+   "color": "#87909e",
+   "type": "open",
+   "orderindex": 0
+  },
+  "orderindex": "119.00000000000000000000000000000000",
+  "date_created": "1784600000000",
+  "date_updated": "1784700000000",
+  "date_closed": null,
+  "date_done": null,
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "color": "#4466ff",
+    "initials": "BR",
+    "email": "bob@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": {
+   "color": "#f50000",
+   "id": "1",
+   "orderindex": "1",
+   "priority": "urgent"
+  },
+  "due_date": "1784880000000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1prio01",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000010",
+   "name": "Client Onboarding",
+   "access": true
+  },
+  "project": {
+   "id": "90300000010",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000010",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000005"
+  },
+  "_fixtureReason": "priority-urgent"
+ },
+ {
+  "id": "9a1prio02",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Log the discovery-call notes into the CRM",
+  "text_content": "",
+  "description": "",
+  "status": {
+   "status": "complete",
+   "id": "sc90100000004_syn0016",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 5
+  },
+  "orderindex": "120.00000000000000000000000000000000",
+  "date_created": "1783900000000",
+  "date_updated": "1784850000000",
+  "date_closed": "1784850000000",
+  "date_done": "1784850000000",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": {
+   "color": "#6fddff",
+   "id": "3",
+   "orderindex": "3",
+   "priority": "normal"
+  },
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1prio02",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000004",
+   "name": "Globex CRM",
+   "access": true
+  },
+  "project": {
+   "id": "90300000004",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000004",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000005"
+  },
+  "_fixtureReason": "priority-normal"
+ },
+ {
+  "id": "9a1prio03",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Tidy stale contacts out of the nurture segment",
+  "text_content": "",
+  "description": "",
+  "status": {
+   "status": "complete",
+   "id": "sc90100000004_syn0016",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 5
+  },
+  "orderindex": "121.00000000000000000000000000000000",
+  "date_created": "1783950000000",
+  "date_updated": "1784860000000",
+  "date_closed": "1784860000000",
+  "date_done": "1784860000000",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": {
+   "color": "#d8d8d8",
+   "id": "4",
+   "orderindex": "4",
+   "priority": "low"
+  },
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1prio03",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000004",
+   "name": "Globex CRM",
+   "access": true
+  },
+  "project": {
+   "id": "90300000004",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000004",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000005"
+  },
+  "_fixtureReason": "priority-low"
+ },
+ {
+  "id": "9a1nonmem1",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Refresh the Northwind pricing comparison article",
+  "text_content": "Updated the comparison table and re-ran the screenshots.",
+  "description": "Updated the comparison table and re-ran the screenshots.",
+  "status": {
+   "status": "complete",
+   "id": "sc90100000001_syn0004",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 3
+  },
+  "orderindex": "122.00000000000000000000000000000000",
+  "date_created": "1754000000000",
+  "date_updated": "1783600000000",
+  "date_closed": "1783600000000",
+  "date_done": "1783600000000",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000005,
+    "username": "Evan Kim",
+    "color": "#2ea52c",
+    "initials": "EK",
+    "email": "evan.contractor@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [
+   {
+    "name": "complete",
+    "tag_fg": "#87909e",
+    "tag_bg": "#87909e",
+    "creator": 1000001
+   }
+  ],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": "1755244800000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1nonmem1",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000001",
+   "name": "Content Refreshes",
+   "access": true
+  },
+  "project": {
+   "id": "90200000001",
+   "name": "Production",
+   "hidden": false,
+   "access": true
+  },
+  "folder": {
+   "id": "90200000001",
+   "name": "Production",
+   "hidden": false,
+   "access": true
+  },
+  "space": {
+   "id": "90000000001"
+  },
+  "_fixtureReason": "non-member-assignee"
+ },
+ {
+  "id": "9a1empty01",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Remove the duplicate footer script include",
+  "text_content": "",
+  "description": "",
+  "status": {
+   "status": "Closed",
+   "id": "sc90100000005_syn0020",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 3
+  },
+  "orderindex": "123.00000000000000000000000000000000",
+  "date_created": "1783300000000",
+  "date_updated": "1784100000000",
+  "date_closed": "1784100000000",
+  "date_done": "1784100000000",
+  "archived": false,
+  "creator": {
+   "id": 1000006,
+   "username": "Priya Shah",
+   "color": "#7b68ee",
+   "email": "priya.freelance@example.com",
+   "profilePicture": null
+  },
+  "assignees": [],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000006,
+    "username": "Priya Shah",
+    "color": "#7b68ee",
+    "initials": "PS",
+    "email": "priya.freelance@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1empty01",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000005",
+   "name": "Bug Tracker",
+   "access": true
+  },
+  "project": {
+   "id": "90300000005",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000005",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000003"
+  },
+  "_fixtureReason": "empty-description"
+ },
+ {
+  "id": "9a1fold01",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Schedule the launch-week social posts",
+  "text_content": "Queue the five launch-week posts across both channels.",
+  "description": "Queue the five launch-week posts across both channels.",
+  "status": {
+   "status": "to do",
+   "id": "sc90100000002_syn0005",
+   "color": "#87909e",
+   "type": "open",
+   "orderindex": 0
+  },
+  "orderindex": "124.00000000000000000000000000000000",
+  "date_created": "1784900000000",
+  "date_updated": "1784950000000",
+  "date_closed": null,
+  "date_done": null,
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": "1785506400000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1fold01",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000002",
+   "name": "Social & Distribution",
+   "access": true
+  },
+  "project": {
+   "id": "90200000001",
+   "name": "Production",
+   "hidden": false,
+   "access": true
+  },
+  "folder": {
+   "id": "90200000001",
+   "name": "Production",
+   "hidden": false,
+   "access": true
+  },
+  "space": {
+   "id": "90000000001"
+  },
+  "_fixtureReason": "folder-hidden-False"
+ },
+ {
+  "id": "9a1old001",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Migrate the 2020 blog archive into the new CMS",
+  "text_content": "Old archive import; superseded by the full rebuild.",
+  "description": "Old archive import; superseded by the full rebuild.",
+  "status": {
+   "status": "Closed",
+   "id": "sc90100000009_syn0036",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 4
+  },
+  "orderindex": "125.00000000000000000000000000000000",
+  "date_created": "1580000000000",
+  "date_updated": "1600000000000",
+  "date_closed": "1600000000000",
+  "date_done": "1600000000000",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000003,
+    "username": "Carol Diaz",
+    "color": "#536cfe",
+    "initials": "CD",
+    "email": "carol@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": "9a1old000",
+  "top_level_parent": "9a1old000",
+  "priority": null,
+  "due_date": "1685523600000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [
+   {
+    "id": "f2000001-0000-4c6e-846d-000000000002",
+    "name": "Old Word Count",
+    "type": "number",
+    "type_config": {},
+    "date_created": "1680000000000",
+    "hide_from_guests": false,
+    "value": "850",
+    "value_richtext": null,
+    "required": false
+   },
+   {
+    "id": "f2000002-0000-4c6e-846d-000000000003",
+    "name": "New Word Count",
+    "type": "number",
+    "type_config": {},
+    "date_created": "1680000000000",
+    "hide_from_guests": false,
+    "value": "1400",
+    "value_richtext": null,
+    "required": false
+   },
+   {
+    "id": "f10000e7-2020-4c6e-846d-000000000001",
+    "name": "Google Doc",
+    "type": "text",
+    "type_config": {},
+    "date_created": "1706300000000",
+    "hide_from_guests": false,
+    "value": null,
+    "value_richtext": null,
+    "required": false
+   }
+  ],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1old001",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000009",
+   "name": "Legacy Migration",
+   "access": true
+  },
+  "project": {
+   "id": "90300000009",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000009",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000004"
+  },
+  "_fixtureReason": "closed-long-ago-out-of-scope"
+ },
+ {
+  "id": "9a1recent1",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Card CTA button has no hover, active or focus state",
+  "text_content": "The card CTA was built as a visual copy of the hero button instead of reusing it, so it shipped with no interaction states at all.",
+  "description": "The card CTA was built as a visual copy of the hero button instead of reusing it, so it shipped with no interaction states at all.",
+  "status": {
+   "status": "Closed",
+   "id": "sc90100000005_syn0020",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 3
+  },
+  "orderindex": "126.00000000000000000000000000000000",
+  "date_created": "1784200000000",
+  "date_updated": "1785000800000",
+  "date_closed": "1785000800000",
+  "date_done": "1785000800000",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1recent1",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000005",
+   "name": "Bug Tracker",
+   "access": true
+  },
+  "project": {
+   "id": "90300000005",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000005",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000003"
+  },
+  "_fixtureReason": "closed-recently-in-scope"
+ },
+ {
+  "id": "9a1par001",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Onboard Globex as a retainer client",
+  "text_content": "Everything between signed proposal and first sprint.",
+  "description": "Everything between signed proposal and first sprint.",
+  "status": {
+   "status": "in progress",
+   "id": "sc90100000010_syn0038",
+   "color": "#5f55ee",
+   "type": "custom",
+   "orderindex": 1
+  },
+  "orderindex": "127.00000000000000000000000000000000",
+  "date_created": "1780800000000",
+  "date_updated": "1784500000000",
+  "date_closed": null,
+  "date_done": null,
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": {
+   "color": "#f50000",
+   "id": "1",
+   "orderindex": "1",
+   "priority": "urgent"
+  },
+  "due_date": "1785312000000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1par001",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000010",
+   "name": "Client Onboarding",
+   "access": true
+  },
+  "project": {
+   "id": "90300000010",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000010",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000005"
+  },
+  "_fixtureReason": "parent-of-picked-subtask"
+ },
+ {
+  "id": "9a1par002",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Northwind image refresh round two",
+  "text_content": "Second batch of refreshed page imagery, shipped with the copy edits.",
+  "description": "Second batch of refreshed page imagery, shipped with the copy edits.",
+  "status": {
+   "status": "published",
+   "id": "sc90100000008_syn0031",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 4
+  },
+  "orderindex": "128.00000000000000000000000000000000",
+  "date_created": "1779400000000",
+  "date_updated": "1783250000000",
+  "date_closed": "1783250000000",
+  "date_done": "1783250000000",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": null,
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [
+   {
+    "id": "f10000e7-2020-4c6e-846d-000000000001",
+    "name": "Google Doc",
+    "type": "text",
+    "type_config": {},
+    "date_created": "1706300000000",
+    "hide_from_guests": false,
+    "value": null,
+    "value_richtext": null,
+    "required": false
+   }
+  ],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1par002",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000008",
+   "name": "Content Pipeline",
+   "access": true
+  },
+  "project": {
+   "id": "90300000008",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000008",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000001"
+  },
+  "_fixtureReason": "parent-of-picked-subtask"
+ },
+ {
+  "id": "9a1old000",
+  "custom_id": null,
+  "custom_item_id": 0,
+  "name": "Legacy CMS content migration",
+  "text_content": "Superseded: the 2020 migration project, closed when the rebuild landed.",
+  "description": "Superseded: the 2020 migration project, closed when the rebuild landed.",
+  "status": {
+   "status": "Closed",
+   "id": "sc90100000009_syn0036",
+   "color": "#008844",
+   "type": "closed",
+   "orderindex": 4
+  },
+  "orderindex": "129.00000000000000000000000000000000",
+  "date_created": "1575000000000",
+  "date_updated": "1601000000000",
+  "date_closed": "1601000000000",
+  "date_done": "1601000000000",
+  "archived": false,
+  "creator": {
+   "id": 1000001,
+   "username": "Alice Chen",
+   "color": "#ff7fab",
+   "email": "alice@example.com",
+   "profilePicture": null
+  },
+  "assignees": [
+   {
+    "id": 1000003,
+    "username": "Carol Diaz",
+    "color": "#536cfe",
+    "initials": "CD",
+    "email": "carol@example.com",
+    "profilePicture": null
+   }
+  ],
+  "group_assignees": [],
+  "watchers": [
+   {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "email": "alice@example.com",
+    "profilePicture": null
+   }
+  ],
+  "checklists": [],
+  "tags": [],
+  "parent": null,
+  "top_level_parent": null,
+  "priority": null,
+  "due_date": "1686301200000",
+  "start_date": null,
+  "points": null,
+  "time_estimate": null,
+  "custom_fields": [
+   {
+    "id": "f2000001-0000-4c6e-846d-000000000002",
+    "name": "Old Word Count",
+    "type": "number",
+    "type_config": {},
+    "date_created": "1680000000000",
+    "hide_from_guests": false,
+    "value": "850",
+    "value_richtext": null,
+    "required": false
+   },
+   {
+    "id": "f2000002-0000-4c6e-846d-000000000003",
+    "name": "New Word Count",
+    "type": "number",
+    "type_config": {},
+    "date_created": "1680000000000",
+    "hide_from_guests": false,
+    "value": "1400",
+    "value_richtext": null,
+    "required": false
+   },
+   {
+    "id": "f10000e7-2020-4c6e-846d-000000000001",
+    "name": "Google Doc",
+    "type": "text",
+    "type_config": {},
+    "date_created": "1706300000000",
+    "hide_from_guests": false,
+    "value": null,
+    "value_richtext": null,
+    "required": false
+   }
+  ],
+  "dependencies": [],
+  "linked_tasks": [],
+  "locations": [],
+  "team_id": "9999999",
+  "url": "https://app.clickup.com/t/9a1old000",
+  "permission_level": "create",
+  "list": {
+   "id": "90100000009",
+   "name": "Legacy Migration",
+   "access": true
+  },
+  "project": {
+   "id": "90300000009",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "folder": {
+   "id": "90300000009",
+   "name": "hidden",
+   "hidden": true,
+   "access": true
+  },
+  "space": {
+   "id": "90000000004"
+  },
+  "_fixtureReason": "parent-of-picked-subtask"
+ }
+]

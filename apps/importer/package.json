@@ -1,0 +1,23 @@
+{
+  "name": "@flow/importer",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "importer": "tsx src/index.ts",
+    "extract": "tsx src/index.ts extract",
+    "transform": "tsx src/index.ts transform",
+    "load": "tsx src/index.ts load"
+  },
+  "dependencies": {
+    "@flow/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest an improvement or new capability for Flow.
+title: "[feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: What are you trying to do that Flow doesn't support today? Describe the workflow, not just the feature.
+      placeholder: I triage tasks by keyboard and want to assign someone without touching the mouse.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How do you imagine this working? Rough sketches welcome — API shape, UI behavior, anything.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, or other ways this could be solved.
+    validations:
+      required: false
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you be willing to open a PR for this?
+      options:
+        - Yes, with some guidance
+        - Yes, independently
+        - No, but happy to test
+        - No
+    validations:
+      required: true

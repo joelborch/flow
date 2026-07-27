@@ -1,0 +1,206 @@
+@import "tailwindcss";
+
+/* Design tokens. One accent (indigo), a four-step neutral ramp, and three
+   semantic colours for priority/due state. Everything else is spacing and
+   type. Utilities come out of these automatically: bg-surface, border-line,
+   text-muted, text-accent, … */
+@theme {
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  --color-bg: #f7f7f8;
+  --color-surface: #ffffff;
+  --color-raised: #fbfbfc;
+  --color-line: #e7e7ec;
+  --color-line-strong: #c9c9d2;
+  --color-text: #17171b;
+  --color-muted: #6d6d7a;
+  --color-faint: #9a9aa6;
+
+  --color-accent: #5b5bd6;
+  --color-accent-soft: #eeeefc;
+  --color-danger: #d0453d;
+  --color-danger-soft: #fdeceb;
+  --color-warn: #b5791a;
+  --color-ok: #37946a;
+
+  --text-base: 0.8125rem; /* 13px */
+  --text-sm: 0.75rem;
+  --text-xs: 0.6875rem;
+
+  --radius-card: 7px;
+}
+
+/* Dark palette. It has to apply in two situations that must not fight:
+   the OS asks for dark and nobody overrode it, or <html data-theme="dark">.
+   So the same values are declared twice — once inside the media query, guarded
+   by :not([data-theme="light"]) so an explicit light choice wins even on a dark
+   OS, and once unconditionally for the explicit dark choice. Both selectors are
+   (0,2,0), above the (0,1,0) :root that @theme emits, and neither can override
+   the other because they never disagree. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: #101013;
+    --color-surface: #17171b;
+    --color-raised: #1d1d22;
+    --color-line: #26262c;
+    --color-line-strong: #3a3a44;
+    --color-text: #ecedef;
+    --color-muted: #9a9aa6;
+    --color-faint: #6d6d7a;
+
+    --color-accent: #7b7bef;
+    --color-accent-soft: #24243a;
+    --color-danger: #e8695f;
+    --color-danger-soft: #35201f;
+    --color-warn: #d59b3a;
+    --color-ok: #4fae7f;
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-bg: #101013;
+  --color-surface: #17171b;
+  --color-raised: #1d1d22;
+  --color-line: #26262c;
+  --color-line-strong: #3a3a44;
+  --color-text: #ecedef;
+  --color-muted: #9a9aa6;
+  --color-faint: #6d6d7a;
+
+  --color-accent: #7b7bef;
+  --color-accent-soft: #24243a;
+  --color-danger: #e8695f;
+  --color-danger-soft: #35201f;
+  --color-warn: #d59b3a;
+  --color-ok: #4fae7f;
+}
+
+/* Native chrome — form controls, scrollbar gutters, the canvas behind an
+   overscroll — follows the same decision, or it reads as a different app. */
+html {
+  color-scheme: light dark;
+}
+html[data-theme="light"] {
+  color-scheme: light;
+}
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Keyboard focus stays visible; pointer focus does not draw rings. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+/* Columns scroll independently. Thin, quiet scrollbars. */
+.scroll-y {
+  overflow-y: auto;
+  /* Contain the vertical axis only. The shorthand `contain` also swallows
+     horizontal scroll chaining, so a trackpad side-swipe over a column (which
+     is most of the board) never reached the board's own x-scroller. */
+  overscroll-behavior-y: contain;
+  overscroll-behavior-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+.scroll-y::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-y::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 4px;
+}
+.scroll-y::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* --- keyboard focus & selection on the board ----------------------------- */
+/* The focused card wears exactly the ring :focus-visible draws elsewhere, so
+   "where am I" reads the same whether you got there with Tab or with J. These
+   are applied imperatively by board/keyboard.ts (see the note there), which is
+   why they are classes rather than Tailwind utilities on the card. */
+.card-focused {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.card-selected {
+  border-color: var(--color-accent);
+  background-color: var(--color-accent-soft);
+}
+
+/* --- drag ---------------------------------------------------------------- */
+/* The lifted card is the one place this UI raises its voice: it leaves the
+   flow, tilts a degree, and casts the only real shadow on the page. */
+.drag-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 60;
+  pointer-events: none;
+  will-change: transform;
+  transform-origin: 12% 50%;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.16),
+    0 14px 28px -10px rgb(0 0 0 / 0.28);
+}
+
+.drag-source {
+  opacity: 0.35;
+}
+
+.drop-rule {
+  position: fixed;
+  z-index: 55;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--color-accent);
+  pointer-events: none;
+  will-change: transform;
+}
+.drop-rule::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+
+/* Column under the pointer during a drag. */
+.is-over {
+  background-color: color-mix(in srgb, var(--color-accent) 6%, transparent);
+}
+
+body.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,68 @@
+// Copy this file to wrangler.jsonc and fill in your own values before
+// deploying. wrangler.jsonc is gitignored, so your real hostnames and Access
+// settings never end up in version control.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "flow",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  // Attach your own custom domain here (it must be a zone on your Cloudflare
+  // account). Alternatively, delete this comment and set "workers_dev": true
+  // to serve from a *.workers.dev subdomain while you evaluate.
+  // "routes": [
+  //   { "pattern": "flow.example.com", "custom_domain": true }
+  // ],
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // API/MCP/inbound routes must always hit the Worker, never the SPA shell.
+    "run_worker_first": ["/api/*", "/mcp", "/mcp/*", "/ws"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "WORKSPACE", "class_name": "Workspace" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Workspace"] }
+  ],
+  // Cloudflare Email Sending binding, used by the send_email automation action.
+  // It requires completing Email Sending onboarding for your account/zone; if
+  // you don't need outbound email, remove this binding and leave EMAIL_DRY_RUN
+  // set to "true".
+  "send_email": [{ "name": "SEND_EMAIL" }],
+  "r2_buckets": [
+    { "binding": "ATTACHMENTS", "bucket_name": "flow-attachments" }
+  ],
+  "queues": {
+    "producers": [{ "binding": "SIDE_EFFECTS", "queue": "flow-side-effects" }],
+    "consumers": [{ "queue": "flow-side-effects", "max_retries": 5, "dead_letter_queue": "flow-dlq" }]
+  },
+  "vars": {
+    // "true" (the safe default) logs outbound email instead of sending it.
+    // Flip to "false" only once the SEND_EMAIL binding is onboarded and
+    // EMAIL_FROM is a verified sender on your zone.
+    "EMAIL_DRY_RUN": "true",
+    // Public hostname the app is served from; used in webhook envelopes,
+    // task URLs and inbound intake URLs.
+    "APP_HOSTNAME": "flow.example.com",
+    // Your Cloudflare Access team domain — the host that serves the JWKS the
+    // Worker verifies Access JWTs against.
+    "ACCESS_TEAM_DOMAIN": "your-team.cloudflareaccess.com",
+    // AUD tag of the Access application protecting this hostname. Find it in
+    // Zero Trust -> Access -> Applications -> your app -> Overview
+    // ("Application Audience (AUD) Tag" — a 64-char hex string).
+    "ACCESS_AUD": "",
+    // Fallback identity: dev auth (DEV_NO_AUTH), and inbound webhooks when no
+    // "gleap"/"gleap-inbound" api key exists. Must match a workspace user.
+    "OWNER_EMAIL": "owner@example.com",
+    // Sender for automation and notification email. The address must be on a
+    // domain your Email Sending setup is allowed to send from.
+    "EMAIL_FROM": "flow@mail.example.com",
+    "EMAIL_FROM_NAME": "Flow"
+    // DEV_NO_AUTH is deliberately NOT set here. Setting it to "true" resolves
+    // every request to OWNER_EMAIL; keep it in .dev.vars for local use only.
+  },
+  "observability": { "enabled": true }
+}

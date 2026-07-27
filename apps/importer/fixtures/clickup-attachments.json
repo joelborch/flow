@@ -1,0 +1,38 @@
+{
+ "9a1recent1": [
+  {
+   "id": "50990000-0000-4bdd-9e07-000000000001.jpg",
+   "date": "1784298012973",
+   "title": "card-cta-before-after.jpg",
+   "type": 1,
+   "source": 1,
+   "version": 0,
+   "extension": "jpg",
+   "thumbnail_small": "https://t9999999.p.clickup-attachments.com/t9999999/50990000-0000-4bdd-9e07-000000000001_small.jpg",
+   "thumbnail_medium": "https://t9999999.p.clickup-attachments.com/t9999999/50990000-0000-4bdd-9e07-000000000001_medium.jpg",
+   "thumbnail_large": "https://t9999999.p.clickup-attachments.com/t9999999/50990000-0000-4bdd-9e07-000000000001_large.jpg",
+   "is_folder": null,
+   "mimetype": "image/jpeg",
+   "hidden": false,
+   "parent_id": "9a1recent1",
+   "size": 82442,
+   "total_comments": 0,
+   "resolved_comments": 0,
+   "user": {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "email": "alice@example.com",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "profilePicture": null
+   },
+   "deleted": false,
+   "orientation": null,
+   "url": "https://t9999999.p.clickup-attachments.com/t9999999/50990000-0000-4bdd-9e07-000000000001/card-cta-before-after.jpg",
+   "email_data": null,
+   "workspace_id": null,
+   "url_w_query": "https://t9999999.p.clickup-attachments.com/t9999999/50990000-0000-4bdd-9e07-000000000001/card-cta-before-after.jpg?view=open",
+   "url_w_host": "https://t9999999.p.clickup-attachments.com/t9999999/50990000-0000-4bdd-9e07-000000000001/card-cta-before-after.jpg"
+  }
+ ]
+}

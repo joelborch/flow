@@ -1,0 +1,48 @@
+{
+ "9a1recent1": [
+  {
+   "id": "90140000000001",
+   "comment": [
+    {
+     "text": "What was wrong: the card CTA was built as a visual copy of the hero button rather than reusing it, so it had no hover, active or focus state at all.\n\nWhat changed: it now uses the hero button's shared states - hover fills with the brand accent, pressing goes one shade darker, and keyboard focus is clearly visible. Shape and size are unchanged since it stays full width inside the card.\n\nThis card appears on 5 pages and is fixed on all of them."
+    }
+   ],
+   "comment_text": "What was wrong: the card CTA was built as a visual copy of the hero button rather than reusing it, so it had no hover, active or focus state at all.\n\nWhat changed: it now uses the hero button's shared states - hover fills with the brand accent, pressing goes one shade darker, and keyboard focus is clearly visible. Shape and size are unchanged since it stays full width inside the card.\n\nThis card appears on 5 pages and is fixed on all of them.",
+   "user": {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "email": "alice@example.com",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "profilePicture": null
+   },
+   "assignee": null,
+   "group_assignee": null,
+   "reactions": [],
+   "date": "1785000772399",
+   "reply_count": 0
+  },
+  {
+   "id": "90140000000002",
+   "comment": [
+    {
+     "text": "**carol@example.com:**\nadd hover state, active state and focus state"
+    }
+   ],
+   "comment_text": "**carol@example.com:**\nadd hover state, active state and focus state",
+   "user": {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "email": "alice@example.com",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "profilePicture": null
+   },
+   "assignee": null,
+   "group_assignee": null,
+   "reactions": [],
+   "date": "1784298011691",
+   "reply_count": 0
+  }
+ ]
+}

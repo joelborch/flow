@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: typecheck-test-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        # Version comes from the "packageManager" field in package.json.
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm -r test
+
+      - name: Build web
+        run: pnpm --filter @flow/web build
+
+      - name: Wrangler dry-run deploy
+        working-directory: apps/api
+        run: |
+          # The repo ships wrangler.example.jsonc; real wrangler.jsonc is gitignored.
+          # Copy the example into place so wrangler has a config to validate.
+          if [ -f wrangler.example.jsonc ]; then
+            cp wrangler.example.jsonc wrangler.jsonc
+          fi
+          npx wrangler deploy --dry-run

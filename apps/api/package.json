@@ -1,0 +1,26 @@
+{
+  "name": "@flow/api",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@flow/core": "workspace:*",
+    "@flow/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "hono": "^4.7.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250712.0",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.114.0"
+  }
+}

@@ -1,0 +1,116 @@
+{
+ "id": "9999999",
+ "name": "Acme Web Studio",
+ "color": "#ffa727",
+ "avatar": null,
+ "members": [
+  {
+   "user": {
+    "id": 1000004,
+    "username": null,
+    "email": "dave@example.com",
+    "color": null,
+    "initials": "D",
+    "profilePicture": null,
+    "role": 4,
+    "role_subtype": 2,
+    "role_key": "guest",
+    "custom_role": null,
+    "last_active": null,
+    "date_joined": null,
+    "date_invited": "1779800000000"
+   },
+   "invited_by": {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "email": "alice@example.com",
+    "initials": "AC",
+    "profilePicture": null,
+    "banned_date": null,
+    "status": "invited"
+   },
+   "can_see_time_spent": true,
+   "can_see_time_estimated": true,
+   "can_see_points_estimated": true,
+   "can_edit_tags": false,
+   "can_create_views": false
+  },
+  {
+   "user": {
+    "id": 1000003,
+    "username": "Carol Diaz",
+    "email": "carol@example.com",
+    "color": "#536cfe",
+    "initials": "CD",
+    "profilePicture": null,
+    "role": 4,
+    "role_subtype": 2,
+    "role_key": "guest",
+    "custom_role": null,
+    "last_active": "1785150000000",
+    "date_joined": "1731500000000",
+    "date_invited": "1729500000000"
+   },
+   "invited_by": {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "email": "alice@example.com",
+    "initials": "AC",
+    "profilePicture": null,
+    "banned_date": null,
+    "status": "active"
+   },
+   "can_see_time_spent": true,
+   "can_see_time_estimated": true,
+   "can_see_points_estimated": true,
+   "can_edit_tags": false,
+   "can_create_views": false
+  },
+  {
+   "user": {
+    "id": 1000002,
+    "username": "Bob Rivera",
+    "email": "bob@example.com",
+    "color": "#4466ff",
+    "initials": "BR",
+    "profilePicture": null,
+    "role": 3,
+    "role_subtype": 0,
+    "role_key": "member",
+    "custom_role": null,
+    "last_active": "1785150000000",
+    "date_joined": "1706200000000",
+    "date_invited": "1706200000000"
+   },
+   "invited_by": {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "color": "#ff7fab",
+    "email": "alice@example.com",
+    "initials": "AC",
+    "profilePicture": null,
+    "banned_date": null,
+    "status": "active"
+   }
+  },
+  {
+   "user": {
+    "id": 1000001,
+    "username": "Alice Chen",
+    "email": "alice@example.com",
+    "color": "#ff7fab",
+    "initials": "AC",
+    "profilePicture": null,
+    "role": 1,
+    "role_subtype": 0,
+    "role_key": "owner",
+    "custom_role": null,
+    "last_active": "1785150000000",
+    "date_joined": "1588260000000",
+    "date_invited": "1588260000000"
+   }
+  }
+ ]
+}

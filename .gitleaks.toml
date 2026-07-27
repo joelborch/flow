@@ -1,0 +1,44 @@
+# Gitleaks configuration for Flow.
+# Extends the default ruleset and adds Flow-specific token shapes.
+
+title = "flow gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "flow-api-key"
+description = "Flow API key"
+regex = '''flow_[A-Za-z0-9_-]{20,}'''
+keywords = ["flow_"]
+
+[[rules]]
+id = "flow-inbound-webhook-token"
+description = "Flow inbound webhook token"
+regex = '''inb_[A-Za-z0-9_-]{10,}'''
+keywords = ["inb_"]
+
+[[rules]]
+id = "cloudflare-api-token"
+description = "Cloudflare API token"
+# 40-char token, usually next to a CLOUDFLARE_/CF_ variable name.
+regex = '''(?i)(?:cloudflare|cf)[_-]?(?:api[_-]?)?token[^A-Za-z0-9_-]{0,5}([A-Za-z0-9_-]{40})'''
+keywords = ["cloudflare", "cf_api"]
+
+[allowlist]
+# Vitest fixtures mint credential-shaped strings on purpose (format-rejection
+# tests). Scoped to test files only so a real token pasted anywhere else still
+# trips the scanner.
+paths = [
+  '''.*\.test\.ts$''',
+]
+description = "Documented placeholders only — keep this list tight."
+regexes = [
+  # Explicit example tokens used in docs and READMEs.
+  '''flow_EXAMPLE[A-Za-z0-9_-]*''',
+  '''inb_EXAMPLE[A-Za-z0-9_-]*''',
+  # Obvious placeholder fillers.
+  '''flow_x{20,}''',
+  '''inb_x{10,}''',
+  '''(?i)your[_-]?(cloudflare[_-]?)?(api[_-]?)?token''',
+]

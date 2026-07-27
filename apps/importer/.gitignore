@@ -1,0 +1,3 @@
+# Extract/transform output. Contains the whole workspace in cleartext and runs
+# to hundreds of MB with attachments metadata — never committed.
+data/
