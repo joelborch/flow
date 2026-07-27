@@ -13,7 +13,7 @@
   "dependencies": {
     "@flow/core": "workspace:*",
     "@flow/shared": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "hono": "^4.7.0",
     "zod": "^3.24.1"
   },
