@@ -69,6 +69,7 @@ type Ok = { ok: true };
  */
 export interface WorkspaceApi extends WorkspaceRpc {
   claimOwner(email: string): Promise<User | null>;
+
   // --- reads ----------------------------------------------------------------
   /**
    * `forUserId` applies per-space permissions: private spaces the user is not a
@@ -108,7 +109,8 @@ export interface WorkspaceApi extends WorkspaceRpc {
   updateTask(input: UpdateTaskInput, actor: string | Actor): Promise<Task>;
   moveTask(input: MoveTaskInput, actor: string | Actor): Promise<Task>;
   bulkUpdate(input: BulkUpdateInput, actor: string | Actor): Promise<BulkResult>;
-  deleteTask(taskId: string, actor: string | Actor): Promise<Ok>;
+  /** `r2Keys` are the deleted attachments' objects; the route is responsible for removing them from R2. */
+  deleteTask(taskId: string, actor: string | Actor): Promise<Ok & { r2Keys: string[] }>;
 
   // --- subtasks / comments --------------------------------------------------
   createSubtask(input: CreateSubtaskInput, actor: string | Actor): Promise<Subtask>;
@@ -188,7 +190,23 @@ export interface WorkspaceApi extends WorkspaceRpc {
     attachmentId: string,
     actor: string | Actor
   ): Promise<{ ok: true; r2Key: string }>;
+  /** Clears pending_object_deletes rows once the caller has actually removed the R2 objects. */
+  clearPendingObjectDeletes(r2Keys: string[]): Promise<{ ok: true; cleared: number }>;
   getAttachment(attachmentId: string): Promise<Attachment | null>;
+  setAttachmentDriveStorage(
+    input: {
+      attachmentId: string;
+      driveFileId: string;
+      driveWebViewLink: string;
+      driveDestination: "shared" | "private";
+    },
+    actor: string | Actor
+  ): Promise<Attachment>;
+  markAttachmentDriveCleanupComplete(
+    attachmentId: string,
+    driveFileId: string,
+    actor: string | Actor
+  ): Promise<Attachment>;
 
   /**
    * Hierarchy + statuses + users, no task rows — one call for MCP's map tool.
@@ -213,6 +231,18 @@ export interface WorkspaceApi extends WorkspaceRpc {
     before?: number;
     limit?: number;
   }): Promise<AutomationRunLog[]>;
+  /**
+   * Append an `ok: false` automation_runs row correcting the "queued" row the
+   * engine wrote at enqueue time. Called by the side-effects queue consumer
+   * for a permanent (non-retryable) delivery failure, and by the flow-dlq
+   * consumer once retries are exhausted. Never throws.
+   */
+  recordDeliveryFailure(input: {
+    ruleId: string;
+    taskId: string;
+    kind: "webhook" | "email";
+    detail: string;
+  }): Promise<Ok>;
 
   // --- audit ----------------------------------------------------------------
   /**

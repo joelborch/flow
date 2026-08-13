@@ -68,6 +68,12 @@ export function actionChip(action: Action, names: Names): string {
       return action.priority ? `priority ${action.priority}` : "clear priority";
     case "add_tags":
       return `+${action.tags.join(" +")}`;
+    case "remove_tags":
+      return `−${action.tags.join(" −")}`;
+    case "create_next_recurring_task":
+      return `next ${action.recurrence.kind}`;
+    case "create_task":
+      return `task → ${names.list(action.listId)}`;
     case "create_subtask":
       return "subtask";
     case "move_to_list":
@@ -90,6 +96,18 @@ export function actionSummary(action: Action, names: Names): string {
       return action.priority ? `Set priority to ${action.priority}` : "Clear the priority";
     case "add_tags":
       return `Add tags ${quoteList(action.tags)}`;
+    case "remove_tags":
+      return `Remove tags ${quoteList(action.tags)}`;
+    case "create_next_recurring_task": {
+      const interval = "interval" in action.recurrence ? action.recurrence.interval : 1;
+      const unit = action.recurrence.kind.replace(/ly$/, "");
+      const cadence = interval === 1 ? action.recurrence.kind : `every ${interval} ${unit}s`;
+      return `Create the next ${cadence} occurrence from the current due date`;
+    }
+    case "create_task": {
+      const status = action.statusName ? ` with status '${action.statusName}'` : "";
+      return `Create task '${action.title}' in ${names.list(action.listId)}${status}`;
+    }
     case "create_subtask": {
       const who = action.assigneeId ? `, assigned to ${names.user(action.assigneeId)}` : "";
       const when =
@@ -101,7 +119,7 @@ export function actionSummary(action: Action, names: Names): string {
     case "call_webhook":
       return `POST the event envelope to ${hostOf(action.url)}${action.secret ? " (HMAC signed)" : ""}`;
     case "send_email":
-      return `Email ${action.to.join(", ")} — "${action.subject}"`;
+      return `Email ${[...action.to, ...(action.cc ?? []), ...(action.bcc ?? [])].join(", ")} — "${action.subject}"`;
   }
 }
 

@@ -7,8 +7,9 @@ import { DrawerButton } from "../shell/palette.js";
 import { Avatar, Moon, Sun } from "../shell/ui.js";
 import { openOnboarding } from "../shell/onboarding.js";
 import { AutomationsTab, } from "./Automations.js";
-import { ApiKeysTab } from "./ApiKeys.js";
+import { ApiKeysTab, isWorkspaceAdmin } from "./ApiKeys.js";
 import { InboundTab } from "./Inbound.js";
+import { SpacesTab } from "./Spaces.js";
 import { activeTab, closeSettings, SETTINGS_TABS, TAB_LABEL, type SettingsTab } from "./route.js";
 import { Panel, Tag, X } from "./ui.js";
 
@@ -109,11 +110,17 @@ function AppearanceStrip() {
 }
 
 function Tabs() {
-  const current = activeTab.value;
+  // Mirrors the fallback in Settings below, so the highlighted tab is always
+  // the pane actually rendered.
+  const current = visibleSettingsTabs().includes(activeTab.value)
+    ? activeTab.value
+    : (visibleSettingsTabs()[0] ?? "api-keys");
   // API keys are self-serve now, so the tab is everyone's: a member sees their
   // own keys and can mint one for their agent. The admin-only extra — every
   // key in the workspace, with who each one impersonates — lives inside it.
-  const visible: SettingsTab[] = [...SETTINGS_TABS];
+  // Automations are owner/admin-only end to end (the API 403s the reads and
+  // the snapshot omits the rules), so members don't get the tab at all.
+  const visible: SettingsTab[] = visibleSettingsTabs();
   return (
     <div class="scroll-y flex items-center gap-1 overflow-x-auto border-b border-line">
       {visible.map((tab) => (
@@ -160,8 +167,17 @@ export function SettingsTopBar() {
   );
 }
 
+function visibleSettingsTabs(): SettingsTab[] {
+  return SETTINGS_TABS.filter(
+    (t) => (t !== "automations" && t !== "spaces") || isWorkspaceAdmin()
+  );
+}
+
 export function Settings() {
-  const tab = activeTab.value;
+  // A member deep-linked (or defaulted) onto a tab they cannot see lands on
+  // the first tab they can, rather than a blank pane.
+  const visible = visibleSettingsTabs();
+  const tab = visible.includes(activeTab.value) ? activeTab.value : (visible[0] ?? "api-keys");
   return (
     <div class="mx-auto w-full max-w-[900px] px-3 py-4 sm:px-5 sm:py-5">
       <div class="space-y-4">
@@ -171,6 +187,7 @@ export function Settings() {
         {tab === "automations" && <AutomationsTab />}
         {tab === "api-keys" && <ApiKeysTab />}
         {tab === "inbound" && <InboundTab />}
+        {tab === "spaces" && <SpacesTab />}
       </div>
     </div>
   );

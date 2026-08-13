@@ -10,9 +10,10 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { Priority } from "@flow/shared";
-import { users } from "../store/index.js";
+import { me, users } from "../store/index.js";
 import { statusesOf } from "../shell/data.js";
 import { cn, fromDateInput, toDateInput } from "../shell/format.js";
+import { canUseQuickAdd } from "../shell/quick-add.js";
 import {
   Avatar, PRIORITIES, PRIORITY_LABEL, PriorityFlag, Search, StatusDot,
 } from "../shell/ui.js";
@@ -417,6 +418,7 @@ const KEYMAP: Array<{ group: string; rows: Array<[string, string]> }> = [
     group: "Board",
     rows: [
       ["N", "New task"],
+      ["Q", "Quick add to Work Inbox"],
       ["?", "This sheet"],
     ],
   },
@@ -449,14 +451,16 @@ function CheatSheet() {
                 {g.group}
               </h3>
               <ul class="space-y-1">
-                {g.rows.map(([keys, what]) => (
+                {g.rows
+                  .filter(([keys]) => keys !== "Q" || canUseQuickAdd(me.value))
+                  .map(([keys, what]) => (
                   <li key={keys} class="flex items-baseline gap-2 text-[12.5px]">
                     <kbd class="shrink-0 rounded border border-line bg-raised px-1.5 py-px font-sans text-[10.5px] font-medium text-muted">
                       {keys}
                     </kbd>
                     <span class="min-w-0 flex-1 leading-[1.4] text-muted">{what}</span>
                   </li>
-                ))}
+                  ))}
               </ul>
             </section>
           ))}

@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Status } from "@flow/shared";
 import { INBOUND_TOKEN_PREFIX, token } from "./id.js";
-import { type ListRow, toList, toListWithSecrets } from "./rows.js";
+import {
+  type AttachmentRow,
+  type ListRow,
+  toAttachment,
+  toList,
+  toListWithSecrets,
+} from "./rows.js";
+import { MIGRATIONS } from "./schema.js";
 
 const statuses: Status[] = [
   { id: "st_1", name: "To Do", color: "#8b8f9a", type: "open", position: 0 },
@@ -60,5 +67,68 @@ describe("token", () => {
 
   it("is unguessable enough that two mints differ", () => {
     expect(token()).not.toBe(token());
+  });
+});
+
+describe("Drive-backed attachment rows", () => {
+  const attachmentRow = (patch: Partial<AttachmentRow> = {}): AttachmentRow => ({
+    id: "at_1",
+    task_id: "tk_1",
+    filename: "proof.pdf",
+    r2_key: "at/tk_1/at_1/proof.pdf",
+    storage_provider: "r2",
+    drive_file_id: null,
+    drive_web_view_link: null,
+    drive_destination: null,
+    migration_state: "r2",
+    size: 123,
+    mime_type: "application/pdf",
+    uploaded_by: "us_1",
+    created_at: 1_700_000_000_000,
+    ...patch,
+  });
+
+  it("maps a verified Drive destination without discarding the R2 key", () => {
+    expect(
+      toAttachment(
+        attachmentRow({
+          storage_provider: "drive",
+          drive_file_id: "drive-1",
+          drive_web_view_link: "https://drive.google.com/file/d/drive-1/view",
+          drive_destination: "private",
+          migration_state: "cleanup_pending",
+        })
+      )
+    ).toMatchObject({
+      r2Key: "at/tk_1/at_1/proof.pdf",
+      storageProvider: "drive",
+      driveFileId: "drive-1",
+      driveDestination: "private",
+      migrationState: "cleanup_pending",
+    });
+  });
+
+  it("fails open to R2 semantics for unrecognised storage values", () => {
+    expect(
+      toAttachment(
+        attachmentRow({
+          storage_provider: "unknown",
+          drive_destination: "unknown",
+          migration_state: "unknown",
+        })
+      )
+    ).toMatchObject({
+      storageProvider: "r2",
+      driveDestination: null,
+      migrationState: "r2",
+    });
+  });
+
+  it("registers the additive migration once with safe defaults", () => {
+    const migrations = MIGRATIONS.filter((m) => m.id === "core-0005-attachment-drive-storage");
+    expect(migrations).toHaveLength(1);
+    const migration = migrations[0]!;
+    expect(migration.statements.some((s) => /storage_provider.+DEFAULT 'r2'/.test(s))).toBe(true);
+    expect(migration.statements.some((s) => /migration_state.+DEFAULT 'r2'/.test(s))).toBe(true);
   });
 });

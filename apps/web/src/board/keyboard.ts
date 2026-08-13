@@ -247,7 +247,7 @@ function typing(el: EventTarget | Element | null): boolean {
  * drawer's overlay. Asking the DOM rather than importing the shell keeps the
  * board compiling on its own, which is the whole point of lib/shell-bridge.
  */
-function modalUp(): boolean {
+export function modalUp(): boolean {
   if (typeof document === "undefined") return false;
   return document.querySelector('[role="dialog"][aria-modal="true"]:not([data-board-overlay])') !== null;
 }

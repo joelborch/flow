@@ -4,7 +4,7 @@ import { Workspace } from "@flow/core";
 import { authMiddleware } from "./auth.js";
 import { onError, notFoundHandler } from "./errors.js";
 import { mcpHandler } from "./mcp/index.js";
-import { handleSideEffectBatch } from "./side-effects/index.js";
+import { handleDeadLetterBatch, handleSideEffectBatch } from "./side-effects/index.js";
 import { apiKeyRoutes } from "./routes/api-keys.js";
 import { attachmentRoutes } from "./routes/attachments.js";
 import { auditRoutes } from "./routes/audit.js";
@@ -73,8 +73,16 @@ app.get("/ws", handleWebSocketUpgrade);
 
 export default {
   fetch: app.fetch,
-  /** Outbound side effects (webhooks, email). Owned by the automations agent. */
+  /**
+   * Outbound side effects (webhooks, email) and their dead letters. Owned by
+   * the automations agent. One Worker consumes both queues (wrangler.jsonc
+   * has a consumer entry for each), dispatched on batch.queue.
+   */
   async queue(batch: MessageBatch, env: Env): Promise<void> {
+    if (batch.queue === "flow-dlq") {
+      await handleDeadLetterBatch(batch, env);
+      return;
+    }
     await handleSideEffectBatch(batch, env);
   },
 } satisfies ExportedHandler<Env>;

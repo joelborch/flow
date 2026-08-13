@@ -1,12 +1,13 @@
 /// <reference types="@cloudflare/workers-types" />
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { z } from "zod";
 import type { Attachment } from "@flow/shared";
 import { Id } from "@flow/shared";
-import { requireAuth } from "../auth.js";
+import { requireAdmin, requireAuth } from "../auth.js";
 import { workspace } from "../do.js";
 import type { AppEnv } from "../env.js";
-import { ApiError, badRequest, notFound, parseOrThrow, tooLarge } from "../errors.js";
+import { ApiError, badRequest, notFound, parseOrThrow, readJson, tooLarge } from "../errors.js";
 
 export const attachmentRoutes = new Hono<AppEnv>();
 
@@ -14,6 +15,33 @@ export const attachmentRoutes = new Hono<AppEnv>();
 export const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024; // 100 MB
 
 const DEFAULT_MIME = "application/octet-stream";
+
+export function isAllowedDriveLink(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "drive.google.com";
+  } catch {
+    return false;
+  }
+}
+
+const AttachmentStorageBody = z.discriminatedUnion("action", [
+  z
+    .object({
+      action: z.literal("finalize_drive"),
+      driveFileId: z.string().min(1).max(200),
+      driveWebViewLink: z.string().refine(isAllowedDriveLink, "must be an HTTPS drive.google.com link"),
+      driveDestination: z.enum(["shared", "private"]),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("cleanup_r2"),
+      driveFileId: z.string().min(1).max(200),
+      confirmR2Key: z.string().min(1).max(1000),
+    })
+    .strict(),
+]);
 
 /**
  * Strip anything that could escape the intended R2 prefix or confuse a
@@ -96,7 +124,10 @@ attachmentRoutes.post("/tasks/:taskId/attachments", async (c) => {
     return c.json(attachment, 201);
   } catch (err) {
     // Metadata failed, so nothing references this object — clean it up rather
-    // than leaving R2 to accumulate orphans.
+    // than leaving R2 to accumulate orphans. pending_object_deletes parking
+    // doesn't apply here: the DO write is the thing that just failed, and an
+    // object with no row is the documented-harmless case (see the upload
+    // ordering note above), so best-effort is the right level.
     c.executionCtx.waitUntil(c.env.ATTACHMENTS.delete(r2Key).catch(() => undefined));
     throw err;
   }
@@ -109,6 +140,57 @@ attachmentRoutes.get("/tasks/:taskId/attachments", async (c) => {
   // applies per-space permissions, and it returns the attachments anyway.
   const detail = await workspace(c.env).getTaskDetail(taskId, auth.user.id);
   return c.json({ attachments: detail.attachments });
+});
+
+/**
+ * The monthly migration's only mutation surface.
+ *
+ * Phase one makes a verified Drive link canonical but leaves R2 intact. The
+ * caller must then read the attachment back. Phase two requires both the exact
+ * Drive file id and exact R2 key, deletes that object, confirms it is absent,
+ * and only then marks the migration complete.
+ */
+attachmentRoutes.patch("/attachments/:attachmentId/storage", async (c) => {
+  const auth = requireAdmin(c);
+  const attachmentId = parseOrThrow(Id, c.req.param("attachmentId"), "attachmentId");
+  const body = parseOrThrow(AttachmentStorageBody, await readJson(c));
+  const ws = workspace(c.env);
+
+  if (body.action === "finalize_drive") {
+    const attachment = await ws.setAttachmentDriveStorage(
+      {
+        attachmentId,
+        driveFileId: body.driveFileId,
+        driveWebViewLink: body.driveWebViewLink,
+        driveDestination: body.driveDestination,
+      },
+      auth.actor
+    );
+    return c.json(attachment);
+  }
+
+  const attachment = await ws.getAttachment(attachmentId);
+  if (!attachment) throw notFound(`no attachment ${attachmentId}`);
+  if (attachment.driveFileId !== body.driveFileId) {
+    throw badRequest(`Drive file confirmation does not match attachment ${attachmentId}`);
+  }
+  if (attachment.r2Key !== body.confirmR2Key) {
+    throw badRequest(`R2 key confirmation does not match attachment ${attachmentId}`);
+  }
+  if (attachment.storageProvider !== "drive") {
+    throw badRequest(`attachment ${attachmentId} is not Drive-backed`);
+  }
+
+  if (attachment.migrationState !== "complete") {
+    await c.env.ATTACHMENTS.delete(attachment.r2Key);
+    const remaining = await c.env.ATTACHMENTS.head(attachment.r2Key);
+    if (remaining !== null) {
+      throw new ApiError(502, `R2 object ${attachment.r2Key} still exists after cleanup`);
+    }
+  }
+  return c.json(
+    await ws.markAttachmentDriveCleanupComplete(attachmentId, body.driveFileId, auth.actor)
+  );
 });
 
 /**
@@ -219,6 +301,9 @@ export function contentRangeHeader(range: R2Range | undefined, size: number): st
  * built from `object.range` and `object.size` instead.
  */
 async function streamAttachment(c: Context<AppEnv>, meta: Attachment): Promise<Response> {
+  if (meta.storageProvider === "drive" && meta.driveWebViewLink) {
+    return c.redirect(meta.driveWebViewLink, 302);
+  }
   const wanted = parseRangeHeader(c.req.header("Range"), meta.size);
 
   const object = await c.env.ATTACHMENTS.get(meta.r2Key, {
@@ -272,20 +357,28 @@ attachmentRoutes.delete("/attachments/:attachmentId", async (c) => {
   const auth = requireAuth(c);
   const attachmentId = parseOrThrow(Id, c.req.param("attachmentId"), "attachmentId");
 
-  // The DO returns the r2Key it just detached, so no separate lookup is needed.
+  // The DO returns the r2Key it just detached (and parked in
+  // pending_object_deletes), so no separate lookup is needed. Metadata is
+  // gone, so the object is unreachable; drop it after responding and clear
+  // the pending row once that succeeds — if it doesn't (Worker evicted,
+  // delete failed), the backup job's daily sweep picks the key up.
   const removed = await workspace(c.env).deleteAttachment(attachmentId, auth.actor);
-  // Metadata is gone, so the object is unreachable; drop it after responding.
   c.executionCtx.waitUntil(
-    c.env.ATTACHMENTS.delete(removed.r2Key).catch((err: unknown) => {
-      console.error(
-        JSON.stringify({
-          level: "warn",
-          msg: "orphaned R2 object after attachment delete",
-          r2Key: removed.r2Key,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      );
-    })
+    (async () => {
+      try {
+        await c.env.ATTACHMENTS.delete(removed.r2Key);
+        await workspace(c.env).clearPendingObjectDeletes([removed.r2Key]);
+      } catch (err) {
+        console.error(
+          JSON.stringify({
+            level: "warn",
+            msg: "orphaned R2 object after attachment delete; backup job sweep will retry",
+            r2Key: removed.r2Key,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        );
+      }
+    })()
   );
   return c.json({ ok: true, deleted: attachmentId });
 });

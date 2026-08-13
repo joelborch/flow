@@ -43,11 +43,11 @@ function positionAtEnd(listId: string, statusId: string): number {
   return append(positions);
 }
 
-export async function createTask(input: CreateTaskInput): Promise<void> {
+export async function createTask(input: CreateTaskInput): Promise<Task | null> {
   const list = listById.value.get(input.listId);
   if (!list) {
     toast("That list is gone — reload to catch up", "error");
-    return;
+    return null;
   }
   const status = (input.status ? findStatus(list, input.status) : undefined) ?? openStatus(list);
   const now = Date.now();
@@ -102,9 +102,11 @@ export async function createTask(input: CreateTaskInput): Promise<void> {
     putTask(created);
     endPending(tempId, false);
     flush();
+    return created;
   } catch (err) {
     for (const s of subtasks.value.get(tempId) ?? []) removeSubtask(s.id);
     settleTask(tempId, null, err);
+    return null;
   }
 }
 
@@ -308,9 +310,9 @@ export async function createSpace(input: CreateSpaceInput): Promise<Space | null
     color: input.color ?? null,
     position: append(spaces.value.map((s) => s.position)),
     archived: false,
-    // CreateSpaceInput carries no visibility, so a new space is workspace-wide;
-    // making it private is a separate, owner/admin-only flip.
-    visibility: "workspace",
+    // Spaces are born private unless the caller opts into workspace-wide
+    // visibility (CreateSpaceInput defaults to "private" server-side too).
+    visibility: input.visibility,
     createdAt: Date.now(),
   };
   putRow(spaces, optimistic);

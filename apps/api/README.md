@@ -653,8 +653,15 @@ https://flow.example.com/api/inbound/ls_def456?token=inb_xxxxxxxx
 A per-list token rather than a workspace api key means a leaked Gleap credential
 can only create tasks in that one list, and rotating it is one PATCH.
 
-**Body mapping.** The route tries `InboundTaskInput` first. Anything else goes
-through the best-effort mapper in `src/gleap.ts`, which:
+**Body mapping.** The route tries `InboundTaskInput` first. Real Gleap tickets
+(`ticket.created` and similar events) are recognized next, ahead of the
+permissive native contract: the task name is `[bugId]` plus
+`form.description.value`, and the body is a compact `Description` / `Info` /
+`Metadata` document matching the useful shape of Gleap's ClickUp integration.
+Reporter, country, priority, type, browser, device, viewport and page URL are
+retained; share tokens, agent state, session event data and the raw webhook are
+deliberately omitted. Anything else falls back to the generic best-effort
+mapper in `src/gleap.ts`, which:
 
 - takes the **title** from `title`, `subject`, `name`, `summary` or `headline`,
   checking the top level and the nested `data`/`payload`/`formData` objects
@@ -675,12 +682,37 @@ through the best-effort mapper in `src/gleap.ts`, which:
   nothing to do with the target list's statuses, and guessing would fail the
   create. Inbound tasks land in the list's open status.
 
-**Idempotency.** `externalId` (or `shareToken`/`bugId`/`ticketId`/`id`) is
-recorded as an `ext:<externalId>` tag. A repeat delivery returns the existing
-task with `200 {"created":false,"deduplicatedBy":"…"}` instead of creating a
-duplicate — which matters, because Gleap retries on any non-2xx. The `task` in
-that response is the same full Task shape the 201 carries, so a sender does not
-have to branch on whether its delivery was the first.
+**Idempotency and enrichment.** The stable Gleap ticket `id` (or, for the
+generic mapper, `shareToken`/`bugId`/`ticketId`/`id`) is recorded as an
+`ext:<id>` tag. A repeat delivery returns the existing task with
+`200 {"created":false,"deduplicatedBy":"…"}` instead of creating a duplicate —
+which matters, because Gleap retries on any non-2xx. Legacy `ext:<shareToken>`
+tasks are still found, and the share-token marker is replaced with the ticket
+id on the next delivery. A repeat delivery enriches only Flow's known
+`Untitled Gleap report` + raw-payload output; human-edited titles,
+descriptions, status and assignment are never overwritten. The `task` in every
+response is the same full Task shape the 201 carries, so a sender does not have
+to branch on whether its delivery was the first.
+
+**Screenshots.** `ticket.created` commonly arrives while Gleap is still
+rendering the screenshot. Flow queues a five-second reconciliation job, reads
+the ticket from `GET https://api.gleap.io/v3/tickets/<id>`, and retries with
+bounded delays until `screenshotUrl` is ready. The image is fetched only over
+HTTPS from `GLEAP_ATTACHMENT_HOSTS`, every redirect is revalidated, the body is
+limited to 20 MB and the resulting R2 attachment id is deterministic so queue
+retries cannot add duplicates. Each Gleap project needs its own API token.
+Store the exact project-ID-to-token JSON object as one encrypted Worker secret:
+
+```bash
+pnpm --filter @flow/api exec wrangler secret put GLEAP_PROJECT_TOKENS_JSON
+```
+
+For local development, put a value such as
+`GLEAP_PROJECT_TOKENS_JSON={"project-id":"token"}` in the gitignored
+`apps/api/.dev.vars`. Unknown projects and malformed maps fail closed; Flow
+never falls back to another project's token. If the rendered image uses a
+separate Gleap CDN, add its exact hostname or suffix to the comma-separated
+`GLEAP_ATTACHMENT_HOSTS` var after verifying one development ticket response.
 
 **Attribution.** Inbound tasks are created as the user behind the api key named
 `gleap` (or `gleap-inbound`), falling back to `OWNER_EMAIL`'s user, with
@@ -858,7 +890,13 @@ cp wrangler.example.jsonc wrangler.jsonc
 | `OWNER_EMAIL` | Fallback identity for dev auth and for inbound with no `gleap` key. |
 | `EMAIL_FROM` | Sender address for outbound email; must be sendable under your Email Sending setup. |
 | `EMAIL_FROM_NAME` | Sender display name for outbound email. |
+| `EMAIL_BRAND_NAME` | Wordmark shown in the branded email header. Falls back to `EMAIL_FROM_NAME`, then `"Flow"`. |
+| `GLEAP_ATTACHMENT_HOSTS` | Comma-separated HTTPS host allowlist for rendered Gleap screenshots. |
 | `DEV_NO_AUTH` | Not set in `wrangler.jsonc`. `"true"` in `.dev.vars` only. |
+
+`GLEAP_PROJECT_TOKENS_JSON` is a Worker secret (or a local `.dev.vars` value),
+not a checked-in var. It is a JSON object keyed by exact Gleap project ID and is
+used only by delayed screenshot reconciliation.
 
 Bindings: `WORKSPACE` (DO), `ATTACHMENTS` (R2), `SIDE_EFFECTS` (Queue),
 `ASSETS` (SPA).
@@ -875,6 +913,7 @@ src/
   access-jwt.ts       Access JWT verification, JWKS fetch + cache
   tokens.ts           token minting, sha256 hashing, bearer parsing  (pure)
   gleap.ts            inbound payload mapper                        (pure)
+  gleap-screenshot.ts delayed ticket lookup + safe R2 screenshot attachment
   do.ts               WorkspaceApi — the RPC surface + the typed stub accessor
   errors.ts           ApiError, Zod issue flattening, {error} responses
   routes/             me, spaces, lists, tasks, attachments,

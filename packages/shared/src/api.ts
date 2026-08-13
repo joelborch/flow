@@ -159,7 +159,13 @@ export const CreateListInput = z.object({
     .optional(),
 });
 export type CreateListInput = z.infer<typeof CreateListInput>;
-export const CreateSpaceInput = z.object({ name: z.string().min(1), color: z.string().optional() });
+export const CreateSpaceInput = z.object({
+  name: z.string().min(1),
+  color: z.string().optional(),
+  // Spaces are born private unless the caller opts into workspace-wide
+  // visibility — private is the norm across the workspace.
+  visibility: SpaceVisibility.default("private"),
+});
 export type CreateSpaceInput = z.infer<typeof CreateSpaceInput>;
 
 /**
@@ -194,10 +200,10 @@ export type UpsertAutomationInput = z.infer<typeof UpsertAutomationInput>;
 // fields land in the description.
 // ---------------------------------------------------------------------------
 export const InboundTaskInput = z.object({
-  title: z.string().min(1),
-  description: z.string().optional(),
+  title: taskTitle(),
+  description: taskDescription().optional(),
   status: z.string().optional(),
-  tags: z.array(z.string()).optional(),
+  tags: taskTags().optional(),
   externalId: z.string().optional(), // idempotency key from the source system
   externalUrl: z.string().url().optional(),
 });

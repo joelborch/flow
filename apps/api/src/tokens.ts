@@ -52,17 +52,3 @@ export function parseBearer(header: string | null | undefined): string | null {
   const token = match?.[1]?.trim();
   return token && token.length > 0 ? token : null;
 }
-
-/**
- * Constant-time string compare for secret material (inbound tokens). Falls back
- * to a length check first, which is not secret.
- */
-export function timingSafeEqualString(a: string, b: string): boolean {
-  const encoder = new TextEncoder();
-  const left = encoder.encode(a);
-  const right = encoder.encode(b);
-  if (left.byteLength !== right.byteLength) return false;
-  let diff = 0;
-  for (let i = 0; i < left.length; i++) diff |= (left[i] ?? 0) ^ (right[i] ?? 0);
-  return diff === 0;
-}

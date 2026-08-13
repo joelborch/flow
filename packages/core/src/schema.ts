@@ -310,7 +310,78 @@ const SNOOZE: string[] = [
   `CREATE INDEX idx_tasks_snoozed ON tasks (snoozed_until) WHERE snoozed_until IS NOT NULL`,
 ];
 
-/** Base schema first, then the automation engine's tables, then notifications. */
+// Drive is the canonical location only after the monthly migration has
+// uploaded and verified the file. The original R2 key stays on the row for
+// audit and idempotent cleanup; `cleanup_pending` means the Drive link is live
+// but the source object has not yet been confirmed absent.
+const ATTACHMENT_DRIVE_STORAGE: string[] = [
+  `ALTER TABLE attachments ADD COLUMN storage_provider TEXT NOT NULL DEFAULT 'r2'`,
+  `ALTER TABLE attachments ADD COLUMN drive_file_id TEXT`,
+  `ALTER TABLE attachments ADD COLUMN drive_web_view_link TEXT`,
+  `ALTER TABLE attachments ADD COLUMN drive_destination TEXT`,
+  `ALTER TABLE attachments ADD COLUMN migration_state TEXT NOT NULL DEFAULT 'r2'`,
+  `CREATE INDEX idx_attachments_migration ON attachments (storage_provider, migration_state)`,
+];
+
+// Tiny key/value table for sync bookkeeping. Its one current row is the
+// resync floor (see ./sync-floor.ts): delta-less mutations (importBatch,
+// setSpaceMembers, setSpaceVisibility) invalidate delta replay, and the floor
+// is what tells the hello handler to fall back to a full snapshot. IF NOT
+// EXISTS so it is a no-op on an instance that already has the table.
+// The space a delta belongs to, stamped at emit time. Replay filtering used
+// to re-resolve each delta's space with live task/list/comment lookups, which
+// return null once the row is deleted — and null was treated as "visible to
+// everyone", so a reconnecting member could replay create-deltas (full row
+// JSON) for rows that lived and died in a private space they cannot see.
+// Nullable: rows written before this migration stay null and fall back to
+// live resolution (see filterReplay in index.ts), failing closed for
+// space-scoped entities when that also resolves nothing.
+const CHANGES_SPACE_ID: string[] = [
+  `ALTER TABLE changes ADD COLUMN space_id TEXT`,
+];
+
+const SYNC_META: string[] = [
+  `CREATE TABLE IF NOT EXISTS sync_meta (
+     key TEXT PRIMARY KEY,
+     value INTEGER NOT NULL
+   )`,
+];
+
+// R2 objects awaiting deletion after the row that named them (an `attachments`
+// row) is already gone. deleteTask (and any future list/space cascade that
+// drops attachments) writes the key here in the same turn it deletes the row,
+// so the key survives even if the request never reaches the R2 delete: a
+// route's waitUntil clears the row once the object is actually gone, and the
+// daily backup job sweeps whatever is still here as a fallback.
+const PENDING_OBJECT_DELETES: string[] = [
+  `CREATE TABLE pending_object_deletes (
+     r2_key TEXT PRIMARY KEY,
+     enqueued_at INTEGER NOT NULL
+   )`,
+];
+
+/**
+ * Base schema first, then the automation engine's tables, then notifications.
+ *
+ * WARNING: migration ids are permanent once shipped — they are recorded
+ * verbatim in `_migrations` on every live workspace. Renaming or removing an
+ * id here does not "fix" it; it makes a workspace that already applied the
+ * old id look like it never ran that migration (or, worse, look up to date
+ * while skipping a genuinely new one — see needsMigration below). Two ids
+ * below share the "core-0003" prefix (space-visibility and
+ * notification-prefs) purely from numbering drift; they are intentionally
+ * left alone rather than "fixed" because both are already recorded in prod.
+ */
+/**
+ * Pre-0007 `changes` rows have no stored space_id, so filterReplay's
+ * fail-closed fallback would withhold delete-deltas for already-deleted
+ * entities from members even in spaces they can see. When this migration
+ * first applies, index.ts bumps the resync floor to the then-current
+ * MAX(seq): every client's next hello takes one full snapshot instead of
+ * replaying the ambiguous rows.
+ */
+export const CHANGES_SPACE_ID_MIGRATION_ID = "core-0007-changes-space-id";
+
 export const MIGRATIONS: readonly Migration[] = [
   { id: "core-0001-initial", statements: BASE_STATEMENTS },
   { id: "core-0002-audit-actor-columns", statements: AUDIT_ACTOR_COLUMNS },
@@ -318,34 +389,86 @@ export const MIGRATIONS: readonly Migration[] = [
   ...AUTOMATION_MIGRATIONS,
   { id: "core-0003-notification-prefs", statements: NOTIFICATION_PREFS },
   { id: "core-0004-snooze", statements: SNOOZE },
+  { id: "core-0005-attachment-drive-storage", statements: ATTACHMENT_DRIVE_STORAGE },
+  { id: "core-0006-sync-meta", statements: SYNC_META },
+  { id: CHANGES_SPACE_ID_MIGRATION_ID, statements: CHANGES_SPACE_ID },
+  { id: "core-0008-pending-object-deletes", statements: PENDING_OBJECT_DELETES },
 ];
 
 /**
  * The one cheap SELECT the constructor makes: a COUNT on a table with at most
  * a handful of rows. False on the hot path, so no blockConcurrencyWhile.
+ *
+ * Checks that every known migration id is present in `_migrations`, not just
+ * that the counts line up — a COUNT comparison would let a renamed/removed
+ * migration id silently mask a genuinely new one (count still >= length).
  */
 export function needsMigration(sql: SqlStorage): boolean {
   try {
-    const { n } = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM _migrations").one();
-    return n < MIGRATIONS.length;
+    const applied = new Set(
+      sql.exec<{ id: string }>("SELECT id FROM _migrations").toArray().map((r) => r.id)
+    );
+    return MIGRATIONS.some((m) => !applied.has(m.id));
   } catch {
     return true; // _migrations does not exist yet
   }
 }
 
-export function runMigrations(sql: SqlStorage): void {
+/**
+ * Wraps one migration's statements in an atomic transaction. In production
+ * this is `(fn) => ctx.storage.transactionSync(fn)` — workerd rejects explicit
+ * SAVEPOINT/BEGIN through `sql.exec` ("please use state.storage.transaction()
+ * or transactionSync()"), so the DO's own transaction API is the ONLY way to
+ * get atomicity there. `transactionSync<T>(closure: () => T): T` commits on
+ * return and rolls back automatically when the closure throws (the exception
+ * propagates to the caller). Tests run against node:sqlite, where explicit
+ * savepoints ARE legal, and pass a savepoint-based wrapper instead.
+ */
+export type MigrationTxn = (fn: () => void) => void;
+
+/** Returns the ids of migrations that were newly applied by this call. */
+export function runMigrations(sql: SqlStorage, txn: MigrationTxn): string[] {
   sql.exec(`CREATE TABLE IF NOT EXISTS _migrations (
      id TEXT PRIMARY KEY,
      applied_at INTEGER NOT NULL
    )`);
+  return applyMigrations(sql, MIGRATIONS, txn);
+}
+
+/**
+ * Applies each not-yet-applied migration's statements and its `_migrations`
+ * insert inside one `txn(...)` call. If any statement throws, the transaction
+ * wrapper rolls back before the error propagates, so a mid-migration failure
+ * (e.g. statement 3 of 5 ALTER TABLEs) leaves the schema exactly as it was
+ * before that migration started — no partially-applied DDL, no `_migrations`
+ * row for it. A retry after a code fix then applies the whole migration
+ * cleanly instead of re-running already-committed statements into "duplicate
+ * column name".
+ *
+ * Exported (in addition to runMigrations, its production entry point) so
+ * tests can exercise the rollback behavior with a throwaway migration list
+ * without touching the real schema. Returns the newly-applied migration ids
+ * so the caller can run one-shot follow-ups (see the resync-floor bump for
+ * CHANGES_SPACE_ID_MIGRATION_ID in index.ts).
+ */
+export function applyMigrations(
+  sql: SqlStorage,
+  migrations: readonly Migration[],
+  txn: MigrationTxn
+): string[] {
   const applied = new Set(
     sql.exec<{ id: string }>("SELECT id FROM _migrations").toArray().map((r) => r.id)
   );
-  for (const m of MIGRATIONS) {
+  const newlyApplied: string[] = [];
+  for (const m of migrations) {
     if (applied.has(m.id)) continue;
-    for (const stmt of m.statements) sql.exec(stmt);
-    sql.exec("INSERT INTO _migrations (id, applied_at) VALUES (?, ?)", m.id, Date.now());
+    txn(() => {
+      for (const stmt of m.statements) sql.exec(stmt);
+      sql.exec("INSERT INTO _migrations (id, applied_at) VALUES (?, ?)", m.id, Date.now());
+    });
+    newlyApplied.push(m.id);
   }
+  return newlyApplied;
 }
 
 // ---------------------------------------------------------------------------
@@ -378,31 +501,53 @@ export function seedIfEmpty(sql: SqlStorage, now = Date.now()): void {
   );
 }
 
-/** Recurring maintenance jobs, installed once. */
-export function seedJobs(sql: SqlStorage, now = Date.now()): void {
-  const { n } = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM scheduled_jobs").one();
-  if (n > 0) return;
+/**
+ * Recurring maintenance jobs, ensured per kind rather than installed once: a
+ * whole-table "is scheduled_jobs empty?" guard meant a workspace that already
+ * had prune_changes + due_date_check would never pick up a job kind added
+ * later (the backup job shipped exactly that way — dead code on every
+ * existing workspace). Each seed now inserts only when no recurring row of
+ * its kind exists, so existing rows — and their next `run_at` — are never
+ * touched, and re-running this on every boot is a cheap idempotent no-op.
+ * `every_ms IS NOT NULL` scopes the guard to recurring rows, so a pending
+ * one-off of the same kind (scheduleJob) can't suppress the recurring seed.
+ *
+ * Returns how many jobs were inserted so the caller knows to re-arm the alarm.
+ */
+export function seedJobs(sql: SqlStorage, now = Date.now()): number {
   const DAY = 86_400_000;
-  // Next 09:00 UTC and next 13:00 UTC (~08:00 ET, before the workday).
+  // Next occurrence of a fixed UTC hour.
   const next = (hourUtc: number): number => {
     const d = new Date(now);
     d.setUTCHours(hourUtc, 0, 0, 0);
     return d.getTime() <= now ? d.getTime() + DAY : d.getTime();
   };
-  sql.exec(
-    "INSERT INTO scheduled_jobs (run_at, kind, payload, every_ms, created_at) VALUES (?, ?, NULL, ?, ?)",
-    next(9),
-    "prune_changes",
-    DAY,
-    now
-  );
-  // Hourly: the engine's (rule, task, dueDate) fired-guard makes the sweep
-  // idempotent, and hourly keeps a reminder from being up to a day late.
-  sql.exec(
-    "INSERT INTO scheduled_jobs (run_at, kind, payload, every_ms, created_at) VALUES (?, ?, NULL, ?, ?)",
-    now + 3_600_000,
-    "due_date_check",
-    3_600_000,
-    now
-  );
+  const jobs: Array<{ kind: string; runAt: number; everyMs: number }> = [
+    // 09:00 UTC (~08:00 ET, before the workday).
+    { kind: "prune_changes", runAt: next(9), everyMs: DAY },
+    // Hourly: the engine's (rule, task, dueDate) fired-guard makes the sweep
+    // idempotent, and hourly keeps a reminder from being up to a day late.
+    { kind: "due_date_check", runAt: now + 3_600_000, everyMs: 3_600_000 },
+    // Off-peak UTC hour, away from the 09:00 job above.
+    { kind: "backup", runAt: next(5), everyMs: DAY },
+  ];
+  let inserted = 0;
+  for (const job of jobs) {
+    const { n } = sql
+      .exec<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM scheduled_jobs WHERE kind = ? AND every_ms IS NOT NULL",
+        job.kind
+      )
+      .one();
+    if (n > 0) continue;
+    sql.exec(
+      "INSERT INTO scheduled_jobs (run_at, kind, payload, every_ms, created_at) VALUES (?, ?, NULL, ?, ?)",
+      job.runAt,
+      job.kind,
+      job.everyMs,
+      now
+    );
+    inserted += 1;
+  }
+  return inserted;
 }

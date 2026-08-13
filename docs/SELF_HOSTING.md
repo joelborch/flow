@@ -73,14 +73,21 @@ All deployment configuration lives in `apps/api/wrangler.jsonc` — start by cop
   ],
   "queues": {
     "producers": [{ "binding": "SIDE_EFFECTS", "queue": "flow-side-effects" }],
-    "consumers": [{ "queue": "flow-side-effects", "max_retries": 5, "dead_letter_queue": "flow-dlq" }]
+    "consumers": [
+      { "queue": "flow-side-effects", "max_retries": 5, "dead_letter_queue": "flow-dlq" },
+      { "queue": "flow-dlq", "max_retries": 3 }
+    ]
   },
   "vars": {
     "EMAIL_DRY_RUN": "true",
     "APP_HOSTNAME": "flow.example.com",
     "ACCESS_TEAM_DOMAIN": "your-team.cloudflareaccess.com",
     "ACCESS_AUD": "<ACCESS_AUD>",
-    "OWNER_EMAIL": "you@example.com"
+    "OWNER_EMAIL": "you@example.com",
+    "EMAIL_FROM": "flow@mail.example.com",
+    "EMAIL_FROM_NAME": "Flow",
+    "EMAIL_BRAND_NAME": "Flow",
+    "GLEAP_ATTACHMENT_HOSTS": ".gleap.io"
   },
   "observability": { "enabled": true }
 }
@@ -88,10 +95,12 @@ All deployment configuration lives in `apps/api/wrangler.jsonc` — start by cop
 
 Notes on the vars:
 
-- `EMAIL_DRY_RUN` — leave `"true"` until email sending is set up (step 6). While true, every email logs its full content instead of sending.
+- `EMAIL_DRY_RUN` — leave `"true"` until email sending is set up (step 6). While true, every email logs its full content instead of sending. Fails closed: any value other than the exact string `"false"` keeps dry-run on.
 - `APP_HOSTNAME` — used to build task URLs in webhook payloads, notification emails, and `{{task.url}}` templates.
 - `ACCESS_TEAM_DOMAIN` / `ACCESS_AUD` — filled in during step 4. You can deploy before Access exists; the API will just reject every browser request until it's wired up.
 - `OWNER_EMAIL` — the fallback identity: local dev auth resolves to this user, and inbound webhooks with no dedicated API key act as this user.
+- `EMAIL_FROM` / `EMAIL_FROM_NAME` / `EMAIL_BRAND_NAME` — sender address, sender display name, and the wordmark shown in the branded email header (falls back to `EMAIL_FROM_NAME`, then `"Flow"`, when unset).
+- `GLEAP_ATTACHMENT_HOSTS` — comma-separated HTTPS host allowlist for rendered Gleap screenshot URLs fetched by the side-effects queue consumer.
 - `DEV_NO_AUTH` is deliberately **not** in this file. Put it in `apps/api/.dev.vars` (gitignored) for local development only — it fails closed, so anything other than the exact string `"true"` leaves auth enforced.
 
 The sender address is config too — set the `EMAIL_FROM` / `EMAIL_FROM_NAME` vars in `wrangler.jsonc` (defaults: `flow@mail.example.com` / `Flow`).
@@ -215,7 +224,7 @@ curl -s localhost:8787/api/me | jq
 
 ## Operations notes
 
-- **Backups.** The workspace is one SQLite database inside a Durable Object; Cloudflare's [point-in-time recovery](https://developers.cloudflare.com/durable-objects/api/sql-storage/) covers SQLite-backed DOs. For belt-and-braces, `GET /api/snapshot` plus the audit log gives you an application-level export you can cron from anywhere with an API key.
+- **Backups.** The workspace is one SQLite database inside a Durable Object; Cloudflare's [point-in-time recovery](https://developers.cloudflare.com/durable-objects/api/sql-storage/) covers SQLite-backed DOs. For belt-and-braces, `GET /api/snapshot` plus the audit log gives you an application-level export you can cron from anywhere with an API key. The DO also runs its own daily backup job — every table gzipped to NDJSON (one `{"table":...,"row":...}` line per row) and written to the attachments R2 bucket under `backups/YYYY-MM-DD.ndjson.gz`, at 05:00 UTC, with the newest 30 objects retained. To restore, the file is just table/row NDJSON — read it, group by table, and re-insert.
 - **Logs.** `observability.enabled` is on, so `pnpm exec wrangler tail` from `apps/api` streams structured logs — including `[EMAIL_DRY_RUN] would send:` blocks and automation failures.
 - **Retention.** The delta log keeps its newest 50,000 rows (pruned daily); a reconnect older than that gets a fresh snapshot instead of a replay. The audit log is not pruned.
-- **The DLQ.** Messages that fail 5 deliveries land in `flow-dlq`. Nothing consumes it by default; check it when a webhook endpoint has been down.
+- **The DLQ.** Messages that fail 5 deliveries land in `flow-dlq`, where a consumer (`handleDeadLetterBatch`) logs each one and writes an `ok:false` row to the automation run log rather than dropping it silently — check the run log or `wrangler tail` when a webhook endpoint has been down.

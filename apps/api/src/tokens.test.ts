@@ -7,7 +7,6 @@ import {
   hashToken,
   looksLikeApiToken,
   parseBearer,
-  timingSafeEqualString,
 } from "./tokens.js";
 import { validateClaims, AccessJwtError, normalizeTeamDomain } from "./access-jwt.js";
 
@@ -89,20 +88,6 @@ describe("parseBearer", () => {
     expect(parseBearer("Basic dXNlcjpwYXNz")).toBeNull();
     expect(parseBearer("Bearer")).toBeNull();
     expect(parseBearer("Bearer    ")).toBeNull();
-  });
-});
-
-describe("timingSafeEqualString", () => {
-  it("accepts identical strings and rejects everything else", () => {
-    expect(timingSafeEqualString("inb_secret", "inb_secret")).toBe(true);
-    expect(timingSafeEqualString("inb_secret", "inb_secreT")).toBe(false);
-    expect(timingSafeEqualString("inb_secret", "inb_secret_longer")).toBe(false);
-    expect(timingSafeEqualString("", "")).toBe(true);
-  });
-
-  it("handles multi-byte characters without throwing", () => {
-    expect(timingSafeEqualString("tökén", "tökén")).toBe(true);
-    expect(timingSafeEqualString("tökén", "token")).toBe(false);
   });
 });
 

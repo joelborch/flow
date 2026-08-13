@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AUTOMATION_MAX_DEPTH } from "@flow/shared";
+import { AUTOMATION_MAX_DEPTH, WebhookPayload } from "@flow/shared";
 import { evaluateAutomations, isDepthExceeded, loadEnabledRules } from "./engine.js";
 import { makeCtx, makeFacts, makeRule, makeTask, subtaskDelta, taskDelta } from "./testkit.js";
 
@@ -167,6 +167,72 @@ describe("evaluateAutomations", () => {
     expect(action && "title" in action ? action.title : null).toBe("Redo the hero image");
   });
 
+  it("renders create_task fields before handing the cross-list create to the DO", () => {
+    const ctx = makeCtx({
+      rules: [
+        makeRule({
+          actions: [
+            {
+              kind: "create_task",
+              listId: "ls_verification",
+              title: "{{task.title}}",
+              description: "{{task.description}}",
+              statusName: "TO DO",
+              assigneeId: null,
+              priority: null,
+              dueInDays: null,
+              tags: [],
+            },
+          ],
+        }),
+      ],
+      facts: makeFacts({
+        task: makeTask({ title: "Refresh the pricing page", description: "Replace the old rate card" }),
+      }),
+    });
+    evaluateAutomations(ctx, taskDelta(null, null, "create"));
+
+    expect(ctx.applied[0]?.action).toEqual({
+      kind: "create_task",
+      listId: "ls_verification",
+      title: "Refresh the pricing page",
+      description: "Replace the old rate card",
+      statusName: "TO DO",
+      assigneeId: null,
+      priority: null,
+      dueInDays: null,
+      tags: [],
+    });
+  });
+
+  it("hands remove_tags to the DO as an internal action", () => {
+    const ctx = makeCtx({
+      rules: [
+        makeRule({
+          actions: [{ kind: "remove_tags", tags: ["from-content-pipeline"] }],
+        }),
+      ],
+    });
+    evaluateAutomations(ctx, taskDelta(null, null, "create"));
+    expect(ctx.applied[0]?.action).toEqual({
+      kind: "remove_tags",
+      tags: ["from-content-pipeline"],
+    });
+  });
+
+  it("hands a calendar recurrence action to the DO unchanged", () => {
+    const action = {
+      kind: "create_next_recurring_task" as const,
+      recurrence: { kind: "monthly" as const, interval: 3 },
+      timeZone: "America/New_York",
+      identityTag: "todoist-source-quarterly",
+      statusName: "To Do",
+    };
+    const ctx = makeCtx({ rules: [makeRule({ actions: [action] })] });
+    evaluateAutomations(ctx, taskDelta(null, null, "create"));
+    expect(ctx.applied[0]?.action).toEqual(action);
+  });
+
   it("enqueues a signed webhook envelope rather than calling out inline", () => {
     const ctx = makeCtx({
       rules: [
@@ -175,7 +241,17 @@ describe("evaluateAutomations", () => {
           actions: [{ kind: "call_webhook", url: "https://hooks.example.com/api/hook", secret: "s3cret" }],
         }),
       ],
-      facts: makeFacts({ task: makeTask({ tags: ["qa"] }) }),
+      facts: makeFacts({
+        task: makeTask({
+          title: "Proofread the draft article",
+          description: "Review https://docs.google.com/document/d/example/edit",
+          tags: ["qa"],
+          priority: "high",
+          dueDate: 1_700_086_400_000,
+          clickupId: "86legacy",
+        }),
+        assignee: { id: "us_bob", name: "Bob", email: "bob@example.com" },
+      }),
     });
     evaluateAutomations(ctx, taskDelta({ tags: ["qa"] }, { tags: [] }));
 
@@ -188,7 +264,27 @@ describe("evaluateAutomations", () => {
     expect(payload.secret).toBe("s3cret");
     expect(payload.body.event).toBe("task.tag_added");
     expect(payload.body.task?.id).toBe("tk_1");
+    expect(payload.body.payload).toEqual(
+      expect.objectContaining({
+        id: "tk_1",
+        flow_id: "tk_1",
+        clickup_id: "86legacy",
+        name: "Proofread the draft article",
+        title: "Proofread the draft article",
+        description: "Review https://docs.google.com/document/d/example/edit",
+        text_content: "Review https://docs.google.com/document/d/example/edit",
+        status: { status: "To Do" },
+        list: { id: "ls_1", name: "Content Cycle" },
+        space: { id: "sp_1", name: "Marketing" },
+        assignees: [{ id: "us_bob", username: "Bob", email: "bob@example.com" }],
+        priority: { priority: "high" },
+        due_date: "1700086400000",
+        tags: [{ name: "qa" }],
+        url: "https://flow.example.com/t/tk_1",
+      })
+    );
     expect(payload.body.workspace).toBe("flow.example.com");
+    expect(WebhookPayload.safeParse(payload.body).success).toBe(true);
     // Automation-only extras must not leak onto the wire.
     expect("prev" in payload.body.delta).toBe(false);
     expect("taskId" in payload.body.delta).toBe(false);
@@ -202,6 +298,8 @@ describe("evaluateAutomations", () => {
             {
               kind: "send_email",
               to: ["{{task.assignee}}", "ops@example.com"],
+              cc: ["reviewer@example.com"],
+              bcc: ["audit@example.com"],
               subject: "[{{space.name}}] {{task.title}}",
               body: "See {{task.url}}",
             },
@@ -218,6 +316,8 @@ describe("evaluateAutomations", () => {
     const payload = ctx.queued[0];
     if (payload?.kind !== "email") throw new Error("expected email");
     expect(payload.to).toEqual(["bob@example.com", "ops@example.com"]);
+    expect(payload.cc).toEqual(["reviewer@example.com"]);
+    expect(payload.bcc).toEqual(["audit@example.com"]);
     expect(payload.subject).toBe("[Marketing] Publish");
     expect(payload.body).toBe("See https://flow.example.com/t/tk_1");
     const results = ctx.runs[0]?.results as { dryRun: boolean }[];
@@ -291,4 +391,5 @@ describe("evaluateAutomations", () => {
     expect(() => evaluateAutomations(ctx, taskDelta(null, null, "create"))).not.toThrow();
     expect(ctx.runs).toEqual([]);
   });
+
 });

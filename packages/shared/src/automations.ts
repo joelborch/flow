@@ -36,7 +36,15 @@ export const Condition = z.discriminatedUnion("kind", [
 ]);
 export type Condition = z.infer<typeof Condition>;
 
-// Template strings in email/webhook/subtask actions support {{task.title}},
+export const CalendarRecurrence = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("weekdays") }),
+  z.object({ kind: z.literal("weekly"), interval: z.number().int().min(1).default(1) }),
+  z.object({ kind: z.literal("monthly"), interval: z.number().int().min(1).default(1) }),
+  z.object({ kind: z.literal("yearly"), interval: z.number().int().min(1).default(1) }),
+]);
+export type CalendarRecurrence = z.infer<typeof CalendarRecurrence>;
+
+// Template strings in email/webhook/task/subtask actions support {{task.title}},
 // {{task.status}}, {{task.url}}, {{task.assignee}}, {{task.dueDate}},
 // {{task.description}}, {{list.name}}, {{space.name}}.
 export const Action = z.discriminatedUnion("kind", [
@@ -44,6 +52,25 @@ export const Action = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("set_assignee"), userId: Id.nullable() }),
   z.object({ kind: z.literal("set_priority"), priority: Priority.nullable() }),
   z.object({ kind: z.literal("add_tags"), tags: z.array(z.string()).min(1) }),
+  z.object({ kind: z.literal("remove_tags"), tags: z.array(z.string()).min(1) }),
+  z.object({
+    kind: z.literal("create_next_recurring_task"),
+    recurrence: CalendarRecurrence,
+    timeZone: z.string().min(1),
+    identityTag: z.string().min(1),
+    statusName: z.string().nullable().default(null),
+  }),
+  z.object({
+    kind: z.literal("create_task"),
+    listId: Id,
+    title: z.string(), // template string
+    description: z.string(), // template string
+    statusName: z.string().nullable(),
+    assigneeId: Id.nullable(),
+    priority: Priority.nullable(),
+    dueInDays: z.number().int().nullable(),
+    tags: z.array(z.string()),
+  }),
   z.object({
     kind: z.literal("create_subtask"),
     title: z.string(), // template string
@@ -60,6 +87,8 @@ export const Action = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("send_email"),
     to: z.array(z.string()).min(1), // email addresses or "{{task.assignee}}"
+    cc: z.array(z.string()).optional(),
+    bcc: z.array(z.string()).optional(),
     subject: z.string(), // template string
     body: z.string(), // template string, markdown -> rendered to HTML
   }),

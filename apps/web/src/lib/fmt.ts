@@ -16,6 +16,11 @@ export function avatarHue(user: Pick<User, "id">): number {
   return h;
 }
 
+/** Machine-only idempotency tags remain searchable but stay out of task chrome. */
+export function visibleTags(tags: readonly string[]): string[] {
+  return tags.filter((tag) => !tag.startsWith("ext:"));
+}
+
 const DAY = 86_400_000;
 
 function startOfDay(ts: number): number {

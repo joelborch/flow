@@ -224,4 +224,22 @@ export const settingsApi = {
     request<ListPatchResult>("PATCH", `/api/lists/${encodeURIComponent(listId)}`, {
       inboundToken: mode,
     }),
+
+  // --- space membership (owner/admin only) ----------------------------------
+  spaceMembers: (spaceId: string) =>
+    request<{ spaceId: string; userIds: string[] }>(
+      "GET",
+      `/api/spaces/${encodeURIComponent(spaceId)}/members`
+    ),
+
+  /** PUT, not PATCH: `userIds` is the complete membership afterwards. */
+  setSpaceMembers: (spaceId: string, userIds: string[]) =>
+    request<{ spaceId: string; userIds: string[] }>(
+      "PUT",
+      `/api/spaces/${encodeURIComponent(spaceId)}/members`,
+      { userIds }
+    ),
+
+  setSpaceVisibility: (spaceId: string, visibility: "workspace" | "private") =>
+    request<Space>("PATCH", `/api/spaces/${encodeURIComponent(spaceId)}`, { visibility }),
 };

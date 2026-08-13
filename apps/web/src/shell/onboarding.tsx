@@ -15,6 +15,7 @@ import { signal } from "@preact/signals";
 import { APP_ORIGIN, settingsApi, type CreatedApiKey } from "../lib/api.js";
 import { Button, CopyBlock, ErrorNote, errorMessage } from "../settings/ui.js";
 import { me } from "../store/index.js";
+import { canUseQuickAdd } from "./quick-add.js";
 import { X } from "./ui.js";
 
 /** Bump the suffix to show a rewritten welcome to people who saw the old one. */
@@ -218,6 +219,11 @@ export function Onboarding() {
             <li>
               <Key>N</Key> <span class="ml-1">new task, right where you are.</span>
             </li>
+            {canUseQuickAdd(me.value) && (
+              <li>
+                <Key>Q</Key> <span class="ml-1">quick add to your private Work Inbox.</span>
+              </li>
+            )}
           </ul>
         </Step>
 

@@ -106,7 +106,7 @@ Public exceptions: `GET /api/health` (liveness), and `POST /api/inbound/:listId`
 
 ## Per-space visibility
 
-A space is `"workspace"` (every member sees it — the default) or `"private"` (owners, admins, and the space's own member list). One rule, applied in three shapes: **reads filter** (snapshots, search results, and the workspace map simply omit invisible rows, including `total` counts so paging stays honest), **writes throw** (a descriptive "Space sp_x is private; ask an owner/admin for access" rather than a misleading 404), and **the broadcast drops** (each delta is resolved to its space, and per-connection filtering only kicks in when a private space was actually touched). Automations and import run as system actors and are exempt, so a rule scoped to a private space still fires.
+A space is `"private"` (owners, admins, and the space's own member list — the default, with the creator auto-added as the sole member) or `"workspace"` (every member sees it; pass `visibility: "workspace"` on create to opt out of the private default). One rule, applied in three shapes: **reads filter** (snapshots, search results, and the workspace map simply omit invisible rows, including `total` counts so paging stays honest), **writes throw** (a descriptive "Space sp_x is private; ask an owner/admin for access" rather than a misleading 404), and **the broadcast drops** (each delta is resolved to its space, and per-connection filtering only kicks in when a private space was actually touched). Automations and import run as system actors and are exempt, so a rule scoped to a private space still fires.
 
 ## Where the contract lives
 

@@ -7,7 +7,7 @@ import { addComment, comments as commentStore, fetchTaskDetail, updateTask } fro
 import { listById, spaceOfList, taskById } from "../shell/data.js";
 import { formatDateTime } from "../shell/format.js";
 import { panelFocus } from "../shell/nav.js";
-import { CalendarIcon, FlagIcon, Moon, TagIcon, X } from "../shell/ui.js";
+import { CalendarIcon, FlagIcon, Moon, TagIcon, X, useDialogFocus } from "../shell/ui.js";
 import {
   AssigneePicker, BlockedNoteField, DuePicker, PriorityPicker, PropertyRow, SnoozeBanner,
   SnoozePicker, StatusPicker, TagEditor,
@@ -28,6 +28,8 @@ export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => 
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
+  const panelRef = useRef<HTMLElement>(null);
+  useDialogFocus(panelRef);
 
   // --- load ---------------------------------------------------------------
   const load = useCallback(async () => {
@@ -147,8 +149,11 @@ export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => 
       />
 
       <aside
+        ref={panelRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
+        data-quick-add-compatible
         aria-label={task ? task.title : "Task"}
         class="absolute right-0 top-0 flex h-full w-full max-w-[640px] flex-col border-l border-line bg-surface shadow-[-8px_0_40px_rgba(15,15,20,0.10)] animate-[flow-slide-in_170ms_cubic-bezier(0.32,0.72,0,1)]"
         onDragEnter={(e) => {

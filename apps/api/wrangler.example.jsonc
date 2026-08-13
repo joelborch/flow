@@ -37,7 +37,13 @@
   ],
   "queues": {
     "producers": [{ "binding": "SIDE_EFFECTS", "queue": "flow-side-effects" }],
-    "consumers": [{ "queue": "flow-side-effects", "max_retries": 5, "dead_letter_queue": "flow-dlq" }]
+    "consumers": [
+      { "queue": "flow-side-effects", "max_retries": 5, "dead_letter_queue": "flow-dlq" },
+      // Terminal: no dead_letter_queue of its own. handleDeadLetterBatch always
+      // acks (log + automation_runs write-back), so these retries are just a
+      // safety margin in case the write-back itself throws unexpectedly.
+      { "queue": "flow-dlq", "max_retries": 3 }
+    ]
   },
   "vars": {
     // "true" (the safe default) logs outbound email instead of sending it.
@@ -60,7 +66,17 @@
     // Sender for automation and notification email. The address must be on a
     // domain your Email Sending setup is allowed to send from.
     "EMAIL_FROM": "flow@mail.example.com",
-    "EMAIL_FROM_NAME": "Flow"
+    "EMAIL_FROM_NAME": "Flow",
+    // Wordmark shown in the branded email header. Falls back to
+    // EMAIL_FROM_NAME, then "Flow", when unset.
+    "EMAIL_BRAND_NAME": "Flow",
+    // Comma-separated HTTPS host allowlist for rendered Gleap screenshot URLs
+    // fetched by the side-effects queue consumer (see gleap-screenshot.ts).
+    "GLEAP_ATTACHMENT_HOSTS": ".gleap.io"
+    // GLEAP_PROJECT_TOKENS_JSON (JSON object mapping Gleap project ids to
+    // their screenshot API tokens) is a Worker secret, never a var. Local
+    // development may put it in the gitignored .dev.vars file when
+    // screenshot polling is tested.
     // DEV_NO_AUTH is deliberately NOT set here. Setting it to "true" resolves
     // every request to OWNER_EMAIL; keep it in .dev.vars for local use only.
   },

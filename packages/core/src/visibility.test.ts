@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Actor, Role } from "@flow/shared";
 import { toSpaceVisibility } from "./rows.js";
 import {
+  automationRulesForSnapshot,
   canSeeSpace,
+  deltaVisibleTo,
+  isPrivilegedDeltaEntity,
   isPrivilegedRole,
   isSystemActor,
   privateSpaceError,
@@ -159,5 +162,61 @@ describe("visibleSpaceIds", () => {
       "sp_legacy",
       "sp_public",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Automation rules are owner/admin-only: absent from a member's snapshot and
+// filtered off member WebSocket connections on both the live-broadcast and
+// replay paths, which share deltaVisibleTo.
+// ---------------------------------------------------------------------------
+
+describe("isPrivilegedDeltaEntity", () => {
+  it("is exactly automation_rule", () => {
+    expect(isPrivilegedDeltaEntity("automation_rule")).toBe(true);
+    for (const entity of ["space", "list", "task", "subtask", "comment", "attachment", "user"]) {
+      expect(isPrivilegedDeltaEntity(entity)).toBe(false);
+    }
+  });
+});
+
+describe("deltaVisibleTo", () => {
+  const memberVisible = new Set(["sp_public"]);
+
+  it("admits everything for the null (owner/admin) signal", () => {
+    expect(deltaVisibleTo("automation_rule", null, null)).toBe(true);
+    expect(deltaVisibleTo("task", "sp_secret", null)).toBe(true);
+  });
+
+  it("never hands a member an automation_rule delta, private spaces or not", () => {
+    expect(deltaVisibleTo("automation_rule", null, memberVisible)).toBe(false);
+    expect(deltaVisibleTo("automation_rule", null, new Set())).toBe(false);
+  });
+
+  it("keeps the space filter for members: visible space yes, hidden space no", () => {
+    expect(deltaVisibleTo("task", "sp_public", memberVisible)).toBe(true);
+    expect(deltaVisibleTo("task", "sp_secret", memberVisible)).toBe(false);
+  });
+
+  it("still sends space-less user deltas to everyone", () => {
+    expect(deltaVisibleTo("user", null, memberVisible)).toBe(true);
+  });
+});
+
+describe("automationRulesForSnapshot", () => {
+  const rules = [{ id: "ar_1" }, { id: "ar_2" }];
+
+  it("gives a privileged or internal snapshot the real rules", () => {
+    expect(automationRulesForSnapshot(null, () => rules)).toEqual(rules);
+  });
+
+  it("gives a member an empty array, and never even lists the rules", () => {
+    let listed = false;
+    const out = automationRulesForSnapshot(new Set(["sp_public"]), () => {
+      listed = true;
+      return rules;
+    });
+    expect(out).toEqual([]);
+    expect(listed).toBe(false);
   });
 });

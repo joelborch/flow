@@ -22,7 +22,7 @@ import {
   toggleDormant, togglePin, toggleSpace, type SidebarMode,
 } from "./prefs.js";
 import { recentListRows, recentTaskRows } from "./recents.js";
-import { Archive, ChevronDown, ChevronRight, Inbox, StatusDot, X } from "./ui.js";
+import { Archive, ChevronDown, ChevronRight, Inbox, LockIcon, StatusDot, X } from "./ui.js";
 
 function Wordmark() {
   return (
@@ -103,6 +103,11 @@ function SpaceHeader({ space, collapsed, focused }: { space: Space; collapsed: b
           >
             {space.name}
           </button>
+          {space.visibility === "private" && (
+            <span title="Private space" class="flex shrink-0 items-center text-faint">
+              <LockIcon class="h-2.5 w-2.5" />
+            </span>
+          )}
           {space.archived && <span class="shrink-0 normal-case tracking-normal">archived</span>}
           {/* A collapsed space still has to say whether anything is happening
               inside it; expanded, the per-list counts already say it. Fades on

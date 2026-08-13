@@ -48,7 +48,7 @@ All conditions must hold (AND). Each matches against the task **after** the trig
 
 ## Actions
 
-Actions run in order. The first six mutate the task **in the same turn**; the last two enqueue outbound I/O.
+Actions run in order. The first nine mutate the workspace **in the same turn**; the last two enqueue outbound I/O.
 
 | Action | Effect | Parameters |
 |---|---|---|
@@ -56,6 +56,9 @@ Actions run in order. The first six mutate the task **in the same turn**; the la
 | `set_assignee` | Assign (or `null` to unassign). | `userId` |
 | `set_priority` | Set priority (or `null` to clear). | `priority` |
 | `add_tags` | Merge tags in, case-insensitively deduplicated; a no-op change emits nothing. | `tags` |
+| `remove_tags` | Remove tags, case-insensitively matched; a no-op change emits nothing. | `tags` |
+| `create_next_recurring_task` | When a recurring task closes, create its next occurrence on the configured cadence. | `recurrence` (`weekdays`/`weekly`/`monthly`/`yearly`, with `interval` on the latter three), `timeZone`, `identityTag`, `statusName` |
+| `create_task` | Create a new task, e.g. as a linked follow-up. | `listId`, `title` (template), `description` (template), `statusName`, `assigneeId`, `priority`, `dueInDays`, `tags` |
 | `create_subtask` | Add a checklist step. | `title` (template), `assigneeId`, `dueInDays` (due date = now + n days) |
 | `move_to_list` | Move the task to another list. | `listId` |
 | `call_webhook` | Enqueue a POST of the standard event envelope + full task snapshot; optional HMAC-SHA256 signature in `X-Flow-Signature`. See [AGENTS_AND_MCP.md](AGENTS_AND_MCP.md#outbound-webhooks-hmac-signed). | `url`, `secret` |

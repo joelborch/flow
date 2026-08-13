@@ -50,13 +50,14 @@ if (typeof window !== "undefined") {
 
 // --- tabs ------------------------------------------------------------------
 
-export const SETTINGS_TABS = ["automations", "api-keys", "inbound"] as const;
+export const SETTINGS_TABS = ["automations", "api-keys", "inbound", "spaces"] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 export const TAB_LABEL: Record<SettingsTab, string> = {
   automations: "Automations",
   "api-keys": "API keys",
   inbound: "Inbound webhooks",
+  spaces: "Spaces",
 };
 
 /** Module-level so the tab survives a trip to the board and back. */

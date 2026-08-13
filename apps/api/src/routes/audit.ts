@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { requireAuth } from "../auth.js";
+import { requireAdmin } from "../auth.js";
 import { queryAudit } from "../do.js";
 import type { AppEnv } from "../env.js";
 import { parseOrThrow } from "../errors.js";
@@ -21,7 +21,10 @@ const AuditQuery = z.object({
 });
 
 auditRoutes.get("/audit", async (c) => {
-  requireAuth(c);
+  // The audit trail is workspace-wide history — who changed what, everywhere,
+  // including spaces a member cannot see. Owner/admin only, like the routes
+  // that shape the workspace.
+  requireAdmin(c);
   const url = new URL(c.req.url);
   const raw: Record<string, string> = {};
   for (const [key, value] of url.searchParams) {
