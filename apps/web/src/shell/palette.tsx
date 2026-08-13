@@ -26,11 +26,12 @@ import { api } from "../lib/api.js";
 import { isDark, toggleDark } from "../lib/theme.js";
 import { requestNewTask } from "../board/compose.js";
 import { openSettings } from "../settings/route.js";
-import { listById as listMap, spaceById as spaceMap, statusById, tasks } from "../store/index.js";
+import { listById as listMap, lists, me, spaceById as spaceMap, spaces, statusById, tasks } from "../store/index.js";
 import { listsOfSpace, orderedSpaces, spaceOfList } from "./data.js";
 import { cn } from "./format.js";
 import { activeView, openDrawer, openList, openTask, showMyWork } from "./nav.js";
 import { newListFor, newSpaceOpen } from "./organize.js";
+import { openQuickAdd, resolveQuickAddDestination } from "./quick-add.js";
 import { recentListRows, recentTaskRows } from "./recents.js";
 import {
   Bars, Inbox, ListIcon, Moon, Plus, Search, GearSmall, SpaceIcon, StatusDot, Sun,
@@ -210,6 +211,16 @@ function actions(q: string): Item[] {
   const targetSpace = space ?? orderedSpaces(false)[0];
 
   const defs: { label: string; hint?: string; icon: JSX.Element; run: () => void }[] = [];
+
+  const quickTarget = resolveQuickAddDestination(me.value, spaces.value, lists.value);
+  if (quickTarget) {
+    defs.push({
+      label: "Quick add to Work Inbox",
+      hint: "Q",
+      icon: <Plus class="h-3.5 w-3.5 text-faint" />,
+      run: openQuickAdd,
+    });
+  }
 
   if (list) {
     defs.push({

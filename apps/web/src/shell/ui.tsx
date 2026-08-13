@@ -1,7 +1,7 @@
 // Shared visual primitives: icons, avatars, menus,
 // chips. One accent (#5b5bd6) is used across the whole app; everything else is
 // restrained neutrals.
-import type { ComponentChildren, VNode } from "preact";
+import type { ComponentChildren, RefObject, VNode } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Priority, User } from "@flow/shared";
 import { avatarHue, initials, PRIORITY_COLOR, PRIORITY_LABEL } from "../lib/fmt.js";
@@ -10,6 +10,77 @@ import { cn } from "./format.js";
 // Priority colour/label and the avatar hue come from lib/fmt so a chip in the
 // panel and the same chip on a board card are identical.
 export { PRIORITY_COLOR, PRIORITY_LABEL };
+
+// --- dialog focus ------------------------------------------------------------
+
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusableIn(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (el) => el.offsetParent !== null || el === document.activeElement
+  );
+}
+
+/**
+ * Turns a `role="dialog"` container into an actual trap: focus moves in on
+ * open, Tab/Shift+Tab cycle within it instead of leaking to the page behind,
+ * and the element that had focus before opening gets it back on close. Give
+ * the container a `tabIndex={-1}` so it has somewhere to land when it holds
+ * nothing focusable of its own.
+ *
+ * `open` defaults to true for dialogs that mount/unmount rather than
+ * toggling a boolean — the effect's cleanup (on unmount) is what restores
+ * focus for those. If the container already autofocuses something of its
+ * own (an input, say) via an effect declared before this hook runs, this
+ * hook sees that element already focused and leaves it alone.
+ */
+export function useDialogFocus(containerRef: RefObject<HTMLElement>, open = true): void {
+  const restoreRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    restoreRef.current = document.activeElement as HTMLElement | null;
+    const container = containerRef.current;
+    if (container && !container.contains(document.activeElement)) {
+      const first = focusableIn(container)[0];
+      (first ?? container).focus({ preventScroll: true });
+    }
+    return () => {
+      const el = restoreRef.current;
+      if (el && document.contains(el)) el.focus({ preventScroll: true });
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const container = containerRef.current;
+      if (!container) return;
+      const items = focusableIn(container);
+      if (items.length === 0) {
+        e.preventDefault();
+        container.focus();
+        return;
+      }
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement;
+      if (e.shiftKey) {
+        if (active === first || !container.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !container.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open]);
+}
 
 // --- icons -----------------------------------------------------------------
 // 16px grid, 1.6 stroke, currentColor. Deliberately spare.
@@ -89,6 +160,10 @@ export const PersonIcon = svg([
 export const GearSmall = svg([
   <circle cx="8" cy="8" r="2.1" />,
   <path d="M8 1.8v1.6M8 12.6v1.6M2.2 8h1.6M12.2 8h1.6M3.9 3.9l1.1 1.1M11 11l1.1 1.1M12.1 3.9 11 5M5 11l-1.1 1.1" />,
+]);
+export const LockIcon = svg([
+  <rect x="3.5" y="7.5" width="9" height="6" rx="1.3" />,
+  <path d="M5.5 7.5V5.3a2.5 2.5 0 0 1 5 0V7.5" />,
 ]);
 
 // --- avatar ----------------------------------------------------------------

@@ -2,10 +2,10 @@
 import type { Attachment } from "@flow/shared";
 import { formatBytes, relativeTime } from "../shell/format.js";
 import { Paperclip, SectionLabel, Upload } from "../shell/ui.js";
-import { attachmentUrl } from "./api.js";
+import { attachmentHref } from "./api.js";
 
 function isImage(a: Attachment): boolean {
-  return a.mimeType.startsWith("image/");
+  return a.storageProvider === "r2" && a.mimeType.startsWith("image/");
 }
 
 export function Attachments({
@@ -55,14 +55,14 @@ export function Attachments({
           {images.map((a) => (
             <a
               key={a.id}
-              href={attachmentUrl(a.id)}
+              href={attachmentHref(a)}
               target="_blank"
               rel="noopener noreferrer"
               title={`${a.filename} · ${formatBytes(a.size)}`}
               class="group relative block aspect-[4/3] overflow-hidden rounded-lg border border-line bg-raised"
             >
               <img
-                src={attachmentUrl(a.id)}
+                src={attachmentHref(a)}
                 alt={a.filename}
                 loading="lazy"
                 class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
@@ -80,7 +80,7 @@ export function Attachments({
           {files.map((a) => (
             <li key={a.id}>
               <a
-                href={attachmentUrl(a.id)}
+                href={attachmentHref(a)}
                 target="_blank"
                 rel="noopener noreferrer"
                 class="-mx-2 flex items-center gap-2.5 rounded-lg px-2 py-2.5 hover:bg-raised sm:py-1.5"

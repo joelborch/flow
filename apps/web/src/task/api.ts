@@ -1,4 +1,3 @@
-// //
 // The store (lib/api.ts + store/mutations.ts) owns every call that produces a
 // Delta the board cares about. Attachments are the one thing it doesn't carry,
 // so the panel talks to REST directly — matching apps/api/src/routes/attachments.ts:
@@ -48,4 +47,10 @@ export async function uploadAttachment(taskId: string, file: File): Promise<Atta
 
 export function attachmentUrl(attachmentId: string): string {
   return `/api/attachments/${encodeURIComponent(attachmentId)}`;
+}
+
+export function attachmentHref(attachment: Attachment): string {
+  return attachment.storageProvider === "drive" && attachment.driveWebViewLink
+    ? attachment.driveWebViewLink
+    : attachmentUrl(attachment.id);
 }

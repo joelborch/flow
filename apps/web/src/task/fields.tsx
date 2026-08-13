@@ -7,7 +7,7 @@ import type { Priority } from "@flow/shared";
 import { updateTask, users, type StoreTask } from "../store/index.js";
 import { isClosed, statusesOf, statusOfTask, userById } from "../shell/data.js";
 import { cn, formatDue, fromDateInput, isOverdue, toDateInput } from "../shell/format.js";
-import { isSnoozed, snoozePreset, snoozeUntilLabel } from "../lib/fmt.js";
+import { isSnoozed, snoozePreset, snoozeUntilLabel, visibleTags } from "../lib/fmt.js";
 import {
   Avatar, Chip, Menu, MenuItem, PRIORITIES, PRIORITY_COLOR,
   PRIORITY_LABEL, PriorityFlag, Search, StatusDot, TagIcon, X,
@@ -432,6 +432,7 @@ export function TagEditor({ task }: { task: StoreTask }) {
   const [draft, setDraft] = useState("");
   const [adding, setAdding] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const tags = visibleTags(task.tags);
 
   const commit = (raw: string) => {
     const next = new Set(task.tags);
@@ -453,24 +454,24 @@ export function TagEditor({ task }: { task: StoreTask }) {
 
   return (
     <div class="flex flex-wrap items-center gap-1.5 px-2 py-1.5">
-      {task.tags.map((tag) => (
+      {tags.map((tag) => (
         <Chip key={tag} tone="accent" onRemove={() => remove(tag)}>{tag}</Chip>
       ))}
 
-      {adding || task.tags.length === 0 ? (
+      {adding || tags.length === 0 ? (
         <input
           ref={inputRef}
           autofocus={adding}
           value={draft}
-          placeholder={task.tags.length === 0 ? "Add a tag" : "Tag"}
+          placeholder={tags.length === 0 ? "Add a tag" : "Tag"}
           onInput={(e) => setDraft((e.currentTarget as HTMLInputElement).value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === ",") {
               e.preventDefault();
               commit(draft);
-            } else if (e.key === "Backspace" && draft === "" && task.tags.length > 0) {
+            } else if (e.key === "Backspace" && draft === "" && tags.length > 0) {
               e.preventDefault();
-              const last = task.tags[task.tags.length - 1];
+              const last = tags[tags.length - 1];
               if (last) remove(last);
             } else if (e.key === "Escape") {
               e.preventDefault();

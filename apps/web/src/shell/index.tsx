@@ -10,7 +10,7 @@
 //   openPalette/togglePalette/paletteOpen   — the ⌘K command palette
 //
 import type { ComponentChildren } from "preact";
-import { useEffect } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { initTheme, isDark, toggleDark } from "../lib/theme.js";
 import { Settings, SettingsTopBar } from "../settings/index.js";
 import { openSettings, settingsOpen } from "../settings/route.js";
@@ -19,10 +19,11 @@ import { MyWork } from "./MyWork.js";
 import { NewListDialog } from "./organize.js";
 import { Onboarding } from "./onboarding.js";
 import { CommandPalette, togglePalette } from "./palette.js";
+import { QuickAddDialog } from "./QuickAddDialog.js";
 import { Sidebar } from "./Sidebar.js";
 import { TopBar } from "./TopBar.js";
 import { cn } from "./format.js";
-import { KEYFRAMES, Moon, Sun } from "./ui.js";
+import { KEYFRAMES, Moon, Sun, useDialogFocus } from "./ui.js";
 import { activeView, closeDrawer, closeTask, drawerOpen, openTaskId } from "./nav.js";
 
 export {
@@ -32,6 +33,7 @@ export {
 export { openSettings, closeSettings, settingsOpen } from "../settings/route.js";
 export { openPalette, closePalette, togglePalette, paletteOpen } from "./palette.js";
 export { openOnboarding, dismissOnboarding, ONBOARDED_KEY } from "./onboarding.js";
+export { openQuickAdd, closeQuickAdd, quickAddOpen } from "./quick-add.js";
 
 /**
  * Light/dark toggle in the shell's own header strip, next to the sidebar. The
@@ -58,6 +60,24 @@ function ThemeButton() {
   );
 }
 
+// Tracks the `sm` breakpoint (Tailwind's default, 640px) in JS. The drawer
+// signal itself is width-agnostic — callers like the palette's "New space…"
+// action call openDrawer() unconditionally as a defensive no-op on desktop —
+// so only the phone-width overlay should ever announce itself as a dialog.
+function usePhoneWidth(): boolean {
+  const [narrow, setNarrow] = useState(
+    () => typeof matchMedia === "function" && !matchMedia("(min-width: 640px)").matches
+  );
+  useEffect(() => {
+    if (typeof matchMedia !== "function") return;
+    const mq = matchMedia("(min-width: 640px)");
+    const onChange = () => setNarrow(!mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return narrow;
+}
+
 /**
  * The sidebar's frame. At `sm` and up it is an ordinary flex child. Below that
  * it slides over the board, because 240px of a 375px screen leaves the board
@@ -66,6 +86,13 @@ function ThemeButton() {
  */
 function SidebarFrame() {
   const open = drawerOpen.value;
+  const phoneWidth = usePhoneWidth();
+  const modal = open && phoneWidth;
+  const frameRef = useRef<HTMLDivElement>(null);
+  // Only traps/moves focus while it is genuinely acting as a dialog (phone
+  // width, open) — at `sm` and up it is the ordinary always-visible sidebar,
+  // and stealing focus into it there would be surprising.
+  useDialogFocus(frameRef, modal);
 
   // Escape closes the drawer, in the capture phase and stopped, so the same
   // key does not also close the task panel underneath it.
@@ -91,6 +118,14 @@ function SidebarFrame() {
         />
       )}
       <div
+        ref={frameRef}
+        tabIndex={-1}
+        // Only a dialog on the phone-width overlay, and only while it's open —
+        // at `sm` and up this is the ordinary, always-visible sidebar, and
+        // tagging it modal there would wrongly block the board's own keys.
+        role={modal ? "dialog" : undefined}
+        aria-modal={modal ? "true" : undefined}
+        aria-label={modal ? "Navigation" : undefined}
         class={cn(
           "h-full shrink-0 transition-transform duration-200 ease-out",
           "max-sm:fixed max-sm:inset-y-0 max-sm:left-0 max-sm:z-50 max-sm:pl-[env(safe-area-inset-left)]",
@@ -160,6 +195,7 @@ export default function Shell({ children }: { children?: ComponentChildren }) {
           — a dialog parented to it would go with it. */}
       <NewListDialog />
       <CommandPalette />
+      <QuickAddDialog />
 
       {/* Sits above everything, including the palette, and mounts unconditionally
           — it decides for itself whether this is a first sign-in. */}

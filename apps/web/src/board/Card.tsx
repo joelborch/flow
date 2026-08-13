@@ -3,6 +3,7 @@ import { useEffect, useRef } from "preact/hooks";
 import type { User } from "@flow/shared";
 import {
   avatarHue, dueLabel, initials, isOverdue, isSnoozed, PRIORITY_COLOR, PRIORITY_LABEL, snoozeLabel,
+  visibleTags,
 } from "../lib/fmt.js";
 import { openTask } from "../lib/shell-bridge.js";
 import { prefetchTaskDetail, subtaskProgress, userById, type StoreTask } from "../store/index.js";
@@ -59,12 +60,13 @@ export function Card({ task }: { task: StoreTask }) {
   // A snoozed card is normally filtered out entirely; it only reaches here when
   // "Show snoozed" is on, so it renders dimmed and says why.
   const snoozed = isSnoozed(task.snoozedUntil);
+  const tags = visibleTags(task.tags);
   const hasMeta =
     snoozed ||
     task.priority !== null ||
     task.dueDate !== null ||
     progress.total > 0 ||
-    task.tags.length > 0 ||
+    tags.length > 0 ||
     assignee !== undefined;
 
   // Shift-click extends the selection instead of opening: on a board, holding
@@ -157,9 +159,9 @@ export function Card({ task }: { task: StoreTask }) {
 
           {progress.total > 0 ? <SubtaskProgress {...progress} /> : null}
 
-          {task.tags.length > 0 ? (
+          {tags.length > 0 ? (
             <span class="flex min-w-0 items-center gap-1">
-              {task.tags.slice(0, 2).map((tag) => (
+              {tags.slice(0, 2).map((tag) => (
                 <span
                   key={tag}
                   class="truncate rounded border border-line bg-raised px-1 py-[1px] text-[10px] text-muted"
@@ -167,8 +169,8 @@ export function Card({ task }: { task: StoreTask }) {
                   {tag}
                 </span>
               ))}
-              {task.tags.length > 2 ? (
-                <span class="text-faint">+{task.tags.length - 2}</span>
+              {tags.length > 2 ? (
+                <span class="text-faint">+{tags.length - 2}</span>
               ) : null}
             </span>
           ) : null}

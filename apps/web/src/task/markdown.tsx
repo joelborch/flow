@@ -1,4 +1,3 @@
-// //
 // A compact CommonMark-subset renderer that emits Preact VNodes directly.
 // Nothing here ever touches innerHTML / dangerouslySetInnerHTML, so there is no
 // HTML string to sanitize: text becomes text nodes and the only attributes we
@@ -85,7 +84,14 @@ const INLINE_SRC = [
 /** Sentence punctuation that followed a bare URL rather than belonging to it. */
 const URL_TAIL = /[.,;:!?'"“”’]+$/;
 
-export function inline(src: string, key: string): (string | VNode)[] {
+/** CommonMark backslash escapes: `\_` renders as `_`, not as the two chars.
+ * ClickUp's exporter escapes aggressively (`[https://…\_x](https://…_x)`), so
+ * without this every imported link label sprouts literal backslashes. */
+function unescapeMd(text: string): string {
+  return text.replace(/\\([\\`*_{}\[\]()#+\-.!~<>|])/g, "$1");
+}
+
+export function inline(src: string, key: string, noLinks = false): (string | VNode)[] {
   // A fresh regex per call: recursion into inline() would otherwise reset
   // lastIndex on a shared global regex and truncate the outer scan.
   const re = new RegExp(INLINE_SRC, "g");
@@ -99,8 +105,17 @@ export function inline(src: string, key: string): (string | VNode)[] {
       re.lastIndex++;
       continue;
     }
-    if (m.index > last) out.push(src.slice(last, m.index));
+    if (m.index > last) out.push(unescapeMd(src.slice(last, m.index)));
     const k = `${key}.${n++}`;
+
+    // Inside a link label, nested anchors are both invalid HTML and actively
+    // harmful: ClickUp exports `[escaped-url](url)`, and linkifying the
+    // escaped label would put the backslashes into the clickable href.
+    if (noLinks && (m[11] !== undefined || m[12] !== undefined || m[13] !== undefined)) {
+      out.push(unescapeMd(m[0]));
+      last = m.index + m[0].length;
+      continue;
+    }
 
     if (m[1] !== undefined) {
       out.push(<code key={k} class={S.inlineCode}>{(m[2] ?? "").replace(/^ | $/g, "")}</code>);
@@ -119,7 +134,7 @@ export function inline(src: string, key: string): (string | VNode)[] {
       );
     } else if (m[11] !== undefined) {
       const href = safeUrl(m[11]);
-      const label = inline(m[10] ?? "", k);
+      const label = inline(m[10] ?? "", k, true);
       out.push(
         href
           ? <a key={k} href={href} target="_blank" rel="noopener noreferrer nofollow" class={S.a}>{label}</a>
@@ -151,7 +166,7 @@ export function inline(src: string, key: string): (string | VNode)[] {
     }
     last = m.index + m[0].length;
   }
-  if (last < src.length) out.push(src.slice(last));
+  if (last < src.length) out.push(unescapeMd(src.slice(last)));
   return out;
 }
 

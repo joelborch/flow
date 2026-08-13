@@ -9,7 +9,7 @@ import { Column } from "./Column.js";
 import { cardFilter, clearFilters, hiddenBySnooze, statusFilter } from "./filters.js";
 import { composeRequest } from "./compose.js";
 import { isDragging } from "./dnd.js";
-import { handleBoardKey, resetBoardKeyboard, setBoardLayout } from "./keyboard.js";
+import { handleBoardKey, modalUp, resetBoardKeyboard, setBoardLayout } from "./keyboard.js";
 import { BoardOverlays } from "./pickers.js";
 
 function typingInField(target: EventTarget | null): boolean {
@@ -58,6 +58,11 @@ export function Board({ listId }: { listId: string }) {
       // Focus, selection and the property pickers get first refusal; only the
       // keys they leave alone fall through to the composer.
       if (handleBoardKey(ev)) return;
+      // A modal (task panel, palette, mobile drawer) owns the keyboard while
+      // it's open — including its own Escape — so the board must not react
+      // underneath it. handleBoardKey already bails in that case (returning
+      // false above), so this fallback needs its own guard too.
+      if (modalUp()) return;
       if (ev.key === "n" || ev.key === "N") {
         ev.preventDefault();
         setComposing(firstVisible);
