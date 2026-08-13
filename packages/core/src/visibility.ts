@@ -30,6 +30,73 @@ export function isPrivilegedRole(role: Role | null | undefined): boolean {
 }
 
 /**
+ * Delta entities that only owner/admin connections may receive. Automation
+ * rules are workspace wiring — webhook URLs, email targets, cross-space
+ * actions — and the snapshot already withholds them from members, so the
+ * live and replay delta paths must too or the socket would leak what the
+ * snapshot hides.
+ */
+export function isPrivilegedDeltaEntity(entity: string): boolean {
+  return entity === "automation_rule";
+}
+
+/**
+ * Entities that always live under a space. A delta for one of these whose
+ * space cannot be resolved (row deleted before the log stored `space_id`)
+ * must be treated as potentially-private and withheld from members — fail
+ * closed. Workspace-scoped entities (`user`) legitimately have no space and
+ * stay visible to everyone.
+ */
+export function isSpaceScopedEntity(entity: string): boolean {
+  return (
+    entity === "space" ||
+    entity === "list" ||
+    entity === "task" ||
+    entity === "subtask" ||
+    entity === "comment" ||
+    entity === "attachment"
+  );
+}
+
+/**
+ * Sentinel space id for a space-scoped delta whose space could not be
+ * resolved. It is never a real space id, so it is never in any member's
+ * visible set — `deltaVisibleTo` therefore fails closed for members while
+ * privileged users (visibleSpaces === null) still see everything.
+ */
+export const UNRESOLVED_SPACE_ID = "__unresolved__";
+
+/**
+ * May one delta reach one connection? `visibleSpaces` is the connection user's
+ * `visibleSpaceIds` result: null means owner/admin (or an internal caller) and
+ * admits everything, a set means a member — who never receives privileged
+ * entities, and receives space-scoped deltas only for spaces in the set.
+ * Space-less deltas (`user`) go to everyone, as before.
+ */
+export function deltaVisibleTo(
+  entity: string,
+  spaceId: string | null,
+  visibleSpaces: ReadonlySet<string> | null
+): boolean {
+  if (visibleSpaces === null) return true;
+  if (isPrivilegedDeltaEntity(entity)) return false;
+  return spaceId === null || visibleSpaces.has(spaceId);
+}
+
+/**
+ * The snapshot's automation-rule section. Same `visibleSpaces` convention:
+ * null (privileged or internal) gets the real rules, a member gets an empty
+ * array — the shared SnapshotSchema requires the field, and an empty list is
+ * exactly what a member's Settings view should render.
+ */
+export function automationRulesForSnapshot<T>(
+  visibleSpaces: ReadonlySet<string> | null,
+  listAll: () => T[]
+): T[] {
+  return visibleSpaces === null ? listAll() : [];
+}
+
+/**
  * The one rule, in one place. `role` is null for an unknown user id (a
  * deactivated-and-deleted actor, a stale WebSocket attachment): unknown users
  * get the member treatment, never the admin treatment.

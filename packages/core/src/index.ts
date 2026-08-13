@@ -41,6 +41,7 @@ import type {
 import { AUTOMATION_MAX_DEPTH, mergeNotificationPrefs } from "@flow/shared";
 
 import { evaluateAutomations } from "./automation/engine.js";
+import { nextRecurringDue } from "./automation/recurrence.js";
 import { pruneDueFires, sweepDueDateAutomations } from "./automation/schedule.js";
 import type {
   AutomationContext,
@@ -105,6 +106,7 @@ import {
   writeNotificationPrefs,
 } from "./notifications.js";
 import {
+  CHANGES_SPACE_ID_MIGRATION_ID,
   PLACEHOLDER_EMAIL_DOMAIN,
   needsMigration,
   runMigrations,
@@ -121,11 +123,19 @@ import {
   openStatus,
   resolveStatusName,
 } from "./statuses.js";
+import { REPLAY_GAP_LIMIT, bumpResyncFloor, needsSnapshot, resyncFloor } from "./sync-floor.js";
 import { type ScopedDelta, Turn, diffOf, toActor } from "./turn.js";
 import { requireAssignee } from "./users.js";
+import { websocketCloseReplyCode } from "./websocket-close.js";
+import { alarmLog } from "./alarm-observability.js";
 import {
+  automationRulesForSnapshot,
   canSeeSpace,
+  deltaVisibleTo,
+  isPrivilegedDeltaEntity,
   isSpaceMember,
+  isSpaceScopedEntity,
+  UNRESOLVED_SPACE_ID,
   isSystemActor,
   listSpaceMemberIds,
   privateSpaceError,
@@ -152,6 +162,56 @@ export interface Env {
   EMAIL_DRY_RUN?: string;
 }
 
+/** Queue.sendBatch's hard cap on messages per call. */
+export const SIDE_EFFECTS_BATCH_SIZE = 100;
+/**
+ * Queues also caps a sendBatch call at 256KB total. Budget 200KB of estimated
+ * serialized payload per chunk: JSON.stringify().length counts UTF-16 code
+ * units, not UTF-8 bytes, and the queue adds its own per-message envelope, so
+ * the 56KB margin absorbs both.
+ */
+export const SIDE_EFFECTS_BATCH_BYTES = 200 * 1024;
+
+/**
+ * Split a turn's side effects into sendBatch-sized chunks: at most 100
+ * messages AND at most ~200KB of estimated serialized payload per chunk. A
+ * single message over the byte budget can't be split, so it is logged and
+ * still attempted alone in its own chunk — sendBatch may reject it, but
+ * silently dropping it would be worse.
+ */
+export function chunkSideEffects<T>(payloads: readonly T[]): T[][] {
+  const chunks: T[][] = [];
+  let current: T[] = [];
+  let currentBytes = 0;
+  const flushCurrent = (): void => {
+    if (current.length > 0) chunks.push(current);
+    current = [];
+    currentBytes = 0;
+  };
+  for (const payload of payloads) {
+    const bytes = JSON.stringify(payload).length;
+    if (bytes > SIDE_EFFECTS_BATCH_BYTES) {
+      console.error(
+        `side effect payload estimated at ${bytes} bytes exceeds the ${SIDE_EFFECTS_BATCH_BYTES}-byte chunk budget; attempting it alone`,
+        { kind: (payload as { kind?: unknown }).kind }
+      );
+      flushCurrent();
+      chunks.push([payload]);
+      continue;
+    }
+    if (
+      current.length >= SIDE_EFFECTS_BATCH_SIZE ||
+      currentBytes + bytes > SIDE_EFFECTS_BATCH_BYTES
+    ) {
+      flushCurrent();
+    }
+    current.push(payload);
+    currentBytes += bytes;
+  }
+  flushCurrent();
+  return chunks;
+}
+
 // Zod schemas carry defaults, so the *output* type is what the DO receives.
 // Deriving these from the schemas keeps packages/shared the only definition.
 type ParsedListInput = ReturnType<typeof CreateListInput.parse>;
@@ -164,10 +224,12 @@ const DAY_MS = 86_400_000;
 
 /** Closed tasks older than this drop out of the board snapshot. */
 export const SNAPSHOT_CLOSED_WINDOW_MS = 60 * DAY_MS;
-/** Replay gap above which a reconnecting client gets a fresh snapshot. */
-export const REPLAY_GAP_LIMIT = 5_000;
+// REPLAY_GAP_LIMIT lives in ./sync-floor.ts with the rest of the
+// snapshot-vs-replay decision; re-exported below to keep the surface stable.
 /** Rows kept by the prune_changes job. */
 export const CHANGES_RETENTION = 50_000;
+/** Objects kept under `backups/` in R2 — one per day, so 30 is ~a month. */
+export const BACKUP_RETENTION = 30;
 
 interface ConnState {
   userId: string;
@@ -208,6 +270,13 @@ export interface CreateAttachmentInput {
   r2Key: string;
   size: number;
   mimeType: string;
+}
+
+export interface SetAttachmentDriveStorageInput {
+  attachmentId: string;
+  driveFileId: string;
+  driveWebViewLink: string;
+  driveDestination: "shared" | "private";
 }
 
 const TASK_COLUMNS = `id, list_id, title, description, status_id, assignee_id,
@@ -260,13 +329,33 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
-    // Hot path: one SELECT on _migrations, then nothing. Only a genuinely
-    // out-of-date instance pays for blockConcurrencyWhile.
+    // Hot path: one SELECT on _migrations plus seedJobs' per-kind guards
+    // (three COUNTs on a table with a handful of rows). Only a genuinely
+    // out-of-date instance — or one missing a newly-added job kind — pays
+    // for blockConcurrencyWhile.
     if (needsMigration(this.sql)) {
       ctx.blockConcurrencyWhile(async () => {
-        runMigrations(this.sql);
+        // Explicit SAVEPOINT/BEGIN through sql.exec is forbidden in the DO
+        // runtime; transactionSync is the sanctioned per-migration atomicity
+        // (it rolls back automatically when the callback throws).
+        const applied = runMigrations(this.sql, (fn) => ctx.storage.transactionSync(fn));
+        // Pre-0007 changes rows carry no space_id, so replaying them can
+        // withhold legitimate delete-deltas from members (fail-closed
+        // fallback in filterReplay). Bump the resync floor to the current
+        // MAX(seq) exactly once — when 0007 first applies — so every
+        // client's next hello takes one full snapshot instead.
+        if (applied.includes(CHANGES_SPACE_ID_MIGRATION_ID)) {
+          bumpResyncFloor(this.sql, this.maxSeq());
+        }
         seedIfEmpty(this.sql);
         seedJobs(this.sql);
+        await this.armAlarm();
+      });
+    } else if (seedJobs(this.sql) > 0) {
+      // A job kind added after this workspace last migrated (seedJobs used to
+      // run only on an empty scheduled_jobs table, which left new kinds dead
+      // on existing workspaces). Re-arm so the new job's run_at is honored.
+      ctx.blockConcurrencyWhile(async () => {
         await this.armAlarm();
       });
     }
@@ -323,8 +412,18 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     const { min } = this.sql
       .exec<{ min: number | null }>("SELECT MIN(seq) AS min FROM changes")
       .one();
-    const pruned = min !== null && msg.sinceSeq < min - 1;
-    if (msg.sinceSeq > maxSeq || maxSeq - msg.sinceSeq > REPLAY_GAP_LIMIT || pruned) {
+    // The resync floor covers the delta-less mutations (import, membership,
+    // visibility): they change board state without writing to `changes`, so a
+    // replay from a seq at or below the floor would silently skip them — the
+    // snapshot path is the only correct answer there. See ./sync-floor.ts.
+    const snapshotNeeded = needsSnapshot({
+      sinceSeq: msg.sinceSeq,
+      maxSeq,
+      minSeq: min,
+      floor: resyncFloor(this.sql),
+      gapLimit: REPLAY_GAP_LIMIT,
+    });
+    if (snapshotNeeded) {
       this.send(ws, { type: "snapshot", snapshot: this.getSnapshot(userId) });
       return;
     }
@@ -335,33 +434,50 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   /**
    * Apply per-space permissions to a replayed range.
    *
-   * The `changes` log stores no space id, so each delta is resolved the same way
-   * a live one is, memoised by entity id. The whole pass is skipped when the
-   * workspace has no private spaces or the user is an owner/admin — which is the
-   * normal case, and keeps reconnects as cheap as they were.
+   * Each `changes` row carries the space id it was stamped with at emit time,
+   * which is authoritative even after the underlying row is deleted. Rows
+   * written before the `core-0007-changes-space-id` migration have a null
+   * stored id and fall back to live resolution, memoised by entity id.
    *
-   * A `delete` delta whose row is already gone resolves to no space and is let
-   * through: it carries an id and nothing else, and applying it client-side is a
-   * no-op for a client that never held the row.
+   * Null-fallback semantics (fail closed): when the stored id is null AND live
+   * resolution also returns null, a space-scoped entity (task, list, comment,
+   * …) is mapped to UNRESOLVED_SPACE_ID — never in any member's visible set,
+   * so members do not receive it, while owners/admins (visible === null) still
+   * do. A deleted private-space row must not decay into "visible to everyone".
+   * Workspace-scoped deltas (`user`) keep their null space and reach everyone.
+   *
+   * The whole pass is skipped when the workspace has no private spaces or the
+   * user is an owner/admin — the normal case, keeping reconnects cheap.
    */
-  private filterReplay(deltas: Delta[], userId: string): Delta[] {
-    if (deltas.length === 0) return deltas;
-    if (privateSpaceIds(this.sql).size === 0) return deltas;
+  private filterReplay(scoped: ScopedDelta[], userId: string): Delta[] {
+    const deltas = scoped.map((s) => s.delta);
+    if (scoped.length === 0) return deltas;
+    // Privileged-entity deltas (automation rules) must be filtered for members
+    // even when the workspace has no private spaces, so the cheap early-out
+    // only applies when neither filter has anything to do.
+    const hasPrivilegedEntity = deltas.some((d) => isPrivilegedDeltaEntity(d.entity));
+    if (!hasPrivilegedEntity && privateSpaceIds(this.sql).size === 0) return deltas;
     const visible = visibleSpaceIds(this.sql, userId);
     if (visible === null) return deltas;
 
     const memo = new Map<string, string | null>();
-    return deltas.filter((d) => {
+    const liveSpaceId = (d: Delta): string | null => {
       const key = `${d.entity}:${d.id}`;
       if (!memo.has(key)) memo.set(key, this.spaceIdForDelta(d.entity, d.id, undefined));
-      const spaceId = memo.get(key) ?? null;
-      return spaceId === null || visible.has(spaceId);
-    });
+      return memo.get(key) ?? null;
+    };
+    return scoped
+      .filter((s) => {
+        const stored = s.spaceId ?? liveSpaceId(s.delta);
+        const spaceId =
+          stored === null && isSpaceScopedEntity(s.delta.entity) ? UNRESOLVED_SPACE_ID : stored;
+        return deltaVisibleTo(s.delta.entity, spaceId, visible);
+      })
+      .map((s) => s.delta);
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
-    // 1000-1015 are reserved; anything outside is rejected by close().
-    ws.close(code >= 1000 && code <= 1015 && code !== 1005 ? code : 1000, reason);
+    ws.close(websocketCloseReplyCode(code), reason);
   }
 
   async webSocketError(_ws: WebSocket, error: unknown): Promise<void> {
@@ -408,10 +524,25 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   private broadcastDeltas(scoped: ScopedDelta[]): void {
     if (scoped.length === 0) return;
     const restricted = privateSpaceIds(this.sql);
+    // Same fail-closed rule as filterReplay: a space-scoped delta whose space
+    // did not resolve at emit time gets the unresolved sentinel, so when any
+    // private space exists it is withheld from members instead of defaulting
+    // to visible. Space-less deltas (`user`) keep null and reach everyone.
+    const effective = scoped.map((s): ScopedDelta => ({
+      delta: s.delta,
+      spaceId:
+        s.spaceId === null && isSpaceScopedEntity(s.delta.entity) ? UNRESOLVED_SPACE_ID : s.spaceId,
+    }));
     const touchesPrivate =
-      restricted.size > 0 && scoped.some((s) => s.spaceId !== null && restricted.has(s.spaceId));
-    if (!touchesPrivate) {
-      this.broadcast({ type: "deltas", deltas: scoped.map((s) => s.delta) });
+      restricted.size > 0 &&
+      effective.some(
+        (s) => s.spaceId !== null && (restricted.has(s.spaceId) || s.spaceId === UNRESOLVED_SPACE_ID)
+      );
+    // Automation-rule deltas are owner/admin-only, so their presence forces the
+    // per-connection path exactly as a private-space delta does.
+    const touchesPrivileged = effective.some((s) => isPrivilegedDeltaEntity(s.delta.entity));
+    if (!touchesPrivate && !touchesPrivileged) {
+      this.broadcast({ type: "deltas", deltas: effective.map((s) => s.delta) });
       return;
     }
 
@@ -422,13 +553,12 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     };
 
     for (const ws of this.ctx.getWebSockets()) {
+      // `visible === null` is visibleSpaceIds's owner/admin signal, so it is
+      // also what admits the privileged-entity deltas.
       const visible = visibleFor(this.connUserId(ws));
-      const deltas =
-        visible === null
-          ? scoped.map((s) => s.delta)
-          : scoped
-              .filter((s) => s.spaceId === null || visible.has(s.spaceId))
-              .map((s) => s.delta);
+      const deltas = effective
+        .filter((s) => deltaVisibleTo(s.delta.entity, s.spaceId, visible))
+        .map((s) => s.delta);
       if (deltas.length === 0) continue;
       this.send(ws, { type: "deltas", deltas });
     }
@@ -453,24 +583,32 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     }
   }
 
-  private replay(sinceSeq: number): Delta[] {
+  /**
+   * Replayed deltas paired with the space id STORED on each `changes` row at
+   * emit time (null for pre-migration rows and genuinely space-less deltas).
+   * The stored value survives row deletion, which live resolution does not.
+   */
+  private replay(sinceSeq: number): ScopedDelta[] {
     return this.sql
       .exec<ChangeRow>(
-        `SELECT seq, op, entity, entity_id, data, actor_user_id, at
+        `SELECT seq, op, entity, entity_id, data, actor_user_id, at, space_id
          FROM changes WHERE seq > ? ORDER BY seq LIMIT ?`,
         sinceSeq,
         REPLAY_GAP_LIMIT
       )
       .toArray()
       .map(
-        (r): Delta => ({
-          seq: r.seq,
-          op: r.op as Delta["op"],
-          entity: r.entity as Delta["entity"],
-          id: r.entity_id,
-          data: r.data === null ? null : (JSON.parse(r.data) as Record<string, unknown>),
-          actorUserId: r.actor_user_id,
-          at: r.at,
+        (r): ScopedDelta => ({
+          delta: {
+            seq: r.seq,
+            op: r.op as Delta["op"],
+            entity: r.entity as Delta["entity"],
+            id: r.entity_id,
+            data: r.data === null ? null : (JSON.parse(r.data) as Record<string, unknown>),
+            actorUserId: r.actor_user_id,
+            at: r.at,
+          },
+          spaceId: r.space_id,
         })
       );
   }
@@ -618,6 +756,23 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     // No user, deactivated, or no real (non-placeholder) email => skip.
     if (recipient === null || recipient.deactivated || !hasRealEmail(recipient.email)) return;
 
+    // Space gate: a stakeholder (task creator / assignee) who can no longer
+    // see the task's space — removed from a private space's membership — must
+    // not be emailed its titles, statuses or comment bodies. Owners/admins
+    // pass unconditionally via canSeeSpace's privileged short-circuit. A
+    // space row that has gone missing is treated as private (fail closed).
+    if (!isPrivilegedRole(recipient.role)) {
+      const visibility =
+        this.sql
+          .exec<{ visibility: string }>("SELECT visibility FROM spaces WHERE id = ?", facts.space.id)
+          .toArray()[0]?.visibility ?? "private";
+      const access = {
+        visibility: visibility === "private" ? ("private" as const) : ("workspace" as const),
+        isMember: isSpaceMember(this.sql, facts.space.id, recipientId),
+      };
+      if (!canSeeSpace(recipient.role, access)) return;
+    }
+
     const prefs = readNotificationPrefs(this.sql, recipientId);
     if (!prefs[PREF_KEY[kind]]) return;
 
@@ -635,6 +790,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     const payload: SideEffectPayload = {
       kind: "email",
       to: [recipient.email],
+      cc: [],
+      bcc: [],
       subject: rendered.subject,
       body: rendered.body,
       ruleId: notificationTag(kind),
@@ -673,8 +830,12 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   private flush(t: Turn): void {
     this.broadcastDeltas(t.scopedBroadcastable());
 
-    if (t.sideEffects.length > 0) {
-      const batch = t.sideEffects.map((body) => ({ body }));
+    // Queues' sendBatch caps at 100 messages / 256KB. A single bulk operation
+    // (e.g. a bulk status change firing a webhook rule) can enqueue far more
+    // than that in one turn, so chunk on both limits rather than let sendBatch
+    // throw the whole turn's side effects away.
+    for (const chunk of chunkSideEffects(t.sideEffects)) {
+      const batch = chunk.map((body) => ({ body }));
       this.ctx.waitUntil(
         this.env.SIDE_EFFECTS.sendBatch(batch).catch((err: unknown) =>
           console.error("side effect enqueue failed", err)
@@ -766,7 +927,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * the engine queues those itself.
    *
    * Template strings (`{{task.title}}` etc.) are the engine's responsibility:
-   * whatever `title` arrives on a create_subtask action is used verbatim.
+   * whatever text arrives on a create_task/create_subtask action is used
+   * verbatim.
    */
   private applyAction(
     t: Turn,
@@ -815,6 +977,64 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
           }
           break;
         }
+        case "remove_tags": {
+          const current = toTask(this.requireTaskRow(taskId)).tags;
+          const removed = new Set(action.tags.map((tag) => tag.trim().toLowerCase()));
+          const filtered = current.filter((tag) => !removed.has(tag.toLowerCase()));
+          if (filtered.length !== current.length) {
+            this.applyTaskUpdate(t, { taskId, tags: filtered }, "automation.remove_tags");
+          }
+          break;
+        }
+        case "create_next_recurring_task": {
+          const source = toTask(this.requireTaskRow(taskId));
+          if (source.dueDate === null) {
+            throw new Error(`Recurring task ${taskId} has no due date.`);
+          }
+          if (!source.tags.some((tag) => tag.toLowerCase() === action.identityTag.toLowerCase())) {
+            throw new Error(
+              `Recurring task ${taskId} is missing identity tag ${action.identityTag}.`
+            );
+          }
+          const dueDate = nextRecurringDue(source.dueDate, action.recurrence, action.timeZone);
+          const duplicate = this.sql
+            .exec<TaskRowSql>(
+              `SELECT ${TASK_COLUMNS} FROM tasks WHERE list_id = ? AND due_date = ?`,
+              source.listId,
+              dueDate
+            )
+            .toArray()
+            .map(toTask)
+            .some((task) =>
+              task.tags.some((tag) => tag.toLowerCase() === action.identityTag.toLowerCase())
+            );
+          if (!duplicate) {
+            this.applyTaskCreate(t, {
+              listId: source.listId,
+              title: source.title,
+              description: source.description,
+              ...(action.statusName === null ? {} : { status: action.statusName }),
+              assigneeId: source.assigneeId,
+              priority: source.priority,
+              dueDate,
+              tags: source.tags,
+            });
+          }
+          break;
+        }
+        case "create_task":
+          this.applyTaskCreate(t, {
+            listId: action.listId,
+            title: action.title,
+            description: action.description,
+            ...(action.statusName === null ? {} : { status: action.statusName }),
+            assigneeId: action.assigneeId,
+            priority: action.priority,
+            dueDate:
+              action.dueInDays === null ? null : t.now + action.dueInDays * DAY_MS,
+            tags: action.tags,
+          });
+          break;
         case "create_subtask":
           this.applySubtaskCreate(t, {
             taskId,
@@ -912,7 +1132,10 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   /**
    * The space a delta belongs to, for the per-connection broadcast filter.
    *
-   * `user` and `automation_rule` deltas belong to no space and go to everyone.
+   * `user` deltas belong to no space and go to everyone. `automation_rule`
+   * deltas belong to no space either, but they are owner/admin-only — the
+   * broadcast and replay paths gate them via `isPrivilegedDeltaEntity`, not
+   * via a space id.
    * Child-entity deltas resolve through their parent task, which is why `emit`
    * passes `taskId` along — a subtask id joined back to a space would be a
    * three-table hop that a delete delta could no longer make anyway.
@@ -1113,7 +1336,10 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       tasks,
       subtasks,
       users: this.listUsers(),
-      automationRules: this.listAutomations(),
+      // Automation rules are workspace wiring (webhook URLs, email targets,
+      // cross-space actions): owners and admins only. `visible === null` is
+      // exactly the privileged-or-internal case the space filters key off.
+      automationRules: automationRulesForSnapshot(visible, () => this.listAutomations()),
     };
   }
 
@@ -1270,7 +1496,9 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   listAttachments(taskId: string): Attachment[] {
     return this.sql
       .exec<AttachmentRow>(
-        `SELECT id, task_id, filename, r2_key, size, mime_type, uploaded_by, created_at
+        `SELECT id, task_id, filename, r2_key, storage_provider, drive_file_id,
+                drive_web_view_link, drive_destination, migration_state,
+                size, mime_type, uploaded_by, created_at
          FROM attachments WHERE task_id = ? ORDER BY created_at`,
         taskId
       )
@@ -1282,7 +1510,9 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   getAttachment(attachmentId: string): Attachment | null {
     const row = this.sql
       .exec<AttachmentRow>(
-        `SELECT id, task_id, filename, r2_key, size, mime_type, uploaded_by, created_at
+        `SELECT id, task_id, filename, r2_key, storage_provider, drive_file_id,
+                drive_web_view_link, drive_destination, migration_state,
+                size, mime_type, uploaded_by, created_at
          FROM attachments WHERE id = ?`,
         attachmentId
       )
@@ -1351,6 +1581,47 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         depth: r.depth,
         at: r.at,
       }));
+  }
+
+  /**
+   * Correct the "queued" automation_runs row a webhook/email action wrote at
+   * enqueue time (runAction in the automation engine always logs `ok: true`
+   * before delivery is attempted, since delivery happens out-of-band in the
+   * queue consumer). Called by the side-effects consumer for a permanent
+   * (non-retryable) failure, and by the flow-dlq consumer once retries are
+   * exhausted. Writes a plain bookkeeping row directly — this runs outside any
+   * mutation turn, so there is no delta to broadcast and no audit trail entry,
+   * same as writeRunLog. Never throws: a failure here must not crash the queue
+   * consumer that called it.
+   */
+  recordDeliveryFailure(input: {
+    ruleId: string;
+    taskId: string;
+    kind: "webhook" | "email";
+    detail: string;
+  }): { ok: true } {
+    try {
+      this.sql.exec(
+        `INSERT INTO automation_runs (rule_id, task_id, trigger, results, depth, at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        input.ruleId,
+        input.taskId,
+        "delivery_failure",
+        JSON.stringify([
+          {
+            action: input.kind === "webhook" ? "call_webhook" : "send_email",
+            ok: false,
+            dryRun: false,
+            detail: input.detail,
+          },
+        ]),
+        0,
+        Date.now()
+      );
+    } catch (err) {
+      console.error("automation: cannot record delivery failure", err);
+    }
+    return { ok: true };
   }
 
   getAuditLog(
@@ -1733,7 +2004,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     });
   }
 
-  deleteTask(taskId: string, actor: string | Actor): { ok: true } {
+  /** Returns the r2Keys of any deleted attachments so the caller can clean up R2. */
+  deleteTask(taskId: string, actor: string | Actor): { ok: true; r2Keys: string[] } {
     return this.runTurn(toActor(actor), (t) => {
       const row = this.requireTaskRow(taskId);
       const spaceId = this.spaceIdForTask(taskId);
@@ -1744,6 +2016,21 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         .exec<{ id: string }>("SELECT id FROM subtasks WHERE task_id = ?", taskId)
         .toArray()
         .map((r) => r.id);
+      // The attachments row is about to be the only record of these R2 keys,
+      // so park them in pending_object_deletes before dropping the row: the
+      // caller's waitUntil (or the backup job's sweep, if that never runs)
+      // deletes the objects and clears the rows afterward.
+      const r2Keys = this.sql
+        .exec<{ r2_key: string }>("SELECT r2_key FROM attachments WHERE task_id = ?", taskId)
+        .toArray()
+        .map((r) => r.r2_key);
+      for (const r2Key of r2Keys) {
+        this.sql.exec(
+          "INSERT OR IGNORE INTO pending_object_deletes (r2_key, enqueued_at) VALUES (?, ?)",
+          r2Key,
+          t.now
+        );
+      }
 
       this.sql.exec("DELETE FROM subtasks WHERE task_id = ?", taskId);
       this.sql.exec("DELETE FROM comments WHERE task_id = ?", taskId);
@@ -1757,8 +2044,22 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       for (const sid of subtaskIds) t.emit("delete", "subtask", sid, null, { taskId, spaceId });
       t.emit("delete", "task", taskId, null, { spaceId });
       t.audit("task.delete", taskId, { listId: row.list_id, title: row.title });
-      return { ok: true } as const;
+      return { ok: true, r2Keys } as const;
     });
+  }
+
+  /**
+   * Drops rows from pending_object_deletes once the caller has actually
+   * removed the R2 objects (a delete route's waitUntil, or the backup job's
+   * sweep). Not wrapped in runTurn: this is bookkeeping cleanup for storage
+   * that already has no workspace-visible representation, not a mutation —
+   * it has no actor, produces no delta, and belongs in no audit log.
+   */
+  clearPendingObjectDeletes(r2Keys: string[]): { ok: true; cleared: number } {
+    for (const r2Key of r2Keys) {
+      this.sql.exec("DELETE FROM pending_object_deletes WHERE r2_key = ?", r2Key);
+    }
+    return { ok: true, cleared: r2Keys.length };
   }
 
   // =========================================================================
@@ -1946,6 +2247,11 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         taskId: input.taskId,
         filename: input.filename,
         r2Key: input.r2Key,
+        storageProvider: "r2",
+        driveFileId: null,
+        driveWebViewLink: null,
+        driveDestination: null,
+        migrationState: "r2",
         size: input.size,
         mimeType: input.mimeType,
         uploadedBy: t.actor.userId,
@@ -1974,12 +2280,104 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     });
   }
 
-  /** Returns the r2Key so the caller can delete the object from R2. */
+  /**
+   * Make a verified Drive file canonical while retaining the R2 key until a
+   * separate, read-back-gated cleanup call succeeds.
+   */
+  setAttachmentDriveStorage(
+    input: SetAttachmentDriveStorageInput,
+    actor: string | Actor
+  ): Attachment {
+    return this.runTurn(toActor(actor), (t) => {
+      this.requirePrivileged(t.actor, "Finalizing Drive attachment storage");
+      const before = this.getAttachment(input.attachmentId);
+      if (!before) throw new Error(`Attachment ${input.attachmentId} not found.`);
+      if (before.storageProvider === "drive") {
+        if (
+          before.driveFileId !== input.driveFileId ||
+          before.driveWebViewLink !== input.driveWebViewLink ||
+          before.driveDestination !== input.driveDestination
+        ) {
+          throw new Error(
+            `Attachment ${input.attachmentId} already points at a different Drive file.`
+          );
+        }
+        return before;
+      }
+      this.sql.exec(
+        `UPDATE attachments
+         SET storage_provider = 'drive',
+             drive_file_id = ?,
+             drive_web_view_link = ?,
+             drive_destination = ?,
+             migration_state = 'cleanup_pending'
+         WHERE id = ?`,
+        input.driveFileId,
+        input.driveWebViewLink,
+        input.driveDestination,
+        input.attachmentId
+      );
+      const after = this.getAttachment(input.attachmentId);
+      if (!after) throw new Error(`Attachment ${input.attachmentId} disappeared after update.`);
+      t.emit("update", "attachment", after.id, after as unknown as Record<string, unknown>, {
+        taskId: after.taskId,
+      });
+      t.audit("attachment.storage.drive", after.id, {
+        taskId: after.taskId,
+        driveFileId: after.driveFileId,
+        driveDestination: after.driveDestination,
+        migrationState: after.migrationState,
+      });
+      return after;
+    });
+  }
+
+  /** Mark cleanup complete only for the exact Drive file the caller read back. */
+  markAttachmentDriveCleanupComplete(
+    attachmentId: string,
+    driveFileId: string,
+    actor: string | Actor
+  ): Attachment {
+    return this.runTurn(toActor(actor), (t) => {
+      this.requirePrivileged(t.actor, "Completing Drive attachment cleanup");
+      const before = this.getAttachment(attachmentId);
+      if (!before) throw new Error(`Attachment ${attachmentId} not found.`);
+      if (before.storageProvider !== "drive" || before.driveFileId !== driveFileId) {
+        throw new Error(`Attachment ${attachmentId} does not match Drive file ${driveFileId}.`);
+      }
+      if (before.migrationState === "complete") return before;
+      if (before.migrationState !== "cleanup_pending") {
+        throw new Error(`Attachment ${attachmentId} is not awaiting R2 cleanup.`);
+      }
+      this.sql.exec(
+        "UPDATE attachments SET migration_state = 'complete' WHERE id = ?",
+        attachmentId
+      );
+      const after = this.getAttachment(attachmentId);
+      if (!after) throw new Error(`Attachment ${attachmentId} disappeared after cleanup.`);
+      t.emit("update", "attachment", after.id, after as unknown as Record<string, unknown>, {
+        taskId: after.taskId,
+      });
+      t.audit("attachment.storage.r2_deleted", after.id, {
+        taskId: after.taskId,
+        driveFileId,
+        r2Key: after.r2Key,
+      });
+      return after;
+    });
+  }
+
+  /**
+   * Returns the r2Key so the caller can delete the object from R2 (and clear
+   * the pending_object_deletes row this parks in the same turn).
+   */
   deleteAttachment(attachmentId: string, actor: string | Actor): { ok: true; r2Key: string } {
     return this.runTurn(toActor(actor), (t) => {
       const rows = this.sql
         .exec<AttachmentRow>(
-          `SELECT id, task_id, filename, r2_key, size, mime_type, uploaded_by, created_at
+          `SELECT id, task_id, filename, r2_key, storage_provider, drive_file_id,
+                  drive_web_view_link, drive_destination, migration_state,
+                  size, mime_type, uploaded_by, created_at
            FROM attachments WHERE id = ?`,
           attachmentId
         )
@@ -1988,6 +2386,15 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       if (!row) throw new Error(`Attachment ${attachmentId} not found.`);
       this.assertTaskWritable(t.actor, row.task_id);
       const spaceId = this.spaceIdForTask(row.task_id);
+      // Same parking as deleteTask: this row is the only record of the R2
+      // key, so persist it before dropping the row. The route's waitUntil
+      // deletes the object and clears the pending row; if the Worker is
+      // evicted first, the backup job's daily sweep picks it up.
+      this.sql.exec(
+        "INSERT OR IGNORE INTO pending_object_deletes (r2_key, enqueued_at) VALUES (?, ?)",
+        row.r2_key,
+        t.now
+      );
       this.sql.exec("DELETE FROM attachments WHERE id = ?", attachmentId);
       t.emit("delete", "attachment", attachmentId, null, { spaceId });
       t.audit("attachment.delete", attachmentId, { taskId: row.task_id });
@@ -2007,23 +2414,33 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         color: input.color ?? null,
         position: nextPosition(this.sql, "spaces"),
         archived: false,
-        // Spaces are born workspace-visible; making one private is a separate,
-        // audited mutation (`setSpaceVisibility`).
-        visibility: "workspace",
+        // Spaces are born private (private is the norm for this workspace);
+        // a caller may opt into workspace-wide visibility explicitly, and
+        // flipping visibility afterwards is a separate, audited mutation
+        // (`setSpaceVisibility`).
+        visibility: input.visibility,
         createdAt: t.now,
       };
       this.sql.exec(
         `INSERT INTO spaces (id, name, color, position, archived, visibility, created_at, created_by)
-         VALUES (?, ?, ?, ?, 0, 'workspace', ?, ?)`,
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
         space.id,
         space.name,
         space.color,
         space.position,
+        space.visibility,
         space.createdAt,
         t.actor.userId
       );
+      // A private space needs at least one member, and the person who just
+      // built it is the honest answer — mirrors setSpaceVisibility's flip to
+      // private, including for an admin/owner creator, so membership stays
+      // consistent regardless of who made the space private.
+      if (space.visibility === "private") {
+        this.addSpaceMember(space.id, t.actor.userId, t.now);
+      }
       t.emit("create", "space", space.id, space as unknown as Record<string, unknown>);
-      t.audit("space.create", space.id, { name: space.name });
+      t.audit("space.create", space.id, { name: space.name, visibility: space.visibility });
       return space;
     });
   }
@@ -2111,6 +2528,9 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     });
 
     if (result.changed) {
+      // The visibility delta replays, but the subtree a member gained or lost
+      // does not — so replay from any earlier seq is invalid for them.
+      bumpResyncFloor(this.sql, this.maxSeq());
       // Everyone who is not an owner/admin may have gained or lost a subtree.
       this.resyncFor(() => true);
     }
@@ -2160,6 +2580,9 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
     // Only a private space's membership changes what anyone can see.
     if (result.private && result.changedUsers.size > 0) {
+      // Membership writes no delta at all, so an affected user reconnecting
+      // later with an old sinceSeq must get a snapshot, not a replay.
+      bumpResyncFloor(this.sql, this.maxSeq());
       this.resyncFor((userId) => result.changedUsers.has(userId));
     }
     return { spaceId: result.spaceId, userIds: result.userIds };
@@ -2677,12 +3100,13 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         const placeholder = email.toLowerCase().endsWith("@placeholder.flow") ? 1 : 0;
         if (existing) {
           this.sql.exec(
-            `UPDATE users SET email = ?, name = ?, role = ?, deactivated = ?,
+            `UPDATE users SET email = ?, name = ?, role = COALESCE(?, role),
+               deactivated = COALESCE(?, deactivated),
                needs_email_update = ?, clickup_id = COALESCE(?, clickup_id) WHERE id = ?`,
             email,
             u.name ?? email,
-            u.role ?? "member",
-            u.deactivated ? 1 : 0,
+            u.role ?? null,
+            u.deactivated === undefined ? null : u.deactivated ? 1 : 0,
             placeholder,
             u.clickupId ?? null,
             existing
@@ -2968,6 +3392,9 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       }),
       now
     );
+    // The import wrote no deltas, so a client that was offline for it must not
+    // be allowed to replay across it — floor the log at the current seq.
+    bumpResyncFloor(this.sql, this.maxSeq());
     this.broadcast({ type: "resync" });
     return result;
   }
@@ -3106,7 +3533,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   // Alarm: one alarm multiplexes every scheduled job
   // =========================================================================
 
-  async alarm(): Promise<void> {
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    const alarmStartedAt = Date.now();
     const now = Date.now();
     const jobs = this.sql
       .exec<JobRow>(
@@ -3114,13 +3542,41 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         now
       )
       .toArray();
+    console.log(
+      alarmLog({
+        event: "flow.alarm.start",
+        due_jobs: jobs.length,
+        is_retry: alarmInfo?.isRetry ?? false,
+        retry_count: alarmInfo?.retryCount ?? 0,
+        scheduled_time: alarmInfo?.scheduledTime ?? now,
+      })
+    );
 
+    let completed = 0;
+    let failed = 0;
     for (const job of jobs) {
+      const jobStartedAt = Date.now();
+      let result: Record<string, number> = { processed: 0 };
+      let status = "ok";
       try {
-        this.runJob(job, now);
+        result = await this.runJob(job, now);
+        completed += 1;
       } catch (err) {
         // Alarms retry; a poisoned job must not wedge the whole schedule.
+        status = "error";
+        failed += 1;
         console.error("scheduled job failed", job.kind, err);
+      } finally {
+        console.log(
+          alarmLog({
+            event: "flow.alarm.job",
+            job_id: job.id,
+            job_kind: job.kind,
+            status,
+            duration_ms: Math.max(0, Date.now() - jobStartedAt),
+            ...result,
+          })
+        );
       }
       this.sql.exec("DELETE FROM scheduled_jobs WHERE id = ?", job.id);
       if (job.every_ms !== null && job.every_ms > 0) {
@@ -3140,6 +3596,15 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
     this.armedAlarm = null;
     await this.armAlarm();
+    console.log(
+      alarmLog({
+        event: "flow.alarm.finish",
+        due_jobs: jobs.length,
+        completed,
+        failed,
+        duration_ms: Math.max(0, Date.now() - alarmStartedAt),
+      })
+    );
   }
 
   /** Queue a one-off job; automations can use this via ctx.sql too. */
@@ -3155,32 +3620,97 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     this.ctx.waitUntil(this.armAlarm());
   }
 
-  private runJob(job: JobRow, now: number): void {
+  private async runJob(job: JobRow, now: number): Promise<Record<string, number>> {
     switch (job.kind) {
       case "prune_changes":
-        this.pruneChanges();
-        break;
-      // The hourly maintenance tick. It carries the snooze wake pass too rather
-      // than seeding a second recurring job, because seedJobs only ever runs on
-      // an empty scheduled_jobs table — a workspace that already exists would
-      // never pick a newly-seeded job up.
+        return { processed: this.pruneChanges() };
+      case "backup":
+        return this.runBackup(now);
+      // The hourly maintenance tick. It carries the snooze wake pass too —
+      // piggybacking on the existing hourly job is simpler than a second
+      // recurring job with its own schedule.
       case "due_date_check":
-        this.runDueDateCheck(now);
-        this.runSnoozeWake(now);
-        break;
+        {
+          const due = this.runDueDateCheck(now);
+          const woken = this.runSnoozeWake(now);
+          return {
+            processed: due.firings.length + woken,
+            rules_considered: due.rulesConsidered,
+            candidates_inspected: due.candidatesInspected,
+            firings: due.firings.length,
+            woken,
+          };
+        }
       // Explicitly schedulable too, for a targeted catch-up.
       case "snooze_wake":
-        this.runSnoozeWake(now);
-        break;
+        {
+          const woken = this.runSnoozeWake(now);
+          return { processed: woken, woken };
+        }
       default:
         console.error("unknown scheduled job kind", job.kind);
+        return { processed: 0 };
     }
   }
 
-  private pruneChanges(): void {
+  private pruneChanges(): number {
     const max = this.maxSeq();
     const floor = max - CHANGES_RETENTION;
-    if (floor > 0) this.sql.exec("DELETE FROM changes WHERE seq <= ?", floor);
+    if (floor <= 0) return 0;
+    return this.sql.exec("DELETE FROM changes WHERE seq <= ?", floor).rowsWritten;
+  }
+
+  /**
+   * Dumps every user table to gzipped NDJSON in R2 (`backups/YYYY-MM-DD.ndjson.gz`,
+   * one `{"table":...,"row":...}` line per row) and prunes to the newest 30
+   * objects under `backups/`. A thrown error here is caught by alarm()'s
+   * per-job try/catch like every other job kind — it does not wedge the
+   * schedule, and the job's `every_ms` reschedule (also in alarm(), outside
+   * the try/catch) fires it again tomorrow regardless of today's outcome.
+   */
+  private async runBackup(now: number): Promise<Record<string, number>> {
+    const tables = backupTableNames(this.sql);
+    let rows = 0;
+    const lines: string[] = [];
+    for (const table of tables) {
+      const tableRows = this.sql.exec<Record<string, SqlStorageValue>>(`SELECT * FROM ${table}`).toArray();
+      for (const row of tableRows) {
+        lines.push(JSON.stringify({ table, row }));
+        rows += 1;
+      }
+    }
+    const ndjson = lines.length > 0 ? lines.join("\n") + "\n" : "";
+    const gz = await gzipText(ndjson);
+    const key = `backups/${backupDateKey(now)}.ndjson.gz`;
+    await this.env.ATTACHMENTS.put(key, gz);
+    const pruned = await pruneOldBackups(this.env.ATTACHMENTS, BACKUP_RETENTION);
+    const sweptDeletes = await this.sweepPendingObjectDeletes();
+    return { processed: rows, tables: tables.length, bytes: gz.byteLength, pruned, sweptDeletes };
+  }
+
+  /**
+   * Fallback for R2 objects whose delete route never got to its waitUntil
+   * (Worker evicted, request aborted) or whose clear-RPC never landed:
+   * anything still in pending_object_deletes gets swept here. Piggybacked on
+   * the daily backup job rather than its own alarm kind, because backup is
+   * already the DO's one recurring job that touches the ATTACHMENTS binding
+   * and a bounded cleanup pass doesn't need its own schedule. Capped per run
+   * so a large backlog can't turn a daily job into an unbounded one; any
+   * remainder just waits for tomorrow's run.
+   */
+  private async sweepPendingObjectDeletes(): Promise<number> {
+    const rows = this.sql
+      .exec<{ r2_key: string }>(
+        "SELECT r2_key FROM pending_object_deletes ORDER BY enqueued_at LIMIT 200"
+      )
+      .toArray();
+    if (rows.length === 0) return 0;
+    const keys = rows.map((r) => r.r2_key);
+    await this.env.ATTACHMENTS.delete(keys);
+    for (const key of keys) {
+      this.sql.exec("DELETE FROM pending_object_deletes WHERE r2_key = ?", key);
+    }
+    return keys.length;
   }
 
   /**
@@ -3188,14 +3718,14 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * deadline gets closer — so the engine's sweep drives it. Any actions it
    * takes run inside this turn, which means their deltas broadcast normally.
    */
-  private runDueDateCheck(now: number): void {
+  private runDueDateCheck(now: number): ReturnType<typeof sweepDueDateAutomations> {
     const actor: Actor = {
       userId: this.systemUserId(),
       via: "automation",
       apiKeyId: null,
       automationRuleId: null,
     };
-    this.runTurn(actor, (t) => {
+    return this.runTurn(actor, (t) => {
       const ctx: AutomationScheduleContext = {
         ...this.automationContext(t, 0),
         listTaskIdsDueBetween: (scope, fromMs, toMs) =>
@@ -3210,6 +3740,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         });
       }
       pruneDueFires(ctx, now);
+      return result;
     });
   }
 
@@ -3223,7 +3754,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * `via: "automation"`, which is what the audit trail reads as "the system did
    * this, nobody asked for it".
    */
-  private runSnoozeWake(now: number): void {
+  private runSnoozeWake(now: number): number {
     const rows = this.sql
       .exec<SnoozedRow>(
         `SELECT id, snoozed_until FROM tasks
@@ -3232,7 +3763,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       )
       .toArray();
     const woken = wakeCandidates(rows, now);
-    if (woken.length === 0) return;
+    if (woken.length === 0) return 0;
 
     const actor: Actor = {
       userId: this.systemUserId(),
@@ -3251,6 +3782,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       }
       t.audit("task.wake_sweep", "workspace", { woken: woken.length });
     });
+    return woken.length;
   }
 
   private listTaskIdsDueBetween(
@@ -3445,5 +3977,50 @@ function normalizeTags(tags: readonly string[]): string[] {
   return out;
 }
 
+// --- daily backup ------------------------------------------------------
+
+/** Every user table backed up, discovered from sqlite_master so a future
+ *  migration's new table is picked up without touching this file. Excludes
+ *  the internal `_migrations` bookkeeping table and the tasks_fts virtual
+ *  table + its shadow tables — full-text search is derived from `tasks` and
+ *  rebuilds itself via triggers, so backing it up would only bloat the file. */
+function backupTableNames(sql: SqlStorage): string[] {
+  const rows = sql
+    .exec<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    )
+    .toArray();
+  return rows.map((r) => r.name).filter((name) => name !== "_migrations" && !name.startsWith("tasks_fts"));
+}
+
+async function gzipText(text: string): Promise<ArrayBuffer> {
+  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
+  return new Response(stream).arrayBuffer();
+}
+
+/** UTC calendar date, e.g. "2026-08-13" — sortable, and stable regardless of
+ *  what wall-clock hour the job happens to run in. */
+function backupDateKey(now: number): string {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+/** Keys are `backups/YYYY-MM-DD.ndjson.gz`, so lexicographic order is
+ *  chronological order — no need to read object metadata to find the
+ *  newest ones. Returns how many objects were deleted. */
+async function pruneOldBackups(bucket: R2Bucket, keep: number): Promise<number> {
+  const keys: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const listing = await bucket.list({ prefix: "backups/", cursor });
+    for (const obj of listing.objects) keys.push(obj.key);
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor !== undefined);
+  keys.sort();
+  const toDelete = keys.slice(0, Math.max(0, keys.length - keep));
+  if (toDelete.length > 0) await bucket.delete(toDelete);
+  return toDelete.length;
+}
+
 /** Re-exported so callers can reuse the fractional-ordering maths. */
 export { between as positionBetween, POSITION_STEP } from "./position.js";
+export { REPLAY_GAP_LIMIT } from "./sync-floor.js";

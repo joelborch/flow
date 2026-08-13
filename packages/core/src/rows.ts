@@ -142,6 +142,11 @@ export interface AttachmentRow {
   task_id: string;
   filename: string;
   r2_key: string;
+  storage_provider: string;
+  drive_file_id: string | null;
+  drive_web_view_link: string | null;
+  drive_destination: string | null;
+  migration_state: string;
   size: number;
   mime_type: string;
   uploaded_by: string | null;
@@ -196,6 +201,8 @@ export interface ChangeRow {
   data: string | null;
   actor_user_id: string;
   at: number;
+  /** Space stamped at emit time; null for pre-migration rows and space-less deltas. */
+  space_id: string | null;
 }
 
 export interface JobRow {
@@ -361,6 +368,17 @@ export const toAttachment = (r: AttachmentRow): Attachment => ({
   taskId: r.task_id,
   filename: r.filename,
   r2Key: r.r2_key,
+  storageProvider: r.storage_provider === "drive" ? "drive" : "r2",
+  driveFileId: r.drive_file_id,
+  driveWebViewLink: r.drive_web_view_link,
+  driveDestination:
+    r.drive_destination === "shared" || r.drive_destination === "private"
+      ? r.drive_destination
+      : null,
+  migrationState:
+    r.migration_state === "cleanup_pending" || r.migration_state === "complete"
+      ? r.migration_state
+      : "r2",
   size: r.size,
   mimeType: r.mime_type,
   uploadedBy: r.uploaded_by,

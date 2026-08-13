@@ -102,25 +102,32 @@ export class Turn {
     };
     if (this.silent) return { seq: 0, ...base };
 
+    // Resolved before the INSERT so the log row carries the space it belonged
+    // to at emit time. Replay filtering reads this stored value: once the row
+    // behind a delta is deleted, a live task->list->space join can no longer
+    // answer, and "unknown" must not decay into "visible to everyone".
+    const spaceId =
+      extra?.spaceId !== undefined
+        ? extra.spaceId
+        : this.resolveSpaceId(entity, entityId, extra?.taskId);
+
     const { seq } = this.sql
       .exec<{ seq: number }>(
-        `INSERT INTO changes (op, entity, entity_id, data, actor_user_id, at)
-         VALUES (?, ?, ?, ?, ?, ?) RETURNING seq`,
+        `INSERT INTO changes (op, entity, entity_id, data, actor_user_id, at, space_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
         op,
         entity,
         entityId,
         data === null ? null : JSON.stringify(data),
         this.actor.userId,
-        this.now
+        this.now,
+        spaceId
       )
       .one();
     const delta: Delta = { seq, ...base };
     this.entries.push({
       delta: { ...delta, prev: extra?.prev ?? null, taskId: extra?.taskId },
-      spaceId:
-        extra?.spaceId !== undefined
-          ? extra.spaceId
-          : this.resolveSpaceId(entity, entityId, extra?.taskId),
+      spaceId,
       depth: this.depth,
       evaluated: false,
     });

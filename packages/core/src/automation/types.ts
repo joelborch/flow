@@ -1,4 +1,3 @@
-// //
 // The contract between the workspace Durable Object (do-core agent) and the
 // automation engine. Everything the engine needs to know about the workspace
 // arrives through AutomationContext, so the engine holds no knowledge of the
@@ -67,6 +66,8 @@ export type SideEffectPayload =
   | {
       kind: "email";
       to: string[];
+      cc: string[];
+      bcc: string[];
       subject: string;
       /** Markdown; rendered to HTML by the consumer. */
       body: string;

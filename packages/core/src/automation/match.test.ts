@@ -232,6 +232,7 @@ describe("scope", () => {
     expect(ruleAppliesToScope(makeRule({ scope: { kind: "space", spaceId: "sp_1" } }), v)).toBe(true);
     expect(ruleAppliesToScope(makeRule({ scope: { kind: "space", spaceId: "sp_2" } }), v)).toBe(false);
   });
+
 });
 
 describe("eventNameForTrigger", () => {

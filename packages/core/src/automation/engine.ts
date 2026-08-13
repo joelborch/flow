@@ -1,4 +1,3 @@
-// //
 // The automation engine. Called by the workspace DO from inside every committed
 // mutation turn, once per appended delta:
 //
@@ -36,6 +35,9 @@ const INTERNAL_ACTIONS = new Set<Action["kind"]>([
   "set_assignee",
   "set_priority",
   "add_tags",
+  "remove_tags",
+  "create_next_recurring_task",
+  "create_task",
   "create_subtask",
   "move_to_list",
 ]);
@@ -196,7 +198,15 @@ function runAction(
   try {
     if (INTERNAL_ACTIONS.has(action.kind)) {
       const prepared: Action =
-        action.kind === "create_subtask" ? { ...action, title: render(action.title, view) } : action;
+        action.kind === "create_subtask"
+          ? { ...action, title: render(action.title, view) }
+          : action.kind === "create_task"
+            ? {
+                ...action,
+                title: render(action.title, view),
+                description: render(action.description, view),
+              }
+            : action;
       // The rule id goes with the action so the DO can attribute the audit row
       // to this rule rather than to whoever tripped the trigger.
       ctx.applyAction(prepared, view.task.id, ctx.depth + 1, rule.id);
@@ -212,6 +222,7 @@ function runAction(
           event: triggerName,
           delta: toWireDelta(delta),
           task: view.task,
+          payload: toLegacyWebhookTaskPayload(view),
           workspace: view.appHostname,
         },
         ruleId: rule.id,
@@ -227,9 +238,13 @@ function runAction(
     }
 
     if (action.kind === "send_email") {
-      const to = action.to
-        .map((addr) => render(addr, view, "email").trim())
-        .filter((addr) => addr.length > 0 && addr.includes("@"));
+      const recipients = (templates: readonly string[]) =>
+        templates
+          .map((addr) => render(addr, view, "email").trim())
+          .filter((addr) => addr.length > 0 && addr.includes("@"));
+      const to = recipients(action.to);
+      const cc = recipients(action.cc ?? []);
+      const bcc = recipients(action.bcc ?? []);
       if (to.length === 0) {
         return { action: "send_email", ok: false, dryRun: false, detail: "no resolvable recipients" };
       }
@@ -237,6 +252,8 @@ function runAction(
       const payload: SideEffectPayload = {
         kind: "email",
         to,
+        cc,
+        bcc,
         subject: render(action.subject, view),
         body: render(action.body, view),
         ruleId: rule.id,
@@ -268,6 +285,45 @@ function toWireDelta(delta: AutomationDelta): Delta {
   return wire;
 }
 
+/**
+ * Keep old ClickUp-oriented receivers working while they migrate to Flow's
+ * native `task` field. Dates are strings because ClickUp's API serialized
+ * millisecond timestamps that way.
+ */
+function toLegacyWebhookTaskPayload(view: TaskView) {
+  const millis = (value: number | null) => (value === null ? null : String(value));
+  return {
+    id: view.task.id,
+    flow_id: view.task.id,
+    clickup_id: view.task.clickupId,
+    name: view.task.title,
+    title: view.task.title,
+    description: view.task.description,
+    text_content: view.task.description,
+    status: { status: view.statusName },
+    list: { id: view.list.id, name: view.list.name },
+    space: { id: view.space.id, name: view.space.name },
+    assignees:
+      view.assignee === null
+        ? []
+        : [
+            {
+              id: view.assignee.id,
+              username: view.assignee.name,
+              email: view.assignee.email,
+            },
+          ],
+    priority: view.task.priority === null ? null : { priority: view.task.priority },
+    due_date: millis(view.task.dueDate),
+    start_date: millis(view.task.startDate),
+    date_created: String(view.task.createdAt),
+    date_updated: String(view.task.updatedAt),
+    date_closed: millis(view.task.closedAt),
+    tags: view.task.tags.map((name) => ({ name })),
+    url: `https://${view.appHostname}/t/${view.task.id}`,
+  };
+}
+
 function describe(action: Action): string {
   switch (action.kind) {
     case "set_status":
@@ -278,6 +334,12 @@ function describe(action: Action): string {
       return `priority -> ${action.priority ?? "none"}`;
     case "add_tags":
       return `tags += ${action.tags.join(", ")}`;
+    case "remove_tags":
+      return `tags -= ${action.tags.join(", ")}`;
+    case "create_next_recurring_task":
+      return `next ${action.recurrence.kind} occurrence`;
+    case "create_task":
+      return `task "${action.title}" -> ${action.listId}`;
     case "create_subtask":
       return `subtask "${action.title}"`;
     case "move_to_list":

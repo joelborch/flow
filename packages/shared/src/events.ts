@@ -1,6 +1,6 @@
 import { z } from "zod";
 import {
-  Attachment, Comment, Id, List, Space, Subtask, Task, Ts, User,
+  Attachment, Comment, Id, List, Priority, Space, Subtask, Task, Ts, User,
 } from "./entities.js";
 import { AutomationRule } from "./automations.js";
 
@@ -93,10 +93,48 @@ export type ServerMsg = z.infer<typeof ServerMsg>;
 
 // --- Outbound webhook envelope --------------------------------------------
 
+/**
+ * Compatibility projection for receivers that were originally wired to
+ * ClickUp automation webhooks and read `body.payload`. Flow-native receivers
+ * should use `task`; this projection deliberately includes the common
+ * ClickUp-shaped aliases needed during migration without pretending to be a
+ * complete ClickUp task response.
+ */
+export const LegacyWebhookTaskPayload = z.object({
+  id: Id,
+  flow_id: Id,
+  clickup_id: z.string().nullable(),
+  name: z.string(),
+  title: z.string(),
+  description: z.string(),
+  text_content: z.string(),
+  status: z.object({ status: z.string() }),
+  list: z.object({ id: Id, name: z.string() }),
+  space: z.object({ id: Id, name: z.string() }),
+  assignees: z.array(
+    z.object({
+      id: Id,
+      username: z.string(),
+      email: z.string(),
+    })
+  ),
+  priority: z.object({ priority: Priority }).nullable(),
+  due_date: z.string().nullable(),
+  start_date: z.string().nullable(),
+  date_created: z.string(),
+  date_updated: z.string(),
+  date_closed: z.string().nullable(),
+  tags: z.array(z.object({ name: z.string() })),
+  url: z.string().url(),
+});
+export type LegacyWebhookTaskPayload = z.infer<typeof LegacyWebhookTaskPayload>;
+
 export const WebhookPayload = z.object({
   event: z.string(), // "task.status_changed", "task.created", ...
   delta: Delta,
   task: Task.nullable(), // full snapshot when the entity is a task
+  // Backwards-compatible alias for legacy ClickUp-shaped workflow receivers.
+  payload: LegacyWebhookTaskPayload.nullable().optional(),
   workspace: z.string(), // hostname, for multi-consumer routing
 });
 export type WebhookPayload = z.infer<typeof WebhookPayload>;
