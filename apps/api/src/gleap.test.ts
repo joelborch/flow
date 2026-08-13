@@ -27,13 +27,13 @@ const gleapBugReport = {
   createdAt: "2026-07-20T10:11:12.000Z",
 };
 
-/** Redacted from ADAM Gleap ticket.created report 71. */
-const adamTicketCreated = {
+/** Modeled on the shape of a real Gleap ticket.created payload; all values synthetic. */
+const deltaTicketCreated = {
   event: "ticket.created",
-  id: "6a6fcb028f0cbb8a95ce7b33",
-  bugId: 71,
-  project: "project-adam",
-  projectId: "project-adam",
+  id: "65f0c2b3c4d5e6f708192a3b",
+  bugId: 42,
+  project: "project-delta",
+  projectId: "project-delta",
   type: "BUG",
   status: "OPEN",
   priority: "MEDIUM",
@@ -45,31 +45,31 @@ const adamTicketCreated = {
       type: "textarea",
       name: "description",
       value:
-        "Layout should look like this on Tablet: https://figma.example/design?node-id=3120-711&amp;t=redacted\n",
+        "Layout should look like this on Tablet: https://figma.example/design?node-id=1000-100&amp;t=redacted\n",
     },
   },
   plainContent: "different flattened content",
   session: {
     name: "",
     email: "reporter@example.com",
-    location: { country: "PH" },
+    location: { country: "US" },
     eventData: { privateNoise: { count: 99 } },
   },
   metaData: {
-    browserName: "Safari(18.5)",
-    userAgent: "Mozilla/5.0 (iPad; CPU OS 18_5 like Mac OS X)",
-    browser: "Safari",
-    systemName: "iPad",
-    sessionDuration: 1624,
-    devicePixelRatio: 2,
-    screenWidth: 1680,
-    screenHeight: 1050,
-    innerWidth: 768,
-    innerHeight: 1024,
+    browserName: "Chrome(120.0)",
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    browser: "Chrome",
+    systemName: "Windows",
+    sessionDuration: 842,
+    devicePixelRatio: 1,
+    screenWidth: 1920,
+    screenHeight: 1080,
+    innerWidth: 1440,
+    innerHeight: 900,
     currentUrl: "https://staging.example/reviews/",
     language: "en-US",
-    mobile: true,
-    sdkVersion: "16.3.6",
+    mobile: false,
+    sdkVersion: "17.0.2",
     sdkType: "javascript",
     environment: "prod",
   },
@@ -196,10 +196,10 @@ describe("mapGleapPayload", () => {
 });
 
 describe("real Gleap ticket mapping", () => {
-  const mapped = mapGleapPayload(adamTicketCreated);
+  const mapped = mapGleapPayload(deltaTicketCreated);
 
   it("uses the bug number and nested form value for the title", () => {
-    expect(mapped.title).toMatch(/^\[71\] Layout should look like this on Tablet:/);
+    expect(mapped.title).toMatch(/^\[42\] Layout should look like this on Tablet:/);
     expect(mapped.title).not.toBe("Untitled Gleap report");
     expect(mapped.title.length).toBeLessThanOrEqual(120);
   });
@@ -210,8 +210,8 @@ describe("real Gleap ticket mapping", () => {
     expect(mapped.description).toContain("Info\n**Reported by:** Guest (reporter@example.com)");
     expect(mapped.description).toContain("**Priority:** 🟠 Medium");
     expect(mapped.description).toContain("**Type:** 🚨 BUG");
-    expect(mapped.description).toContain("Metadata\n**browserName:** Safari(18.5)");
-    expect(mapped.description).toContain("**innerWidth:** 768");
+    expect(mapped.description).toContain("Metadata\n**browserName:** Chrome(120.0)");
+    expect(mapped.description).toContain("**innerWidth:** 1440");
     expect(mapped.description).toContain("**currentUrl:** https://staging.example/reviews/");
   });
 
@@ -224,10 +224,10 @@ describe("real Gleap ticket mapping", () => {
   });
 
   it("uses the stable ticket id while retaining the old share id only for migration lookup", () => {
-    expect(mapped.externalId).toBe("6a6fcb028f0cbb8a95ce7b33");
+    expect(mapped.externalId).toBe("65f0c2b3c4d5e6f708192a3b");
     expect(mapped.gleap).toMatchObject({
-      ticketId: "6a6fcb028f0cbb8a95ce7b33",
-      projectId: "project-adam",
+      ticketId: "65f0c2b3c4d5e6f708192a3b",
+      projectId: "project-delta",
       legacyExternalIds: ["legacy-share-token"],
       screenshotUrl: null,
       screenshotPending: true,
@@ -236,16 +236,16 @@ describe("real Gleap ticket mapping", () => {
   });
 
   it("recognizes a Gleap object before the permissive native schema", () => {
-    const mappedWithTitle = mapInboundPayload({ ...adamTicketCreated, title: "Gleap placeholder" });
+    const mappedWithTitle = mapInboundPayload({ ...deltaTicketCreated, title: "Gleap placeholder" });
     expect(mappedWithTitle.native).toBe(false);
-    expect(mappedWithTitle.title).toMatch(/^\[71\]/);
+    expect(mappedWithTitle.title).toMatch(/^\[42\]/);
   });
 
   it("unwraps an event envelope whose ticket lives under data", () => {
-    const { event: _event, ...ticket } = adamTicketCreated;
+    const { event: _event, ...ticket } = deltaTicketCreated;
     const enveloped = mapInboundPayload({ event: "ticket.created", data: ticket });
-    expect(enveloped.title).toMatch(/^\[71\] Layout should look/);
-    expect(enveloped.externalId).toBe("6a6fcb028f0cbb8a95ce7b33");
+    expect(enveloped.title).toMatch(/^\[42\] Layout should look/);
+    expect(enveloped.externalId).toBe("65f0c2b3c4d5e6f708192a3b");
   });
 });
 
@@ -277,7 +277,7 @@ describe("toCreateTaskInput", () => {
 });
 
 describe("Gleap duplicate enrichment", () => {
-  const mapped = mapInboundPayload(adamTicketCreated);
+  const mapped = mapInboundPayload(deltaTicketCreated);
 
   it("repairs Flow's known raw-payload task and migrates the legacy id tag", () => {
     const update = gleapEnrichmentUpdate(
@@ -293,7 +293,7 @@ describe("Gleap duplicate enrichment", () => {
       taskId: "tk_existing",
       title: mapped.title,
       description: mapped.description,
-      tags: ["gleap", "bug", externalIdTag("6a6fcb028f0cbb8a95ce7b33")],
+      tags: ["gleap", "bug", externalIdTag("65f0c2b3c4d5e6f708192a3b")],
     });
   });
 
@@ -313,7 +313,7 @@ describe("Gleap duplicate enrichment", () => {
         "needs-review",
         "gleap",
         "bug",
-        externalIdTag("6a6fcb028f0cbb8a95ce7b33"),
+        externalIdTag("65f0c2b3c4d5e6f708192a3b"),
       ],
     });
   });

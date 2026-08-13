@@ -54,6 +54,24 @@ describe("email side effects", () => {
     expect(parsed.bcc).toEqual([]);
   });
 
+  it("fails closed: a typo'd EMAIL_DRY_RUN value keeps dry-run on instead of sending", async () => {
+    const send = vi.fn().mockResolvedValue(undefined);
+    await deliverEmail(
+      {
+        kind: "email",
+        to: ["to@example.com"],
+        cc: [],
+        bcc: [],
+        subject: "Subject",
+        body: "Body",
+        ruleId: "ar_1",
+        taskId: "tk_1",
+      },
+      { EMAIL_DRY_RUN: "True", SEND_EMAIL: { send } as unknown as SendEmail }
+    );
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("passes distinct recipient classes to the Cloudflare binding", async () => {
     const send = vi.fn().mockResolvedValue(undefined);
     await deliverEmail(
@@ -250,14 +268,14 @@ describe("Gleap screenshot side effects", () => {
         kind: "gleap-screenshot",
         taskId: "tk_71",
         ticketId: "ticket-71",
-        projectId: "project-adam",
+        projectId: "project-delta",
         screenshotUrl: null,
       })
     ).toEqual({
       kind: "gleap-screenshot",
       taskId: "tk_71",
       ticketId: "ticket-71",
-      projectId: "project-adam",
+      projectId: "project-delta",
       screenshotUrl: null,
     });
   });

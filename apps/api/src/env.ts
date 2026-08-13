@@ -8,7 +8,7 @@ import type { Actor, ApiKey, User } from "@flow/shared";
  * wrangler.jsonc.
  */
 export type Env = CoreEnv & {
-  /** "true" (default) => send_email actions log instead of sending. */
+  /** "true" (default) => send_email actions log instead of sending; any value other than "false" keeps dry-run on. */
   EMAIL_DRY_RUN: string;
   /** Public hostname, used in webhook envelopes and task URLs. */
   APP_HOSTNAME: string;

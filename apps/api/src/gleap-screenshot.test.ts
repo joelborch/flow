@@ -21,9 +21,9 @@ import {
 
 const job: GleapScreenshotJob = {
   kind: "gleap-screenshot",
-  taskId: "tk_adam",
+  taskId: "tk_delta",
   ticketId: "ticket-71",
-  projectId: "project-adam",
+  projectId: "project-delta",
   screenshotUrl: "https://storage.gleap.io/screenshots/ticket-71.jpg",
 };
 
@@ -43,24 +43,24 @@ describe("Gleap screenshot queue payload", () => {
 
 describe("Gleap project token selection", () => {
   const configured = JSON.stringify({
-    "project-adam": "adam-token",
+    "project-delta": "delta-token",
     "project-alpha": "alpha-token",
   });
 
   it("selects only the token for the exact project id", () => {
-    expect(gleapProjectToken("project-adam", configured)).toBe("adam-token");
+    expect(gleapProjectToken("project-delta", configured)).toBe("delta-token");
     expect(gleapProjectToken("project-alpha", configured)).toBe("alpha-token");
     expect(gleapProjectToken("project-beta", configured)).toBeNull();
     expect(gleapProjectToken("project", configured)).toBeNull();
   });
 
   it("fails closed for a missing, malformed, non-object, or invalid map", () => {
-    expect(gleapProjectToken("project-adam")).toBeNull();
-    expect(gleapProjectToken("project-adam", "not-json")).toBeNull();
-    expect(gleapProjectToken("project-adam", "[]")).toBeNull();
-    expect(gleapProjectToken("project-adam", '{"project-adam":""}')).toBeNull();
+    expect(gleapProjectToken("project-delta")).toBeNull();
+    expect(gleapProjectToken("project-delta", "not-json")).toBeNull();
+    expect(gleapProjectToken("project-delta", "[]")).toBeNull();
+    expect(gleapProjectToken("project-delta", '{"project-delta":""}')).toBeNull();
     expect(
-      gleapProjectToken("project-adam", '{"project-adam":"adam-token","other":7}')
+      gleapProjectToken("project-delta", '{"project-delta":"delta-token","other":7}')
     ).toBeNull();
   });
 });
@@ -161,7 +161,7 @@ describe("Gleap screenshot reconciliation", () => {
     expect(put).toHaveBeenCalledOnce();
     expect(createAttachment).toHaveBeenCalledWith(
       expect.objectContaining({
-        taskId: "tk_adam",
+        taskId: "tk_delta",
         filename: "gleap-ticket-71.jpg",
         size: 3,
         mimeType: "image/jpeg",
@@ -199,7 +199,7 @@ describe("Gleap screenshot reconciliation", () => {
   it("polls Gleap and reports not-ready without touching attachment storage", async () => {
     const pollingEnv = {
       ...env,
-      GLEAP_PROJECT_TOKENS_JSON: '{"project-adam":"development-token"}',
+      GLEAP_PROJECT_TOKENS_JSON: '{"project-delta":"development-token"}',
     } as Env;
     fetcher.mockResolvedValueOnce(
       new Response(JSON.stringify({ generatingScreenshot: true, screenshotUrl: "" }), {
@@ -217,7 +217,7 @@ describe("Gleap screenshot reconciliation", () => {
   it("polls Gleap and attaches the image once rendering is complete", async () => {
     const pollingEnv = {
       ...env,
-      GLEAP_PROJECT_TOKENS_JSON: '{"project-adam":"development-token"}',
+      GLEAP_PROJECT_TOKENS_JSON: '{"project-delta":"development-token"}',
     } as Env;
     fetcher
       .mockResolvedValueOnce(
@@ -243,7 +243,7 @@ describe("Gleap screenshot reconciliation", () => {
       1,
       "https://api.gleap.io/v3/tickets/ticket-71",
       expect.objectContaining({
-        headers: { Authorization: "Bearer development-token", project: "project-adam" },
+        headers: { Authorization: "Bearer development-token", project: "project-delta" },
         redirect: "manual",
       })
     );
@@ -257,7 +257,7 @@ describe("Gleap screenshot reconciliation", () => {
   it("rejects redirects from the Gleap ticket API", async () => {
     const pollingEnv = {
       ...env,
-      GLEAP_PROJECT_TOKENS_JSON: '{"project-adam":"development-token"}',
+      GLEAP_PROJECT_TOKENS_JSON: '{"project-delta":"development-token"}',
     } as Env;
     fetcher.mockResolvedValueOnce(
       new Response(null, {
@@ -281,7 +281,7 @@ describe("Gleap screenshot reconciliation", () => {
 
     await expect(
       reconcileGleapScreenshot({ ...job, screenshotUrl: null }, pollingEnv, fetcher)
-    ).rejects.toThrow(/not configured for project project-adam/);
+    ).rejects.toThrow(/not configured for project project-delta/);
     expect(fetcher).not.toHaveBeenCalled();
     expect(put).not.toHaveBeenCalled();
   });

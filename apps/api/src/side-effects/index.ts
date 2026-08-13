@@ -339,7 +339,10 @@ export async function deliverEmail(
   });
 
   // Default-on dry run: log exactly what would have gone out, then ack.
-  if ((env.EMAIL_DRY_RUN ?? "true") === "true") {
+  // Fail closed — only an exact "false" enables real sending, so a typo'd
+  // value ("True", "1", "yes") keeps dry-run on instead of silently mailing.
+  const dryRun = env.EMAIL_DRY_RUN !== "false";
+  if (dryRun) {
     console.log(
       "[EMAIL_DRY_RUN] would send:\n" +
         `  from:    ${from.name} <${from.email}>\n` +

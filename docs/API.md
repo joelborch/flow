@@ -40,7 +40,7 @@ Writes and member routes require admin.
 |---|---|---|
 | `GET /api/spaces` | any | All visible spaces |
 | `GET /api/spaces/:spaceId` | any | One space + its lists |
-| `POST /api/spaces` | admin | Create: `{name, color?}` |
+| `POST /api/spaces` | admin | Create: `{name, color?, visibility?}` — born `"private"` (creator auto-added as sole member) unless you pass `"workspace"` |
 | `PATCH /api/spaces/:spaceId` | admin | `{name?, color?, archived?, position?, visibility?}` |
 | `DELETE /api/spaces/:spaceId` | admin | Delete (refused while it still has lists) |
 | `GET /api/spaces/:spaceId/members` | any | `{spaceId, userIds}` |
@@ -57,7 +57,7 @@ flowcurl -X PUT $FLOW/api/spaces/sp_abc123/members \
   -H 'Content-Type: application/json' -d '{"userIds":["us_one","us_two"]}'
 ```
 
-Visibility is `"workspace"` (default, everyone) or `"private"` (owners/admins + the member list). Flipping it, or editing membership, pushes `{"type":"resync"}` to the affected WebSocket clients.
+Visibility is `"private"` (default — owners/admins + the member list, with the creator auto-added as the sole member) or `"workspace"` (everyone; pass it explicitly on create to opt out of the private default). Flipping it, or editing membership, pushes `{"type":"resync"}` to the affected WebSocket clients.
 
 ## Lists
 
@@ -208,6 +208,9 @@ Uploads are raw bytes streamed straight into R2 — nothing buffers in the Worke
 | `GET /api/tasks/:taskId/attachments/:attachmentId` | any | Download (streamed; `Range` and `If-None-Match`/ETag supported) |
 | `GET /api/attachments/:attachmentId` | any | Same download, by id alone |
 | `DELETE /api/attachments/:attachmentId` | any | Delete the row, then the R2 object |
+| `PATCH /api/attachments/:attachmentId/storage` | admin | `{action: "finalize_drive", driveFileId, driveWebViewLink, driveDestination}` or `{action: "cleanup_r2", driveFileId, confirmR2Key}` — moves an attachment's storage record between R2 and an external Google Drive file |
+
+Attachment metadata carries `storageProvider` (`"r2"` or `"drive"`) and `driveFileId` (the external Drive file id, when applicable). Download falls back to R2 unless `storageProvider` is `"drive"`, in which case it redirects to `driveWebViewLink`.
 
 ```bash
 flowcurl -X POST "$FLOW/api/tasks/tk_ghi789/attachments?filename=screenshot.png" \
