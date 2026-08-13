@@ -1,11 +1,12 @@
 import { Hono } from "hono";
-import { Id, type CreateTaskInput, type InboundTaskInput } from "@flow/shared";
+import { Id, type CreateTaskInput, type InboundTaskInput, type Task } from "@flow/shared";
 import { resolveInboundActor } from "../auth.js";
 import { findTaskByExternalIdTag, workspace } from "../do.js";
 import type { AppEnv } from "../env.js";
 import { badRequest, parseOrThrow, readJson, unauthorized } from "../errors.js";
 import { parseBearer } from "../tokens.js";
-import { mapInboundPayload } from "../gleap.js";
+import { mapInboundPayload, type GleapMapping } from "../gleap.js";
+import { gleapProjectToken, type GleapScreenshotJob } from "../gleap-screenshot.js";
 
 export const inboundRoutes = new Hono<AppEnv>();
 
@@ -53,6 +54,111 @@ export function toCreateTaskInput(
   };
 }
 
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function generatedPayloadDescription(description: string): boolean {
+  return description.includes("**Reported payload**") && description.includes("```json");
+}
+
+export function gleapEnrichmentUpdate(
+  existing: Pick<Task, "id" | "title" | "description" | "tags">,
+  mapped: GleapMapping
+): { taskId: string; title?: string; description?: string; tags?: string[] } | null {
+  const update: {
+    taskId: string;
+    title?: string;
+    description?: string;
+    tags?: string[];
+  } = { taskId: existing.id };
+
+  // Repair only Flow's known malformed output. Human-edited task content is
+  // never replaced by a later Gleap delivery.
+  if (
+    existing.title === "Untitled Gleap report" &&
+    generatedPayloadDescription(existing.description)
+  ) {
+    update.title = mapped.title;
+    update.description = mapped.description ?? "";
+  }
+
+  // Replace the legacy ext:<shareToken> marker with the stable ticket id while
+  // retaining every human tag. The ext marker stays internal to idempotency.
+  if (mapped.externalId) {
+    const humanTags = existing.tags.filter((tag) => !tag.startsWith(EXTERNAL_ID_TAG_PREFIX));
+    const nextTags = [...new Set([...humanTags, ...(mapped.tags ?? []), externalIdTag(mapped.externalId)])];
+    if (!sameStrings(existing.tags, nextTags)) update.tags = nextTags;
+  }
+
+  return Object.keys(update).length === 1 ? null : update;
+}
+
+async function findExistingTask(
+  env: AppEnv["Bindings"],
+  mapped: GleapMapping,
+  listId: string
+): Promise<Task | null> {
+  const ids = [mapped.externalId, ...(mapped.gleap?.legacyExternalIds ?? [])].filter(
+    (value): value is string => typeof value === "string" && value !== ""
+  );
+  for (const externalId of ids) {
+    const row = await findTaskByExternalIdTag(env, externalIdTag(externalId)).catch(() => null);
+    if (!row || row.listId !== listId) continue;
+    const detail = await workspace(env).getTaskDetail(row.id).catch(() => null);
+    if (detail) return detail.task;
+  }
+  return null;
+}
+
+async function enrichGeneratedTask(
+  env: AppEnv["Bindings"],
+  existing: Task,
+  mapped: GleapMapping,
+  actor: Awaited<ReturnType<typeof resolveInboundActor>>["actor"]
+): Promise<Task> {
+  const update = gleapEnrichmentUpdate(existing, mapped);
+  if (update === null) return existing;
+  return workspace(env).updateTask(update, actor);
+}
+
+async function enqueueGleapScreenshot(
+  env: AppEnv["Bindings"],
+  taskId: string,
+  mapped: GleapMapping
+): Promise<boolean> {
+  const source = mapped.gleap;
+  if (!source || source.screenshotFailed || source.ticketId === "") return false;
+  if (source.screenshotUrl === null && !source.screenshotPending) return false;
+  const projectToken = source.projectId
+    ? gleapProjectToken(source.projectId, env.GLEAP_PROJECT_TOKENS_JSON)
+    : null;
+  if (source.screenshotUrl === null && projectToken === null) {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        msg: "Gleap screenshot polling is not configured",
+        taskId,
+        hasProjectId: Boolean(source.projectId),
+        hasProjectToken: false,
+      })
+    );
+    return false;
+  }
+
+  const job: GleapScreenshotJob = {
+    kind: "gleap-screenshot",
+    taskId,
+    ticketId: source.ticketId,
+    projectId: source.projectId ?? "",
+    screenshotUrl: source.screenshotUrl,
+  };
+  await env.SIDE_EFFECTS.send(job, {
+    delaySeconds: source.screenshotUrl === null ? 5 : 0,
+  });
+  return true;
+}
+
 inboundRoutes.post("/inbound/:listId", async (c) => {
   const listId = parseOrThrow(Id, c.req.param("listId"), "listId");
 
@@ -85,36 +191,28 @@ inboundRoutes.post("/inbound/:listId", async (c) => {
     throw badRequest(err instanceof Error ? err.message : "could not map inbound payload");
   }
 
-  // --- idempotency ---------------------------------------------------------
-  if (mapped.externalId) {
-    const existing = await findTaskByExternalIdTag(
-      c.env,
-      externalIdTag(mapped.externalId)
-    ).catch(() => null);
-    if (existing) {
-      // The tag search answers "does it exist?" with a TaskRow — a subset of
-      // Task. A retrying sender must not see a different shape than it got on
-      // the original delivery, so the full task is re-read before responding.
-      const detail = await workspace(c.env)
-        .getTaskDetail(existing.id)
-        .catch(() => null);
-      return c.json(
-        {
-          task: detail?.task ?? existing,
-          created: false,
-          deduplicatedBy: mapped.externalId,
-        },
-        200
-      );
-    }
-  }
-
-  // --- create as the gleap key's user (falling back to the owner) ----------
+  // --- create/update as the gleap key's user (falling back to the owner) ----
   // The actor carries the impersonated user id plus via:"webhook" and the gleap
   // key id, so the audit trail shows where the task came from.
   const { actor } = await resolveInboundActor(c.env);
+  const existing = await findExistingTask(c.env, mapped, listId);
+  if (existing) {
+    const task = await enrichGeneratedTask(c.env, existing, mapped, actor);
+    const screenshotQueued = await enqueueGleapScreenshot(c.env, task.id, mapped);
+    return c.json(
+      {
+        task,
+        created: false,
+        deduplicatedBy: mapped.externalId,
+        screenshotQueued,
+      },
+      200
+    );
+  }
+
   const input = toCreateTaskInput(mapped, listId);
   const task = await workspace(c.env).createTask(input, actor);
+  const screenshotQueued = await enqueueGleapScreenshot(c.env, task.id, mapped);
 
   console.log(
     JSON.stringify({
@@ -127,5 +225,13 @@ inboundRoutes.post("/inbound/:listId", async (c) => {
     })
   );
 
-  return c.json({ task, created: true, mappedFrom: mapped.native ? "native" : "gleap" }, 201);
+  return c.json(
+    {
+      task,
+      created: true,
+      mappedFrom: mapped.native ? "native" : "gleap",
+      screenshotQueued,
+    },
+    201
+  );
 });

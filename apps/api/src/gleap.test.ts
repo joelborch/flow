@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { InboundTaskInput } from "@flow/shared";
 import { mapGleapPayload, mapInboundPayload } from "./gleap.js";
-import { externalIdTag, toCreateTaskInput } from "./routes/inbound.js";
+import {
+  externalIdTag,
+  gleapEnrichmentUpdate,
+  toCreateTaskInput,
+} from "./routes/inbound.js";
 
 /**
  * A representative Gleap bug-report webhook: the content lives under `data`,
@@ -9,9 +13,9 @@ import { externalIdTag, toCreateTaskInput } from "./routes/inbound.js";
  */
 const gleapBugReport = {
   type: "BUG",
-  id: "0123456789abcdef01234567",
+  id: "65f0c1a2b3d4e5f60718293a",
   shareToken: "abc123share",
-  dashboardURL: "https://app.gleap.io/projects/example-project/bugs/0123456789abcdef01234567",
+  dashboardURL: "https://app.gleap.io/projects/p1/bugs/65f0c1a2b3d4e5f60718293a",
   data: {
     title: "Checkout button does nothing on Safari",
     description: "Clicked Pay and the spinner never stops.",
@@ -21,6 +25,59 @@ const gleapBugReport = {
     formData: { severity: "blocker" },
   },
   createdAt: "2026-07-20T10:11:12.000Z",
+};
+
+/** Redacted from ADAM Gleap ticket.created report 71. */
+const adamTicketCreated = {
+  event: "ticket.created",
+  id: "6a6fcb028f0cbb8a95ce7b33",
+  bugId: 71,
+  project: "project-adam",
+  projectId: "project-adam",
+  type: "BUG",
+  status: "OPEN",
+  priority: "MEDIUM",
+  shareToken: "legacy-share-token",
+  secretShareToken: "must-never-reach-flow",
+  form: {
+    description: {
+      title: "Description",
+      type: "textarea",
+      name: "description",
+      value:
+        "Layout should look like this on Tablet: https://figma.example/design?node-id=3120-711&amp;t=redacted\n",
+    },
+  },
+  plainContent: "different flattened content",
+  session: {
+    name: "",
+    email: "reporter@example.com",
+    location: { country: "PH" },
+    eventData: { privateNoise: { count: 99 } },
+  },
+  metaData: {
+    browserName: "Safari(18.5)",
+    userAgent: "Mozilla/5.0 (iPad; CPU OS 18_5 like Mac OS X)",
+    browser: "Safari",
+    systemName: "iPad",
+    sessionDuration: 1624,
+    devicePixelRatio: 2,
+    screenWidth: 1680,
+    screenHeight: 1050,
+    innerWidth: 768,
+    innerHeight: 1024,
+    currentUrl: "https://staging.example/reviews/",
+    language: "en-US",
+    mobile: true,
+    sdkVersion: "16.3.6",
+    sdkType: "javascript",
+    environment: "prod",
+  },
+  screenshotDataUrl: "https://storage.gleap.io/redacted_screenshotdata.json",
+  screenshotUrl: "",
+  generatingScreenshot: true,
+  screenshotLive: false,
+  screenshotRenderingFailed: false,
 };
 
 describe("mapInboundPayload", () => {
@@ -70,13 +127,11 @@ describe("mapGleapPayload", () => {
 
   it("takes externalUrl from a *URL key and links it in the body", () => {
     expect(mapped.externalUrl).toBe(gleapBugReport.dashboardURL);
-    expect(mapped.description).toContain(`[View in Gleap](${gleapBugReport.dashboardURL})`);
+    expect(mapped.description).toContain(`[View source](${gleapBugReport.dashboardURL})`);
   });
 
-  it("prefers an explicit external id key over the raw mongo id", () => {
-    // shareToken is checked before id, so a re-delivery of the same share stays
-    // idempotent even if Gleap changes its internal id format.
-    expect(mapped.externalId).toBe("abc123share");
+  it("prefers the source object's id over a share token", () => {
+    expect(mapped.externalId).toBe("65f0c1a2b3d4e5f60718293a");
   });
 
   it("preserves every unconsumed field in a fenced JSON block", () => {
@@ -140,11 +195,65 @@ describe("mapGleapPayload", () => {
   });
 });
 
+describe("real Gleap ticket mapping", () => {
+  const mapped = mapGleapPayload(adamTicketCreated);
+
+  it("uses the bug number and nested form value for the title", () => {
+    expect(mapped.title).toMatch(/^\[71\] Layout should look like this on Tablet:/);
+    expect(mapped.title).not.toBe("Untitled Gleap report");
+    expect(mapped.title.length).toBeLessThanOrEqual(120);
+  });
+
+  it("renders the useful ClickUp-style sections and decodes HTML entities", () => {
+    expect(mapped.description).toContain("Description:\nLayout should look like this on Tablet:");
+    expect(mapped.description).toContain("&t=redacted");
+    expect(mapped.description).toContain("Info\n**Reported by:** Guest (reporter@example.com)");
+    expect(mapped.description).toContain("**Priority:** 🟠 Medium");
+    expect(mapped.description).toContain("**Type:** 🚨 BUG");
+    expect(mapped.description).toContain("Metadata\n**browserName:** Safari(18.5)");
+    expect(mapped.description).toContain("**innerWidth:** 768");
+    expect(mapped.description).toContain("**currentUrl:** https://staging.example/reviews/");
+  });
+
+  it("does not leak tokens, session internals, or the raw webhook", () => {
+    expect(mapped.description).not.toContain("must-never-reach-flow");
+    expect(mapped.description).not.toContain("legacy-share-token");
+    expect(mapped.description).not.toContain("privateNoise");
+    expect(mapped.description).not.toContain("Reported payload");
+    expect(mapped.externalUrl).toBeUndefined();
+  });
+
+  it("uses the stable ticket id while retaining the old share id only for migration lookup", () => {
+    expect(mapped.externalId).toBe("6a6fcb028f0cbb8a95ce7b33");
+    expect(mapped.gleap).toMatchObject({
+      ticketId: "6a6fcb028f0cbb8a95ce7b33",
+      projectId: "project-adam",
+      legacyExternalIds: ["legacy-share-token"],
+      screenshotUrl: null,
+      screenshotPending: true,
+      screenshotFailed: false,
+    });
+  });
+
+  it("recognizes a Gleap object before the permissive native schema", () => {
+    const mappedWithTitle = mapInboundPayload({ ...adamTicketCreated, title: "Gleap placeholder" });
+    expect(mappedWithTitle.native).toBe(false);
+    expect(mappedWithTitle.title).toMatch(/^\[71\]/);
+  });
+
+  it("unwraps an event envelope whose ticket lives under data", () => {
+    const { event: _event, ...ticket } = adamTicketCreated;
+    const enveloped = mapInboundPayload({ event: "ticket.created", data: ticket });
+    expect(enveloped.title).toMatch(/^\[71\] Layout should look/);
+    expect(enveloped.externalId).toBe("6a6fcb028f0cbb8a95ce7b33");
+  });
+});
+
 describe("toCreateTaskInput", () => {
   it("records the external id as an ext: tag for idempotency", () => {
     const input = toCreateTaskInput(mapGleapPayload(gleapBugReport), "ls_target");
     expect(input.listId).toBe("ls_target");
-    expect(input.tags).toContain(externalIdTag("abc123share"));
+    expect(input.tags).toContain(externalIdTag("65f0c1a2b3d4e5f60718293a"));
   });
 
   it("does not duplicate the source link already in the body", () => {
@@ -164,5 +273,48 @@ describe("toCreateTaskInput", () => {
   it("de-duplicates tags", () => {
     const input = toCreateTaskInput({ title: "t", tags: ["a", "a", "b"] }, "ls_1");
     expect(input.tags).toEqual(["a", "b"]);
+  });
+});
+
+describe("Gleap duplicate enrichment", () => {
+  const mapped = mapInboundPayload(adamTicketCreated);
+
+  it("repairs Flow's known raw-payload task and migrates the legacy id tag", () => {
+    const update = gleapEnrichmentUpdate(
+      {
+        id: "tk_existing",
+        title: "Untitled Gleap report",
+        description: "**Reported payload**\n```json\n{}\n```",
+        tags: ["gleap", "bug", externalIdTag("legacy-share-token")],
+      },
+      mapped
+    );
+    expect(update).toMatchObject({
+      taskId: "tk_existing",
+      title: mapped.title,
+      description: mapped.description,
+      tags: ["gleap", "bug", externalIdTag("6a6fcb028f0cbb8a95ce7b33")],
+    });
+  });
+
+  it("preserves human-edited content while migrating only the machine id tag", () => {
+    const update = gleapEnrichmentUpdate(
+      {
+        id: "tk_existing",
+        title: "Developer clarified title",
+        description: "Developer notes and acceptance criteria",
+        tags: ["needs-review", externalIdTag("legacy-share-token")],
+      },
+      mapped
+    );
+    expect(update).toEqual({
+      taskId: "tk_existing",
+      tags: [
+        "needs-review",
+        "gleap",
+        "bug",
+        externalIdTag("6a6fcb028f0cbb8a95ce7b33"),
+      ],
+    });
   });
 });

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { AutomationRunLog } from "@flow/shared";
-import { RunsQuery, runsPage } from "./automations.js";
+import { Hono } from "hono";
+import type { AutomationRunLog, Role, User } from "@flow/shared";
+import type { AppEnv, AuthContext, Env } from "../env.js";
+import { onError } from "../errors.js";
+import { automationRoutes, RunsQuery, runsPage } from "./automations.js";
 
 const run = (id: number): AutomationRunLog => ({
   id,
@@ -61,5 +64,74 @@ describe("runsPage", () => {
     expect(page.runs[0]?.results).toEqual([
       { action: "send_email", ok: true, dryRun: true, detail: "queued to a@b.c" },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Admin gate on the reads. Rule definitions carry webhook URLs and email
+// targets and the run log spans every space, so the GETs are owner/admin-only
+// like the writes always were. Real routes, stubbed DO binding.
+// ---------------------------------------------------------------------------
+
+const userOf = (role: Role): User => ({
+  id: `us_${role}`,
+  email: `${role}@example.com`,
+  name: role,
+  role,
+  deactivated: false,
+  createdAt: 1_700_000_000_000,
+});
+
+const authOf = (role: Role): AuthContext => ({
+  user: userOf(role),
+  apiKey: null,
+  actor: { userId: `us_${role}`, via: "api", apiKeyId: null, automationRuleId: null },
+});
+
+const rule = { id: "ar_1", name: "Rule one" };
+const stub = {
+  listAutomations: async () => [rule],
+  listAutomationRuns: async () => [],
+};
+
+const env = {
+  WORKSPACE: { idFromName: () => ({}), get: () => stub },
+} as unknown as Env;
+
+function appAs(role: Role): Hono<AppEnv> {
+  const app = new Hono<AppEnv>();
+  app.onError(onError);
+  app.use("*", async (c, next) => {
+    c.set("auth", authOf(role));
+    return next();
+  });
+  app.route("/api", automationRoutes);
+  return app;
+}
+
+const READS = [
+  "/api/automations",
+  "/api/automations/ar_1",
+  "/api/automation-runs",
+  "/api/automations/ar_1/runs",
+] as const;
+
+describe("automation reads — admin gate", () => {
+  it.each(READS)("403s a member on GET %s", async (path) => {
+    const res = await appAs("member").request(path, {}, env);
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("owner or admin");
+  });
+
+  it.each(READS)("still serves an admin on GET %s", async (path) => {
+    const res = await appAs("admin").request(path, {}, env);
+    expect(res.status).toBe(200);
+  });
+
+  it("still gives an owner the rule list itself", async () => {
+    const res = await appAs("owner").request("/api/automations", {}, env);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ automations: [rule] });
   });
 });

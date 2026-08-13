@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { attachmentKey, contentRangeHeader, parseRangeHeader, sanitizeFilename } from "./attachments.js";
+import {
+  attachmentKey,
+  contentRangeHeader,
+  isAllowedDriveLink,
+  parseRangeHeader,
+  sanitizeFilename,
+} from "./attachments.js";
 
 const SIZE = 1000;
 
@@ -123,5 +129,14 @@ describe("sanitizeFilename", () => {
 
   it("is applied by attachmentKey", () => {
     expect(attachmentKey("tk_1", "at_1", "../evil.png")).toBe("at/tk_1/at_1/evil.png");
+  });
+});
+
+describe("isAllowedDriveLink", () => {
+  it("accepts only HTTPS Google Drive links", () => {
+    expect(isAllowedDriveLink("https://drive.google.com/file/d/abc/view")).toBe(true);
+    expect(isAllowedDriveLink("http://drive.google.com/file/d/abc/view")).toBe(false);
+    expect(isAllowedDriveLink("https://drive.google.com.evil.test/file/d/abc/view")).toBe(false);
+    expect(isAllowedDriveLink("not a url")).toBe(false);
   });
 });

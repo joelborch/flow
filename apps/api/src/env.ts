@@ -22,6 +22,12 @@ export type Env = CoreEnv & {
   EMAIL_FROM?: string;
   /** Sender display name for outbound email (default "Flow"). */
   EMAIL_FROM_NAME?: string;
+  /** Wordmark shown in the branded email header (default EMAIL_FROM_NAME ?? "Flow"). */
+  EMAIL_BRAND_NAME?: string;
+  /** JSON object mapping exact Gleap project IDs to their screenshot API tokens. */
+  GLEAP_PROJECT_TOKENS_JSON?: string;
+  /** Comma-separated HTTPS host allowlist for rendered Gleap screenshot URLs. */
+  GLEAP_ATTACHMENT_HOSTS?: string;
   /**
    * Local-dev escape hatch. Auth resolves to the owner user when this is
    * exactly the string "true". Anything else (including unset) fails closed.

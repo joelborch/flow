@@ -173,7 +173,31 @@ taskRoutes.post("/tasks/:taskId/move", async (c) => {
 taskRoutes.delete("/tasks/:taskId", async (c) => {
   const auth = requireAuth(c);
   const taskId = parseOrThrow(Id, c.req.param("taskId"), "taskId");
-  await workspace(c.env).deleteTask(taskId, auth.actor);
+  // The DO returns the r2Keys of any attachments it just detached (and
+  // already parked in pending_object_deletes), so no separate lookup is
+  // needed. Metadata is gone, so the objects are unreachable; drop them
+  // after responding and clear the pending rows once that succeeds — if it
+  // doesn't, the backup job's daily sweep picks them up.
+  const { r2Keys } = await workspace(c.env).deleteTask(taskId, auth.actor);
+  if (r2Keys.length > 0) {
+    c.executionCtx.waitUntil(
+      (async () => {
+        try {
+          await c.env.ATTACHMENTS.delete(r2Keys);
+          await workspace(c.env).clearPendingObjectDeletes(r2Keys);
+        } catch (err) {
+          console.error(
+            JSON.stringify({
+              level: "warn",
+              msg: "orphaned R2 objects after task delete; backup job sweep will retry",
+              r2Keys,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          );
+        }
+      })()
+    );
+  }
   return c.json({ ok: true, deleted: taskId });
 });
 

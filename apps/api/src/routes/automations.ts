@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AutomationRunLog } from "@flow/shared";
 import { Id, UpsertAutomationInput } from "@flow/shared";
-import { requireAdmin, requireAuth } from "../auth.js";
+import { requireAdmin } from "../auth.js";
 import { workspace } from "../do.js";
 import type { AppEnv } from "../env.js";
 import { notFound, parseOrThrow, readJson } from "../errors.js";
@@ -41,13 +41,16 @@ export function runsPage(runs: AutomationRunLog[], limit: number): {
   return { runs, cursor: runs.length === limit && last ? last.id : null };
 }
 
+// Reads are admin-gated like the writes: rule definitions and run logs span
+// the whole workspace (webhook URLs, email targets, activity in spaces a
+// member cannot see), so they are not member-level reading.
 automationRoutes.get("/automations", async (c) => {
-  requireAuth(c);
+  requireAdmin(c);
   return c.json({ automations: await workspace(c.env).listAutomations() });
 });
 
 automationRoutes.get("/automations/:ruleId", async (c) => {
-  requireAuth(c);
+  requireAdmin(c);
   const ruleId = parseOrThrow(Id, c.req.param("ruleId"), "ruleId");
   const rules = await workspace(c.env).listAutomations();
   const rule = rules.find((r) => r.id === ruleId);
@@ -62,7 +65,7 @@ automationRoutes.get("/automations/:ruleId", async (c) => {
  * failed webhook is visible at all.
  */
 automationRoutes.get("/automation-runs", async (c) => {
-  requireAuth(c);
+  requireAdmin(c);
   const q = parseOrThrow(RunsQuery, queryOf(c.req.url), "automation runs query params");
   const runs = await workspace(c.env).listAutomationRuns({
     ...(q.taskId !== undefined ? { taskId: q.taskId } : {}),
@@ -74,7 +77,7 @@ automationRoutes.get("/automation-runs", async (c) => {
 
 /** The same log, narrowed to one rule. 404s if the rule does not exist. */
 automationRoutes.get("/automations/:ruleId/runs", async (c) => {
-  requireAuth(c);
+  requireAdmin(c);
   const ruleId = parseOrThrow(Id, c.req.param("ruleId"), "ruleId");
   const q = parseOrThrow(RunsQuery, queryOf(c.req.url), "automation runs query params");
 

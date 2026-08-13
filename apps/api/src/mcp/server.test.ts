@@ -587,6 +587,30 @@ describe("flow_get_audit_log", () => {
     await callTool(stub, "flow_get_audit_log", { before: 999 });
     expect(getAuditLog.mock.calls[2]![0]).toMatchObject({ before: 999 });
   });
+
+  it("refuses a member — the trail spans spaces they cannot see", async () => {
+    const getAuditLog = vi.fn(async () => ({ entries: [entry], nextBefore: null }));
+    const stub = fakeWorkspace({ getAuditLog: getAuditLog as unknown as RpcMock });
+    const denied = await callTool(stub, "flow_get_audit_log", {}, memberAuth);
+    expect(toolError(denied.body)).toContain("owner or admin");
+    expect(getAuditLog).not.toHaveBeenCalled();
+  });
+});
+
+describe("flow_list_automations", () => {
+  it("refuses a member and never lists the rules, same gate as the REST read", async () => {
+    const listAutomations = vi.fn(async () => []);
+    const stub = fakeWorkspace({ listAutomations: listAutomations as unknown as RpcMock });
+    const denied = await callTool(stub, "flow_list_automations", {}, memberAuth);
+    expect(toolError(denied.body)).toContain("owner or admin");
+    expect(listAutomations).not.toHaveBeenCalled();
+  });
+
+  it("still serves an owner", async () => {
+    const stub = fakeWorkspace({ listAutomations: vi.fn(async () => []) as unknown as RpcMock });
+    const { body } = await callTool(stub, "flow_list_automations", {});
+    expect(toolPayload(body)).toEqual({ automations: [], total: 0 });
+  });
 });
 
 describe("mutations", () => {

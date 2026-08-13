@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { ApiError } from "../errors.js";
-import { ATTACHMENT_SOURCE_HOSTS, assertAllowedAttachmentSource } from "./import.js";
+import { Hono } from "hono";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AppEnv, AuthContext, Env } from "../env.js";
+import { ApiError, onError } from "../errors.js";
+import {
+  ATTACHMENT_SOURCE_HOSTS,
+  assertAllowedAttachmentSource,
+  importRoutes,
+} from "./import.js";
 
 const reject = (url: string): ApiError => {
   try {
@@ -70,5 +76,79 @@ describe("assertAllowedAttachmentSource", () => {
 
   it("reports an unparseable URL as such", () => {
     expect(reject("not a url").message).toContain("is not a valid URL");
+  });
+});
+
+describe("POST /import/attachments", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("deletes the R2 object when attachment metadata is rejected", async () => {
+    const app = new Hono<AppEnv>();
+    app.onError(onError);
+    const auth = {
+      user: { id: "us_owner", email: "owner@example.com", role: "owner" },
+      actor: {
+        userId: "us_owner",
+        via: "api",
+        apiKeyId: null,
+        automationRuleId: null,
+      },
+      apiKey: null,
+    } as AuthContext;
+    app.use("*", async (c, next) => {
+      c.set("auth", auth);
+      await next();
+    });
+    app.route("/api", importRoutes);
+
+    const createAttachment = vi.fn().mockRejectedValue(new Error("Task tk_missing not found."));
+    const put = vi.fn().mockResolvedValue(null);
+    const remove = vi.fn().mockResolvedValue(undefined);
+    const env = {
+      WORKSPACE: {
+        idFromName: vi.fn().mockReturnValue({}),
+        get: vi.fn().mockReturnValue({ createAttachment }),
+      },
+      ATTACHMENTS: { put, delete: remove },
+    } as unknown as Env;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("abc", {
+          status: 200,
+          headers: { "content-length": "3", "content-type": "text/plain" },
+        })
+      )
+    );
+
+    const pending: Promise<unknown>[] = [];
+    const executionCtx = {
+      waitUntil(promise: Promise<unknown>) {
+        pending.push(promise);
+      },
+      passThroughOnException() {},
+      props: {},
+    } as unknown as ExecutionContext;
+    const response = await app.fetch(
+      new Request("https://flow.example/api/import/attachments", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          taskId: "tk_missing",
+          filename: "note.txt",
+          mimeType: "text/plain",
+          size: 3,
+          sourceUrl: "https://attachments.clickup.com/note.txt",
+        }),
+      }),
+      env,
+      executionCtx
+    );
+    await Promise.all(pending);
+
+    expect(response.status).toBe(404);
+    expect(put).toHaveBeenCalledOnce();
+    expect(createAttachment).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledWith(expect.stringMatching(/^at\/tk_missing\/at_/));
   });
 });

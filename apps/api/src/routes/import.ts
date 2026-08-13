@@ -118,16 +118,23 @@ importRoutes.post("/import/attachments", async (c) => {
     httpMetadata: { contentType: input.mimeType },
   });
 
-  const attachment = await workspace(c.env).createAttachment(
-    {
-      id,
-      taskId: input.taskId,
-      filename: input.filename,
-      r2Key,
-      size: input.size,
-      mimeType: input.mimeType,
-    },
-    { ...auth.actor, via: "import" }
-  );
-  return c.json(attachment);
+  try {
+    const attachment = await workspace(c.env).createAttachment(
+      {
+        id,
+        taskId: input.taskId,
+        filename: input.filename,
+        r2Key,
+        size: input.size,
+        mimeType: input.mimeType,
+      },
+      { ...auth.actor, via: "import" }
+    );
+    return c.json(attachment);
+  } catch (err) {
+    // Match the interactive upload route: if metadata rejects the import,
+    // nothing references the object that just landed in R2.
+    c.executionCtx.waitUntil(c.env.ATTACHMENTS.delete(r2Key).catch(() => undefined));
+    throw err;
+  }
 });

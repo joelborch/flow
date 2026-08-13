@@ -120,6 +120,19 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
+/**
+ * The owner/admin gate, worded like `requireAdmin` in ../auth.ts so an agent
+ * gets the same sentence whichever surface it came in through.
+ */
+function requireAdminRole(ctx: ToolContext): void {
+  if (!ctx.isAdmin) {
+    throw new ApiError(
+      403,
+      `this tool requires the owner or admin role; ${ctx.auth.user.email} is a ${ctx.auth.user.role}`
+    );
+  }
+}
+
 async function guard(
   run: () => Promise<Record<string, unknown>>
 ): Promise<CallToolResult> {
@@ -287,6 +300,9 @@ export function registerFlowTools(server: McpServer, ctx: ToolContext): void {
     },
     ({ enabledOnly, listId, spaceId }) =>
       guard(async () => {
+        // Same gate as GET /api/automations — rule definitions carry webhook
+        // URLs and workspace-wide wiring, which is not member-level reading.
+        requireAdminRole(ctx);
         const rules = await ctx.ws.listAutomations();
         const filtered = rules.filter((rule) => {
           if (enabledOnly && !rule.enabled) return false;
@@ -314,6 +330,9 @@ export function registerFlowTools(server: McpServer, ctx: ToolContext): void {
     },
     ({ cursor, before, ...filter }) =>
       guard(async () => {
+        // Same gate as GET /api/audit — the trail spans every space, including
+        // ones the calling member cannot see.
+        requireAdminRole(ctx);
         const [page, names] = await Promise.all([
           queryAudit(ctx.env, { ...filter, before: cursor ?? before }),
           ctx.names(),
@@ -543,12 +562,7 @@ export function registerFlowTools(server: McpServer, ctx: ToolContext): void {
       guard(async () => {
         // Same gate as POST/PATCH /api/automations — changing the workspace's
         // wiring is not member-level work.
-        if (!ctx.isAdmin) {
-          throw new ApiError(
-            403,
-            `this tool requires the owner or admin role; ${ctx.auth.user.email} is a ${ctx.auth.user.role}`
-          );
-        }
+        requireAdminRole(ctx);
         return { automation: await ctx.ws.upsertAutomation(args, ctx.actor) };
       })
   );
