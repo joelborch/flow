@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@flow/shared": "workspace:*",
-    "@preact/signals": "^2.11.0",
+    "@preact/signals": "^2.11.1",
     "chrono-node": "^2.10.1",
     "preact": "^10.29.8"
   },
