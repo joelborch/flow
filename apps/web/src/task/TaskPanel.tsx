@@ -270,7 +270,7 @@ export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => 
               </div>
 
               <div class="space-y-6 border-t border-line px-4 py-5 sm:space-y-7 sm:px-6 sm:py-6">
-                <Description task={task} />
+                <Description key={task.id} task={task} />
                 <Subtasks taskId={taskId} fallback={detail?.subtasks ?? []} />
                 <Attachments
                   attachments={attachments}

@@ -1,10 +1,13 @@
-// The centerpiece of the panel: read mode is properly
-// typeset markdown, edit mode is the raw source in a growing textarea.
-import { useEffect, useRef, useState } from "preact/hooks";
+import { lazy, Suspense } from "preact/compat";
+import { useRef, useState } from "preact/hooks";
 import { updateTask, type StoreTask } from "../store/index.js";
 import { SectionLabel } from "../shell/ui.js";
 import { Markdown } from "./markdown.js";
-import { isSubmitChord, useAutogrow } from "./autogrow.js";
+import type { TipTapEditorHandle } from "./TipTapEditor.js";
+
+const LazyTipTapEditor = lazy(() =>
+  import("./TipTapEditor.js").then((m) => ({ default: m.TipTapEditor }))
+);
 
 export function Description({ task }: { task: StoreTask }) {
   // The snapshot no longer carries description text, only a `hasDescription`
@@ -19,31 +22,23 @@ export function Description({ task }: { task: StoreTask }) {
   const waiting = !known && !empty;
 
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(text);
-  const ref = useRef<HTMLTextAreaElement>(null);
-  useAutogrow(ref, draft, { min: 120 });
+  const editorHandleRef = useRef<TipTapEditorHandle>(null);
 
-  // Adopt remote edits while we're not the one typing.
-  useEffect(() => {
-    if (!editing) setDraft(text);
-  }, [text, editing]);
-
-  useEffect(() => {
-    if (!editing) return;
-    const el = ref.current;
-    if (!el) return;
-    el.focus();
-    el.setSelectionRange(el.value.length, el.value.length);
-  }, [editing]);
-
-  const save = () => {
+  const save = (newText: string) => {
     setEditing(false);
-    if (draft !== text) void updateTask({ taskId: task.id, description: draft });
+    if (newText !== text) void updateTask({ taskId: task.id, description: newText });
   };
 
   const cancel = () => {
-    setDraft(text);
     setEditing(false);
+  };
+
+  const onDoneClick = () => {
+    if (editorHandleRef.current) {
+      editorHandleRef.current.save();
+    } else {
+      setEditing(false);
+    }
   };
 
   return (
@@ -51,10 +46,20 @@ export function Description({ task }: { task: StoreTask }) {
       <SectionLabel
         right={
           editing ? (
-            <span class="text-[11px] normal-case tracking-normal text-faint">
-              <span class="hidden sm:inline">⌘↵ to save · esc to cancel</span>
-              <span class="sm:hidden">tap outside to save</span>
-            </span>
+            <div class="flex items-center gap-2">
+              <span class="text-[11px] normal-case tracking-normal text-faint">
+                <span class="hidden sm:inline">⌘↵ to save · esc to cancel</span>
+                <span class="sm:hidden">tap outside to save</span>
+              </span>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={onDoneClick}
+                class="rounded-md px-1.5 py-0.5 text-[11.5px] font-medium normal-case tracking-normal text-muted hover:bg-bg hover:text-text"
+              >
+                Done
+              </button>
+            </div>
           ) : (
             known && text.trim() !== "" && (
               <button
@@ -72,24 +77,23 @@ export function Description({ task }: { task: StoreTask }) {
       </SectionLabel>
 
       {editing ? (
-        <textarea
-          ref={ref}
-          value={draft}
-          placeholder="Write it in markdown — headings, lists, code, links."
-          onInput={(e) => setDraft((e.currentTarget as HTMLTextAreaElement).value)}
-          onKeyDown={(e) => {
-            if (isSubmitChord(e)) {
-              e.preventDefault();
-              save();
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              e.stopPropagation();
-              cancel();
+        <div class="-mx-2 mt-1">
+          <Suspense
+            fallback={
+              <div class="min-h-[180px] w-full animate-pulse rounded-xl border border-accent/20 bg-surface p-4">
+                <div class="h-4 w-1/3 rounded bg-bg" />
+                <div class="mt-3 h-3 w-2/3 rounded bg-bg" />
+              </div>
             }
-          }}
-          onBlur={save}
-          class="block w-full resize-none rounded-xl border border-accent/40 bg-surface px-3 py-3 font-mono text-[16px] leading-[1.55] text-text ring-2 ring-accent/10 placeholder:text-faint focus:outline-none sm:px-3.5 sm:text-[13px] sm:leading-[1.6]"
-        />
+          >
+            <LazyTipTapEditor
+              initialValue={text}
+              editorHandleRef={editorHandleRef}
+              onSave={save}
+              onCancel={cancel}
+            />
+          </Suspense>
+        </div>
       ) : waiting ? (
         <div class="-mx-2 space-y-2 px-2 py-2.5" aria-busy="true">
           <div class="h-3 w-3/4 animate-pulse rounded bg-bg" />

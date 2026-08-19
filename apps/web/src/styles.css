@@ -204,3 +204,188 @@ body.is-dragging {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* --- TipTap rich-text editor --------------------------------------------- */
+.tiptap {
+  min-height: 160px;
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--color-text);
+  max-width: 64ch;
+  word-break: break-word;
+}
+@media (min-width: 640px) {
+  .tiptap {
+    font-size: 15px;
+  }
+}
+.tiptap:focus {
+  outline: none;
+}
+.tiptap > *:first-child {
+  margin-top: 0;
+}
+.tiptap p {
+  margin-top: 0.875rem;
+}
+.tiptap h1 {
+  margin-top: 1.75rem;
+  margin-bottom: 0.375rem;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.tiptap h2 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.375rem;
+  font-size: 16.5px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+}
+.tiptap h3 {
+  margin-top: 1.25rem;
+  margin-bottom: 0.25rem;
+  font-size: 14.5px;
+  font-weight: 600;
+}
+.tiptap h4 {
+  margin-top: 1rem;
+  margin-bottom: 0.25rem;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-muted);
+}
+.tiptap h5,
+.tiptap h6 {
+  margin-top: 0.875rem;
+  margin-bottom: 0.25rem;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+}
+.tiptap ul:not([data-type="taskList"]) {
+  margin-top: 0.75rem;
+  padding-left: 1.25rem;
+  list-style-type: disc;
+}
+.tiptap ol {
+  margin-top: 0.75rem;
+  padding-left: 1.25rem;
+  list-style-type: decimal;
+}
+.tiptap li {
+  margin-top: 0.375rem;
+}
+.tiptap blockquote {
+  margin-top: 1rem;
+  border-left: 2px solid var(--color-line);
+  padding-left: 1rem;
+  color: var(--color-muted);
+}
+.tiptap blockquote > p {
+  margin-top: 0.5rem;
+}
+.tiptap blockquote > p:first-child {
+  margin-top: 0;
+}
+.tiptap pre {
+  margin-top: 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-line);
+  background-color: var(--color-bg);
+  padding: 0.75rem 0.875rem;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+.tiptap code:not(pre code) {
+  border-radius: 0.25rem;
+  background-color: var(--color-bg);
+  padding: 1px 0.375rem;
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+}
+.tiptap a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.tiptap img {
+  margin-top: 1rem;
+  max-width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-line);
+}
+.tiptap table {
+  width: 100%;
+  margin-top: 1rem;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+.tiptap th {
+  border-bottom: 1px solid var(--color-line);
+  background-color: var(--color-bg);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.tiptap td {
+  border-bottom: 1px solid var(--color-line);
+  padding: 0.5rem 0.75rem;
+  vertical-align: top;
+  color: var(--color-text);
+}
+.tiptap hr {
+  margin-top: 1.5rem;
+  margin-bottom: 1.5rem;
+  border: 0;
+  border-top: 1px solid var(--color-line);
+}
+.tiptap p.is-editor-empty:first-child::before {
+  color: var(--color-faint);
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+.tiptap ul[data-type="taskList"] {
+  list-style: none;
+  padding: 0;
+  margin-top: 0.75rem;
+}
+.tiptap ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  margin-top: 0.375rem;
+}
+.tiptap ul[data-type="taskList"] li > label {
+  flex-shrink: 0;
+  margin-top: 3px;
+  user-select: none;
+  cursor: pointer;
+}
+.tiptap ul[data-type="taskList"] li > label input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: var(--color-accent);
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+}
+.tiptap ul[data-type="taskList"] li[data-checked="true"] > div {
+  text-decoration: line-through;
+  color: var(--color-faint);
+}
+.tiptap ul[data-type="taskList"] li > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+
