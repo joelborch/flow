@@ -40,6 +40,10 @@ Knowing what Flow considers authenticated helps you scope a report:
   the automation carries a secret. Receivers should verify the signature
   header before trusting a payload.
 - `/api/health` is deliberately public (no data, just liveness).
+- **Browser sessions can't be used cross-site.** Non-GET requests
+  authenticated by the Access cookie or header must be same-origin, and
+  uploaded attachments other than common raster images are served as
+  downloads under a sandbox CSP, never rendered inline on the app's origin.
 
 Anything that lets a request cross one of these lines without the matching
 credential — reading tasks without a valid Access JWT or key, writing to a
