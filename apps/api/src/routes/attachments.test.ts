@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { Hono } from "hono";
+import type { Attachment } from "@flow/shared";
+import type { AppEnv, AuthContext, Env } from "../env.js";
+import { onError } from "../errors.js";
 import {
+  ATTACHMENT_CSP,
   attachmentKey,
+  attachmentRoutes,
   contentRangeHeader,
   isAllowedDriveLink,
+  mimeEssence,
   parseRangeHeader,
   sanitizeFilename,
 } from "./attachments.js";
@@ -138,5 +145,171 @@ describe("isAllowedDriveLink", () => {
     expect(isAllowedDriveLink("http://drive.google.com/file/d/abc/view")).toBe(false);
     expect(isAllowedDriveLink("https://drive.google.com.evil.test/file/d/abc/view")).toBe(false);
     expect(isAllowedDriveLink("not a url")).toBe(false);
+  });
+});
+
+describe("mimeEssence", () => {
+  it("drops parameters and lowercases", () => {
+    expect(mimeEssence("Text/HTML; charset=utf-8")).toBe("text/html");
+    expect(mimeEssence("image/svg+xml")).toBe("image/svg+xml");
+  });
+
+  it("is null for anything that is not a type/subtype pair", () => {
+    expect(mimeEssence(undefined)).toBeNull();
+    expect(mimeEssence("")).toBeNull();
+    expect(mimeEssence("html")).toBeNull();
+    expect(mimeEssence("text/html\r\nX-Evil: 1")).toBeNull();
+  });
+});
+
+// Attachment bytes are user-controlled and served from the app's own origin,
+// so an SVG or HTML upload opened by an admin would run script with the admin's
+// session. These drive the real download route against a stubbed DO and R2.
+describe("GET /api/attachments/:id — download headers", () => {
+  const BYTES = new TextEncoder().encode("0123456789");
+
+  const metaOf = (filename: string, mimeType: string): Attachment => ({
+    id: "at_test",
+    taskId: "tk_test",
+    filename,
+    r2Key: `at/tk_test/at_test/${filename}`,
+    storageProvider: "r2",
+    driveFileId: null,
+    driveWebViewLink: null,
+    driveDestination: null,
+    migrationState: "r2",
+    size: BYTES.byteLength,
+    mimeType,
+    uploadedBy: "us_member",
+    createdAt: 1_700_000_000_000,
+  });
+
+  const auth: AuthContext = {
+    user: {
+      id: "us_admin",
+      email: "admin@example.com",
+      name: "admin",
+      role: "admin",
+      deactivated: false,
+      createdAt: 1_700_000_000_000,
+    },
+    apiKey: null,
+    actor: { userId: "us_admin", via: "ui", apiKeyId: null, automationRuleId: null },
+  };
+
+  /**
+   * A stored object as a pre-fix upload left it: `inline` disposition and the
+   * uploader's type in httpMetadata, which writeHttpMetadata() copies out.
+   */
+  function r2With(meta: Attachment, opts: { withBody?: boolean } = {}) {
+    return {
+      get: async (_key: string, options?: { range?: { offset: number; length: number } }) => {
+        const range = options?.range;
+        const slice = range ? BYTES.slice(range.offset, range.offset + range.length) : BYTES;
+        return {
+          size: BYTES.byteLength,
+          httpEtag: '"etag-1"',
+          range,
+          writeHttpMetadata(headers: Headers) {
+            headers.set("Content-Type", meta.mimeType);
+            headers.set("Content-Disposition", `inline; filename="${meta.filename}"`);
+          },
+          ...(opts.withBody === false ? {} : { body: new Blob([slice]).stream() }),
+        };
+      },
+    };
+  }
+
+  async function download(meta: Attachment, init: RequestInit = {}, opts?: { withBody?: boolean }) {
+    const stub = {
+      getAttachment: async () => meta,
+      getTaskDetail: async () => ({ attachments: [meta] }),
+    };
+    const env = {
+      WORKSPACE: { idFromName: () => ({}), get: () => stub },
+      ATTACHMENTS: r2With(meta, opts),
+    } as unknown as Env;
+    const app = new Hono<AppEnv>();
+    app.onError(onError);
+    app.use("*", async (c, next) => {
+      c.set("auth", auth);
+      return next();
+    });
+    app.route("/api", attachmentRoutes);
+    return app.request(`/api/attachments/${meta.id}`, init, env);
+  }
+
+  function expectLockedDown(res: Response) {
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(res.headers.get("Content-Security-Policy")).toBe(ATTACHMENT_CSP);
+    expect(ATTACHMENT_CSP).toContain("default-src 'none'");
+    expect(ATTACHMENT_CSP).toMatch(/(^|; )sandbox($|;)/);
+  }
+
+  it("downloads an SVG rather than rendering it, overriding the stored inline", async () => {
+    const res = await download(metaOf("evil.svg", "image/svg+xml"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("image/svg+xml");
+    expect(res.headers.get("Content-Disposition")).toMatch(/^attachment; filename="evil\.svg"/);
+    expectLockedDown(res);
+  });
+
+  it("downloads an HTML file rather than rendering it", async () => {
+    const res = await download(metaOf("evil.html", "text/html; charset=utf-8"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("text/html");
+    expect(res.headers.get("Content-Disposition")).toMatch(/^attachment; /);
+    expectLockedDown(res);
+  });
+
+  it("still shows a PNG inline, with the same lockdown headers", async () => {
+    const res = await download(metaOf("shot.png", "image/png"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("image/png");
+    expect(res.headers.get("Content-Disposition")).toMatch(/^inline; filename="shot\.png"/);
+    expectLockedDown(res);
+    expect(await res.text()).toBe("0123456789");
+  });
+
+  it("downloads a PDF", async () => {
+    const res = await download(metaOf("report.pdf", "application/pdf"));
+    expect(res.headers.get("Content-Disposition")).toMatch(/^attachment; /);
+    expectLockedDown(res);
+  });
+
+  it("serves a malformed stored type as an opaque download", async () => {
+    const res = await download(metaOf("x.bin", "not a mime type"));
+    expect(res.headers.get("Content-Type")).toBe("application/octet-stream");
+    expect(res.headers.get("Content-Disposition")).toMatch(/^attachment; /);
+    expectLockedDown(res);
+  });
+
+  it("keeps the lockdown on a 206 partial response", async () => {
+    const res = await download(metaOf("evil.svg", "image/svg+xml"), {
+      headers: { Range: "bytes=0-3" },
+    });
+    expect(res.status).toBe(206);
+    expect(res.headers.get("Content-Range")).toBe("bytes 0-3/10");
+    expect(res.headers.get("Content-Disposition")).toMatch(/^attachment; /);
+    expectLockedDown(res);
+  });
+
+  it("keeps the lockdown on a 304", async () => {
+    const res = await download(
+      metaOf("evil.svg", "image/svg+xml"),
+      { headers: { "If-None-Match": '"etag-1"' } },
+      { withBody: false }
+    );
+    expect(res.status).toBe(304);
+    expect(res.headers.get("Content-Disposition")).toMatch(/^attachment; /);
+    expectLockedDown(res);
+  });
+
+  it("keeps the lockdown on a 416", async () => {
+    const res = await download(metaOf("evil.svg", "image/svg+xml"), {
+      headers: { Range: "bytes=500-" },
+    });
+    expect(res.status).toBe(416);
+    expectLockedDown(res);
   });
 });
