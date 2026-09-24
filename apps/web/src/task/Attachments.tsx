@@ -8,6 +8,28 @@ function isImage(a: Attachment): boolean {
   return a.storageProvider === "r2" && a.mimeType.startsWith("image/");
 }
 
+// Mirrors INLINE_MIME_TYPES in apps/api/src/routes/attachments.ts, the only
+// types the API serves `inline`. Everything else (SVG included) comes back as a
+// download, so it gets a `download` link rather than an empty new tab. SVG
+// thumbnails are still fine: an <img> never runs the file's script.
+const INLINE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/bmp",
+]);
+
+function linkProps(a: Attachment) {
+  const essence = a.mimeType.split(";", 1)[0]!.trim().toLowerCase();
+  const external = a.storageProvider === "drive" && a.driveWebViewLink;
+  if (external || INLINE_TYPES.has(essence)) {
+    return { target: "_blank", rel: "noopener noreferrer" };
+  }
+  return { download: a.filename };
+}
+
 export function Attachments({
   attachments,
   uploading,
@@ -56,8 +78,7 @@ export function Attachments({
             <a
               key={a.id}
               href={attachmentHref(a)}
-              target="_blank"
-              rel="noopener noreferrer"
+              {...linkProps(a)}
               title={`${a.filename} · ${formatBytes(a.size)}`}
               class="group relative block aspect-[4/3] overflow-hidden rounded-lg border border-line bg-raised"
             >
@@ -81,8 +102,7 @@ export function Attachments({
             <li key={a.id}>
               <a
                 href={attachmentHref(a)}
-                target="_blank"
-                rel="noopener noreferrer"
+                {...linkProps(a)}
                 class="-mx-2 flex items-center gap-2.5 rounded-lg px-2 py-2.5 hover:bg-raised sm:py-1.5"
               >
                 <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-bg text-muted">

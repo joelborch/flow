@@ -108,6 +108,39 @@ export function readAccessCookie(header: string | undefined): string | null {
   return null;
 }
 
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * CSRF gate for ambient browser credentials — the Access JWT header and the
+ * CF_Authorization cookie. A browser attaches both to a cross-site form POST,
+ * and readJson parses any body whatever its Content-Type, so a
+ * `<form enctype="text/plain">` on another site could otherwise mutate the
+ * workspace as whoever is signed in. Bearer keys need no gate: a cross-site
+ * page cannot set Authorization.
+ *
+ * Browsers send Origin on every non-GET/HEAD fetch, same-origin included, so
+ * the SPA passes on Origin alone. Sec-Fetch-Site covers a request that somehow
+ * lacks it; with neither there is no evidence the request came from here.
+ */
+export function assertSameOrigin(c: Context<AppEnv>): void {
+  if (SAFE_METHODS.has(c.req.method.toUpperCase())) return;
+
+  const expected = new URL(c.req.url).origin;
+  const origin = c.req.header("Origin");
+  if (origin !== undefined) {
+    if (origin === expected) return;
+    throw forbidden(
+      `cross-origin request refused: Origin ${origin} is not ${expected}; scripts should send Authorization: Bearer flow_<token>`
+    );
+  }
+
+  const site = c.req.header("Sec-Fetch-Site")?.toLowerCase();
+  if (site === "same-origin" || site === "none") return;
+  throw forbidden(
+    `cross-origin request refused: ${c.req.method} with a browser session needs a same-origin Origin or Sec-Fetch-Site header; scripts should send Authorization: Bearer flow_<token>`
+  );
+}
+
 /** Resolve the caller for a request, or throw an ApiError. */
 export async function resolveAuth(c: Context<AppEnv>): Promise<AuthContext> {
   const bearer = parseBearer(c.req.header("Authorization"));
@@ -118,8 +151,13 @@ export async function resolveAuth(c: Context<AppEnv>): Promise<AuthContext> {
     return authenticateApiKey(c, bearer);
   }
 
+  // Everything past this point is a credential the browser sends on its own,
+  // so the origin check runs before the (network-bound) JWT verification.
   const jwt = c.req.header(ACCESS_JWT_HEADER);
-  if (jwt) return authenticateAccess(c, jwt);
+  if (jwt) {
+    assertSameOrigin(c);
+    return authenticateAccess(c, jwt);
+  }
 
   // Cookie fallback for paths on the Access BYPASS app — /ws above all.
   // Browsers cannot attach headers to a WebSocket upgrade, and Access does not
@@ -127,7 +165,10 @@ export async function resolveAuth(c: Context<AppEnv>): Promise<AuthContext> {
   // set at login carries the same JWT for the whole domain. Verifying it here
   // is identical in strength to the header path (same JWKS, same AUD).
   const cookieJwt = readAccessCookie(c.req.header("Cookie"));
-  if (cookieJwt) return authenticateAccess(c, cookieJwt);
+  if (cookieJwt) {
+    assertSameOrigin(c);
+    return authenticateAccess(c, cookieJwt);
+  }
 
   if (c.env.DEV_NO_AUTH === "true") return authenticateDev(c);
 

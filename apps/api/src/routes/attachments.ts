@@ -16,6 +16,58 @@ export const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024; // 100 MB
 
 const DEFAULT_MIME = "application/octet-stream";
 
+/**
+ * The only types a download is served `inline`: raster images, which cannot
+ * carry script. Downloads come from the app's own origin, so anything a browser
+ * would render as an active document — SVG and HTML above all — would run with
+ * the viewer's session (an admin opening a member's upload could be made to mint
+ * an api key). Everything else is `attachment`. PDF stays off the list because
+ * viewer behaviour under the sandbox CSP below varies by browser.
+ *
+ * apps/web/src/task/Attachments.tsx mirrors this list to decide which links open
+ * in a tab and which download.
+ */
+export const INLINE_MIME_TYPES: ReadonlySet<string> = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/bmp",
+]);
+
+/**
+ * Sent on every response that carries stored bytes. `sandbox` gives the
+ * document an opaque origin with scripts disabled even if a browser does render
+ * it; images and inline styles are allowed so an SVG `<img>` thumbnail still
+ * draws.
+ */
+export const ATTACHMENT_CSP = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox";
+
+const MIME_ESSENCE_RE = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/;
+
+/** Lowercased `type/subtype` with parameters dropped, or null if malformed. */
+export function mimeEssence(raw: string | null | undefined): string | null {
+  const essence = (raw ?? "").split(";", 1)[0]!.trim().toLowerCase();
+  return MIME_ESSENCE_RE.test(essence) ? essence : null;
+}
+
+/**
+ * The headers that decide how a browser treats attachment bytes. Applied after
+ * `writeHttpMetadata()`, whose stored disposition (every pre-fix upload says
+ * `inline`) and uploader-supplied type must never win.
+ */
+export function applyDownloadHeaders(headers: Headers, mimeType: string, filename: string): void {
+  headers.set("Content-Type", mimeEssence(mimeType) ?? DEFAULT_MIME);
+  headers.set("Content-Disposition", contentDisposition(filename, mimeType));
+  applyLockdownHeaders(headers);
+}
+
+function applyLockdownHeaders(headers: Headers): void {
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Content-Security-Policy", ATTACHMENT_CSP);
+}
+
 export function isAllowedDriveLink(value: string): boolean {
   try {
     const url = new URL(value);
@@ -103,7 +155,9 @@ attachmentRoutes.post("/tasks/:taskId/attachments", async (c) => {
   const body = c.req.raw.body;
   if (!body) throw badRequest("attachment request has no body");
 
-  const mimeType = c.req.header("Content-Type") ?? DEFAULT_MIME;
+  // Uploader-controlled, so it is only ever advisory: the download path decides
+  // disposition from an allowlist and pins nosniff + a sandbox CSP.
+  const mimeType = mimeEssence(c.req.header("Content-Type")) ?? DEFAULT_MIME;
   // The R2 key has to exist before the upload, so the id is minted here and
   // passed to the DO. packages/core generates its own id today and ignores this,
   // which is harmless — the key then embeds this upload id rather than the
@@ -112,7 +166,10 @@ attachmentRoutes.post("/tasks/:taskId/attachments", async (c) => {
   const r2Key = attachmentKey(taskId, attachmentId, filename);
 
   await c.env.ATTACHMENTS.put(r2Key, body, {
-    httpMetadata: { contentType: mimeType, contentDisposition: contentDisposition(filename) },
+    httpMetadata: {
+      contentType: mimeType,
+      contentDisposition: contentDisposition(filename, mimeType),
+    },
     customMetadata: { taskId, attachmentId, uploadedBy: auth.user.id },
   });
 
@@ -319,8 +376,7 @@ async function streamAttachment(c: Context<AppEnv>, meta: Attachment): Promise<R
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set("etag", object.httpEtag);
-  headers.set("Content-Type", meta.mimeType || DEFAULT_MIME);
-  headers.set("Content-Disposition", contentDisposition(meta.filename));
+  applyDownloadHeaders(headers, meta.mimeType, meta.filename);
   // Attachment bytes are immutable once written, and the URL is per-attachment.
   headers.set("Cache-Control", "private, max-age=31536000, immutable");
   // Advertised on every response, including 304 and 416, so a client knows it
@@ -335,14 +391,13 @@ async function streamAttachment(c: Context<AppEnv>, meta: Attachment): Promise<R
   // Decided against the DO's `meta.size` here: R2 is the authority on what was
   // actually stored, and a mismatch would otherwise produce a lying Content-Range.
   if (wanted.kind === "unsatisfiable") {
-    return new Response(null, {
-      status: 416,
-      headers: new Headers({
-        "Accept-Ranges": "bytes",
-        "Content-Range": `bytes */${object.size}`,
-        etag: object.httpEtag,
-      }),
+    const unsatisfiable = new Headers({
+      "Accept-Ranges": "bytes",
+      "Content-Range": `bytes */${object.size}`,
+      etag: object.httpEtag,
     });
+    applyLockdownHeaders(unsatisfiable);
+    return new Response(null, { status: 416, headers: unsatisfiable });
   }
 
   const contentRange = wanted.kind === "range" ? contentRangeHeader(object.range, object.size) : null;
@@ -383,8 +438,13 @@ attachmentRoutes.delete("/attachments/:attachmentId", async (c) => {
   return c.json({ ok: true, deleted: attachmentId });
 });
 
-/** RFC 5987 filename, ASCII-safe with a UTF-8 fallback. */
-function contentDisposition(filename: string): string {
+/**
+ * RFC 5987 filename, ASCII-safe with a UTF-8 fallback. `inline` only for
+ * INLINE_MIME_TYPES; everything else downloads.
+ */
+function contentDisposition(filename: string, mimeType: string): string {
+  const essence = mimeEssence(mimeType);
+  const kind = essence !== null && INLINE_MIME_TYPES.has(essence) ? "inline" : "attachment";
   const ascii = filename.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, "");
-  return `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }

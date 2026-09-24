@@ -100,6 +100,10 @@ Two ways in, resolved in order by `apps/api/src/auth.ts`:
 
 **The cookie fallback** exists for one reason: browsers cannot attach headers to a WebSocket upgrade, and `/ws` sits on an Access *bypass* application (see the self-hosting doc), so no JWT header is injected there. But the `CF_Authorization` cookie set at login carries the same JWT for the whole domain, and verifying it is identical in strength to the header path — same JWKS, same AUD. The Worker then hands the resolved user id to the DO as an `X-Flow-User-Id` header, stripping any client-supplied copy first; the DO trusts it because the Worker is the only path to the DO.
 
+Because a browser attaches that cookie (and Access injects its header) on cross-site requests too, any non-GET request authenticated by either one must be same-origin: its `Origin` must match the app's, or, when `Origin` is absent, `Sec-Fetch-Site` must say `same-origin`. Otherwise it's a 403. Bearer keys are exempt, since a cross-site page can't set `Authorization`.
+
+**Attachments** are user-supplied bytes served from the app's own origin, so only PNG, JPEG, GIF, WebP, AVIF and BMP are served `inline`. Everything else (SVG, HTML, PDF included) is served as an `attachment`, and every download carries `X-Content-Type-Options: nosniff` and a `sandbox` Content-Security-Policy, so an uploaded file can never run script as the person who opens it.
+
 Public exceptions: `GET /api/health` (liveness), and `POST /api/inbound/:listId`, which authenticates per-list against that list's own `inb_` token — so a leaked intake credential can only create tasks in one list, and rotating it is one PATCH.
 
 `DEV_NO_AUTH=true` (in `.dev.vars` only, never in `wrangler.jsonc`) resolves every request to `OWNER_EMAIL`'s user for local development. It fails closed: anything other than the exact string `"true"` leaves auth fully enforced.
