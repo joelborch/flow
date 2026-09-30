@@ -4,7 +4,6 @@ packages:
 overrides:
   '@hono/node-server': 2.0.10
   nanoid: 3.3.18
-  undici: 7.29.0
 allowBuilds:
   esbuild: true
   workerd: true
@@ -12,3 +11,5 @@ minimumReleaseAgeExclude:
   - '@cloudflare/workers-types@5.20260727.1'
   - '@modelcontextprotocol/sdk@1.30.0'
   - '@types/node@26.1.2'
+  - miniflare@5.20260926.1-alpha
+  - wrangler@4.144.0
