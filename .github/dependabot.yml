@@ -10,6 +10,12 @@ updates:
       npm-dependencies:
         patterns:
           - "*"
+        # Kept out of the group so their decisions don't block routine bumps:
+        # preact 11 is a major that breaks apps/web types, and zod 4.6 changes
+        # string-length counting (code points) and grows the Worker bundle.
+        exclude-patterns:
+          - "preact"
+          - "zod"
     ignore:
       # TypeScript 7 is the Go-native rewrite; hold at 5.x until the tooling
       # ecosystem (vitest, wrangler, editors) settles on it.
