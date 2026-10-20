@@ -136,6 +136,9 @@ export const WebhookPayload = z.object({
   // Backwards-compatible alias for legacy ClickUp-shaped workflow receivers.
   payload: LegacyWebhookTaskPayload.nullable().optional(),
   workspace: z.string(), // hostname, for multi-consumer routing
+  // Set when long text was cut to fit the queue's 128KB message limit; each
+  // cut string ends in TRUNCATION_MARKER (packages/core/src/side-effect-size.ts).
+  truncated: z.boolean().optional(),
 });
 export type WebhookPayload = z.infer<typeof WebhookPayload>;
 

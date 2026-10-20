@@ -129,6 +129,7 @@ import { type ScopedDelta, Turn, diffOf, toActor } from "./turn.js";
 import { requireAssignee } from "./users.js";
 import { websocketCloseReplyCode } from "./websocket-close.js";
 import { alarmLog } from "./alarm-observability.js";
+import { SIDE_EFFECTS_MESSAGE_BYTES, chunkSideEffects } from "./side-effect-size.js";
 import {
   automationRulesForSnapshot,
   canSeeSpace,
@@ -163,55 +164,17 @@ export interface Env {
   EMAIL_DRY_RUN?: string;
 }
 
-/** Queue.sendBatch's hard cap on messages per call. */
-export const SIDE_EFFECTS_BATCH_SIZE = 100;
-/**
- * Queues also caps a sendBatch call at 256KB total. Budget 200KB of estimated
- * serialized payload per chunk: JSON.stringify().length counts UTF-16 code
- * units, not UTF-8 bytes, and the queue adds its own per-message envelope, so
- * the 56KB margin absorbs both.
- */
-export const SIDE_EFFECTS_BATCH_BYTES = 200 * 1024;
-
-/**
- * Split a turn's side effects into sendBatch-sized chunks: at most 100
- * messages AND at most ~200KB of estimated serialized payload per chunk. A
- * single message over the byte budget can't be split, so it is logged and
- * still attempted alone in its own chunk — sendBatch may reject it, but
- * silently dropping it would be worse.
- */
-export function chunkSideEffects<T>(payloads: readonly T[]): T[][] {
-  const chunks: T[][] = [];
-  let current: T[] = [];
-  let currentBytes = 0;
-  const flushCurrent = (): void => {
-    if (current.length > 0) chunks.push(current);
-    current = [];
-    currentBytes = 0;
-  };
-  for (const payload of payloads) {
-    const bytes = JSON.stringify(payload).length;
-    if (bytes > SIDE_EFFECTS_BATCH_BYTES) {
-      console.error(
-        `side effect payload estimated at ${bytes} bytes exceeds the ${SIDE_EFFECTS_BATCH_BYTES}-byte chunk budget; attempting it alone`,
-        { kind: (payload as { kind?: unknown }).kind }
-      );
-      flushCurrent();
-      chunks.push([payload]);
-      continue;
-    }
-    if (
-      current.length >= SIDE_EFFECTS_BATCH_SIZE ||
-      currentBytes + bytes > SIDE_EFFECTS_BATCH_BYTES
-    ) {
-      flushCurrent();
-    }
-    current.push(payload);
-    currentBytes += bytes;
-  }
-  flushCurrent();
-  return chunks;
-}
+// Queues' per-message (128KB) and per-sendBatch (100 msgs / 256KB) limits:
+// oversized payloads are truncated to fit, and chunking respects both caps.
+export {
+  SIDE_EFFECTS_BATCH_BYTES,
+  SIDE_EFFECTS_BATCH_SIZE,
+  SIDE_EFFECTS_MESSAGE_BYTES,
+  TRUNCATION_MARKER,
+  chunkSideEffects,
+  fitSideEffect,
+  sideEffectBytes,
+} from "./side-effect-size.js";
 
 // Zod schemas carry defaults, so the *output* type is what the DO receives.
 // Deriving these from the schemas keeps packages/shared the only definition.
@@ -930,16 +893,30 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   private flush(t: Turn): void {
     this.broadcastDeltas(t.scopedBroadcastable());
 
-    // Queues' sendBatch caps at 100 messages / 256KB. A single bulk operation
-    // (e.g. a bulk status change firing a webhook rule) can enqueue far more
-    // than that in one turn, so chunk on both limits rather than let sendBatch
-    // throw the whole turn's side effects away.
-    for (const chunk of chunkSideEffects(t.sideEffects)) {
+    // Queues' sendBatch caps at 100 messages / 256KB, and each message at
+    // 128KB. A single bulk operation (e.g. a bulk status change firing a
+    // webhook rule) can enqueue far more than that in one turn, and one big
+    // task description can blow the per-message cap, so chunkSideEffects
+    // truncates oversized payloads and chunks on both batch limits rather than
+    // let sendBatch throw the whole chunk away. Anything that still never
+    // reaches the queue gets an ok:false run-log row, because the engine
+    // already logged it as "queued".
+    const chunks = chunkSideEffects(t.sideEffects, (payload, bytes) =>
+      this.recordEnqueueFailures(
+        [payload],
+        `not sent: payload is ${bytes} bytes even after truncation, over the ${SIDE_EFFECTS_MESSAGE_BYTES}-byte queue message budget`
+      )
+    );
+    for (const chunk of chunks) {
       const batch = chunk.map((body) => ({ body }));
       this.ctx.waitUntil(
-        this.env.SIDE_EFFECTS.sendBatch(batch).catch((err: unknown) =>
-          console.error("side effect enqueue failed", err)
-        )
+        this.env.SIDE_EFFECTS.sendBatch(batch).catch((err: unknown) => {
+          console.error("side effect enqueue failed", { messages: chunk.length }, err);
+          this.recordEnqueueFailures(
+            chunk,
+            `not sent: queue rejected the batch (${err instanceof Error ? err.message : String(err)})`
+          );
+        })
       );
     }
 
@@ -948,6 +925,28 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       .exec<{ next: number | null }>("SELECT MIN(run_at) AS next FROM scheduled_jobs")
       .one();
     if (next !== null && next !== this.armedAlarm) this.ctx.waitUntil(this.armAlarm());
+  }
+
+  /**
+   * Same ok:false row the queue consumer writes for a failed delivery, for
+   * side effects that never made it onto the queue at all. Only automation
+   * payloads have a rule to log against; notification emails (ruleId
+   * "notify:*") get the console line alone.
+   */
+  private recordEnqueueFailures(payloads: readonly unknown[], detail: string): void {
+    for (const payload of payloads) {
+      const p = payload as { kind?: unknown; ruleId?: unknown; taskId?: unknown; url?: unknown };
+      if (p.kind !== "webhook" && p.kind !== "email") continue;
+      if (typeof p.ruleId !== "string" || typeof p.taskId !== "string") continue;
+      if (p.ruleId.startsWith("notify:")) continue;
+      const target = p.kind === "webhook" ? `webhook ${String(p.url)}` : "email";
+      this.recordDeliveryFailure({
+        ruleId: p.ruleId,
+        taskId: p.taskId,
+        kind: p.kind,
+        detail: `${target} ${detail}`,
+      });
+    }
   }
 
   private automationContext(t: Turn, depth: number): AutomationContext {
