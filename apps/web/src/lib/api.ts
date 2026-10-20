@@ -180,7 +180,9 @@ export const api = {
 // ---------------------------------------------------------------------------
 
 // Kept as its own import so the block above stays untouched by this addition.
-import type { ApiKey, AutomationRule, AutomationRunLog, UpsertAutomationInput } from "@flow/shared";
+import type {
+  ApiKey, AutomationRule, AutomationRunLog, EmailIntake, SetEmailIntakeInput, UpsertAutomationInput,
+} from "@flow/shared";
 
 /** Public origin. Inbound and MCP snippets get pasted into other systems, so
  *  they must name the deployed host — and since this SPA is served from that
@@ -221,6 +223,10 @@ export type ListPatchResult = {
   inboundUrl?: string;
   warning?: string;
 };
+
+/** `GET /api/email-intakes`. `domain` is null until the server has an intake
+ *  domain configured, in which case the aliases exist but receive nothing. */
+export type EmailIntakesResult = { domain: string | null; intakes: EmailIntake[] };
 
 /** The inbound route accepts the token as a query param, which makes the whole
  *  webhook configuration a single pasteable URL. */
@@ -285,6 +291,21 @@ export const settingsApi = {
     request<ListPatchResult>("PATCH", `/api/lists/${encodeURIComponent(listId)}`, {
       inboundToken: mode,
     }),
+
+  // --- email intake (owner/admin only) -------------------------------------
+  emailIntakes: () => request<EmailIntakesResult>("GET", "/api/email-intakes"),
+
+  /** PUT creates or replaces: the alias and the whole sender list go together.
+   *  Validation failures (alias format or clash, no senders) come back as 422. */
+  setEmailIntake: (listId: string, input: SetEmailIntakeInput) =>
+    request<{ intake: EmailIntake }>(
+      "PUT",
+      `/api/lists/${encodeURIComponent(listId)}/email-intake`,
+      input
+    ).then((r) => r.intake),
+
+  removeEmailIntake: (listId: string) =>
+    request<{ ok: true }>("DELETE", `/api/lists/${encodeURIComponent(listId)}/email-intake`),
 
   // --- space membership (owner/admin only) ----------------------------------
   spaceMembers: (spaceId: string) =>

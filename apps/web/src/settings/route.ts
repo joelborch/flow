@@ -56,7 +56,7 @@ export type SettingsTab = (typeof SETTINGS_TABS)[number];
 export const TAB_LABEL: Record<SettingsTab, string> = {
   automations: "Automations",
   "api-keys": "API keys",
-  inbound: "Inbound webhooks",
+  inbound: "Inbound",
   spaces: "Spaces",
 };
 
