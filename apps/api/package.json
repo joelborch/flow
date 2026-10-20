@@ -13,7 +13,7 @@
   "dependencies": {
     "@flow/core": "workspace:*",
     "@flow/shared": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.32.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "hono": "^4.13.13",
     "postal-mime": "^4.0.5",
     "zod": "^4.4.3"
@@ -21,7 +21,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261019.1",
     "typescript": "^5.7.2",
-    "vitest": "^5.0.3",
+    "vitest": "^5.0.5",
     "wrangler": "^4.151.1"
   }
 }
