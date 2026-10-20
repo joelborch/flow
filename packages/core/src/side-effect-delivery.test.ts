@@ -196,10 +196,10 @@ describe("flush: Queues' 128KB per-message cap", () => {
 
   async function assigneeChangeSetup(sendBatch?: ReturnType<typeof strictSendBatch>) {
     const h = await freshWorkspace(sendBatch);
-    const users = h.ws.listUsers();
-    const avery = users.find((u) => u.role === "owner");
-    const blake = users.find((u) => u.role === "admin");
-    if (!avery || !blake) throw new Error("expected the seeded owner and admin");
+    const avery = h.ws.listUsers().find((u) => u.role === "owner");
+    if (!avery) throw new Error("expected the seeded owner");
+    // Only the placeholder owner is seeded; the assignee is an admin made here.
+    const blake = h.ws.upsertUser({ id: "us_blake", email: "blake@example.com", name: "Blake", role: "admin" }, avery.id);
     const space = h.ws.createSpace(CreateSpaceInput.parse({ name: "Space" }), avery.id);
     const list = h.ws.createList(CreateListInput.parse({ spaceId: space.id, name: "List" }), avery.id);
     const scope = { kind: "list" as const, listId: list.id };
