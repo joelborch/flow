@@ -17,7 +17,10 @@ import {
   CreateTaskInput,
   Id,
   LIMITS,
+  ListHandoffsInput,
   MoveTaskInput,
+  ReplyHandoffInput,
+  RequestHandoffInput,
   SearchTasksInput,
   subtaskNote,
   ToggleSubtaskInput,
@@ -45,6 +48,14 @@ export const BulkUpdateTasksArgs = BulkUpdateInput;
 export const ToggleSubtaskArgs = ToggleSubtaskInput;
 export const CommentOnTaskArgs = CreateCommentInput;
 export const UpsertAutomationArgs = UpsertAutomationInput;
+export const RequestHandoffArgs = RequestHandoffInput;
+export const ListHandoffsArgs = ListHandoffsInput.extend({ format: Format });
+/**
+ * Registered by `.shape`, like every other tool, and a shape cannot carry the
+ * contract's object-level "a message, a state, or both" refine. So the tool
+ * re-parses its arguments against this whole schema before calling the DO.
+ */
+export const ReplyHandoffArgs = ReplyHandoffInput;
 
 export const GetWorkspaceMapArgs = z.object({
   /**

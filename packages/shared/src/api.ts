@@ -329,6 +329,9 @@ export const MCP_TOOLS = [
   "flow_list_automations",
   "flow_upsert_automation",
   "flow_get_audit_log",
+  "flow_request_handoff",
+  "flow_list_handoffs",
+  "flow_reply_handoff",
 ] as const;
 export type McpToolName = (typeof MCP_TOOLS)[number];
 

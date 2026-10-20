@@ -9,21 +9,30 @@
  * the same schemas the tools declare as their `outputSchema` — so a shape
  * declared to clients and the shape actually built here cannot drift.
  */
-import type { Comment, Subtask, Task, TaskRow, User } from "@flow/shared";
+import type { ActorVia, Comment, Handoff, Subtask, Task, TaskRow, User } from "@flow/shared";
 import type { NameIndex, WorkspaceMap } from "./context.js";
 import type {
   AttachmentView,
   CommentView,
   ConciseTaskView,
+  HandoffView,
   SubtaskView,
   TaskDetailView,
+  TaskHandoffView,
   TaskRowOut,
   TaskView,
   UserView,
   WorkspaceMapView,
 } from "./schemas-out.js";
 
-export type { ConciseTaskView, TaskDetailView, TaskRowOut, TaskView };
+export type { ConciseTaskView, HandoffView, TaskDetailView, TaskRowOut, TaskView };
+
+/** A task that is a handoff, with the field narrowed so views can read it. */
+export type HandoffTask = Task & { handoff: Handoff };
+
+export function isHandoff(task: Task): task is HandoffTask {
+  return task.handoff != null;
+}
 
 export function taskView(row: TaskRow | Task, names: NameIndex): TaskView {
   return {
@@ -39,6 +48,46 @@ export function taskView(row: TaskRow | Task, names: NameIndex): TaskView {
     dueDate: row.dueDate,
     tags: row.tags,
     updatedAt: row.updatedAt,
+    // Only a full task carries the field; a search row never does.
+    ...("handoff" in row && row.handoff != null
+      ? { handoff: taskHandoffView(row.handoff, names) }
+      : {}),
+  };
+}
+
+/** The `handoff` block of a task view: the requester by name, the rest as stored. */
+export function taskHandoffView(handoff: Handoff, names: NameIndex): TaskHandoffView {
+  return {
+    from: names.userName(handoff.requestedBy) ?? handoff.requestedBy,
+    state: handoff.state,
+    returnFormat: handoff.returnFormat ?? null,
+    contextTaskIds: handoff.contextTaskIds ?? [],
+    stateChangedAt: handoff.stateChangedAt,
+  };
+}
+
+/**
+ * One handoff for the handoff tools. Concise is what an agent needs to decide
+ * whether to pick it up; `detailed` adds the ask itself (the task's
+ * description), which can be long. The comment thread is not here: it would
+ * cost one task-detail RPC per row, and `flow_get_task` already serves it.
+ */
+export function handoffView(task: HandoffTask, names: NameIndex, detailed = false): HandoffView {
+  const handoff = taskHandoffView(task.handoff, names);
+  return {
+    id: task.id,
+    title: task.title,
+    list: names.listName(task.listId),
+    space: names.spaceNameForList(task.listId),
+    from: handoff.from,
+    to: names.userName(task.assigneeId),
+    state: handoff.state,
+    dueDate: task.dueDate,
+    returnFormat: handoff.returnFormat,
+    contextTaskIds: handoff.contextTaskIds,
+    stateChangedAt: handoff.stateChangedAt,
+    closed: task.closedAt != null,
+    ...(detailed ? { ask: task.description } : {}),
   };
 }
 
@@ -93,12 +142,18 @@ export function subtaskView(sub: Subtask, names: NameIndex): SubtaskView {
   };
 }
 
+/** "api" and "mcp" are both a `flow_` key acting for a person: their agent. */
+const AGENT_VIA: ReadonlySet<ActorVia> = new Set<ActorVia>(["api", "mcp"]);
+
 export function commentView(comment: Comment, names: NameIndex): CommentView {
   return {
     id: comment.id,
     author: names.userName(comment.authorId),
     body: comment.body,
     createdAt: comment.createdAt,
+    // So an agent reading a handoff thread can tell the teammate from the
+    // teammate's agent. Older comments have no `via` and read as human.
+    ...(comment.via != null && AGENT_VIA.has(comment.via) ? { agent: true } : {}),
   };
 }
 
