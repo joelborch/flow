@@ -2,8 +2,8 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
-import type { Attachment } from "@flow/shared";
-import { Id } from "@flow/shared";
+import { Id, type Attachment } from "@flow/shared";
+import { id, ID_PREFIX } from "@flow/core/id";
 import { requireAdmin, requireAuth } from "../auth.js";
 import { workspace } from "../do.js";
 import type { AppEnv } from "../env.js";
@@ -162,7 +162,7 @@ attachmentRoutes.post("/tasks/:taskId/attachments", async (c) => {
   // passed to the DO. packages/core generates its own id today and ignores this,
   // which is harmless — the key then embeds this upload id rather than the
   // attachment id — and becomes exact the moment it honours `input.id`.
-  const attachmentId = `at_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+  const attachmentId = id(ID_PREFIX.attachment);
   const r2Key = attachmentKey(taskId, attachmentId, filename);
 
   await c.env.ATTACHMENTS.put(r2Key, body, {

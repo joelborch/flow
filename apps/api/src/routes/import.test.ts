@@ -5,6 +5,7 @@ import { ApiError, onError } from "../errors.js";
 import {
   ATTACHMENT_SOURCE_HOSTS,
   assertAllowedAttachmentSource,
+  fetchAttachmentSource,
   importRoutes,
 } from "./import.js";
 
@@ -150,5 +151,43 @@ describe("POST /import/attachments", () => {
     expect(put).toHaveBeenCalledOnce();
     expect(createAttachment).toHaveBeenCalledOnce();
     expect(remove).toHaveBeenCalledWith(expect.stringMatching(/^at\/tk_missing\/at_/));
+  });
+
+  it("follows HTTPS redirects to presigned storage", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://clickup-attachments-prod.s3.amazonaws.com/raw.png" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response("image-bytes", {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await fetchAttachmentSource(new URL("https://attachments.clickup.com/raw.png"));
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses redirect to non-HTTPS scheme", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: "http://clickup-attachments-prod.s3.amazonaws.com/raw.png" },
+        })
+      )
+    );
+
+    await expect(
+      fetchAttachmentSource(new URL("https://attachments.clickup.com/raw.png"))
+    ).rejects.toThrow(/non-HTTPS/);
   });
 });
