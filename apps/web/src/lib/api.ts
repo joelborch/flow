@@ -30,6 +30,17 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     throw new ApiError(0, err instanceof Error ? err.message : "Network unreachable");
   }
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== "undefined") {
+      try {
+        localStorage.removeItem("flow.boot");
+        localStorage.removeItem("flow.me");
+      } catch {
+        /* ignore storage errors */
+      }
+      const target = window.location.pathname + window.location.search;
+      window.location.href = `/cdn-cgi/access/login?redirect_url=${encodeURIComponent(target)}`;
+      throw new ApiError(401, "Session expired, redirecting to login");
+    }
     let detail = `${res.status} ${res.statusText}`;
     try {
       const text = await res.text();
