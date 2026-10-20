@@ -1,4 +1,9 @@
 import { z } from "zod";
+import { LIMITS } from "./limits.js";
+
+// Input size caps live in limits.ts so the web client can import them without
+// zod; re-exported here so every other caller keeps importing from the index.
+export { LIMITS };
 
 // IDs are short prefixed nanoids: sp_xxx, ls_xxx, tk_xxx, st_xxx, sb_xxx,
 // cm_xxx, at_xxx, us_xxx, ar_xxx, ak_xxx. Human-readable in URLs and logs.
@@ -6,27 +11,6 @@ export const Id = z.string().min(4);
 
 // Epoch milliseconds everywhere. No Date objects across boundaries.
 export const Ts = z.number().int().nonnegative();
-
-// ---------------------------------------------------------------------------
-// Input size caps. One place, so REST, MCP and the DO all reject the same
-// oversized input with the same message. `importBatch` is deliberately exempt
-// (see packages/core/src/import.ts): historical ClickUp rows are truncated
-// rather than rejected, because a migration must not lose a task.
-// ---------------------------------------------------------------------------
-export const LIMITS = {
-  titleMax: 500,
-  descriptionMax: 100_000,
-  commentBodyMax: 20_000,
-  subtaskTitleMax: 500,
-  tagMax: 100,
-  tagsMax: 50,
-  /** "waiting on…" note that rides along with a snooze. One line, not an essay. */
-  blockedNoteMax: 200,
-  /** Plain-text context on a checklist step — a paragraph, not a document. */
-  subtaskNoteMax: 2_000,
-  /** importBatch only: titles longer than this are truncated, never rejected. */
-  importTitleMax: 2_000,
-} as const;
 
 /** Task/subtask title: non-empty, capped. Fresh instance per call so callers
  *  can chain `.optional()` without sharing schema state. */

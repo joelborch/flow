@@ -1,7 +1,8 @@
 // Asana-style checklist: done/not-done plus optional
 // assignee and due date. No statuses — that's the board's job, not a step's.
 import { useMemo, useRef, useState } from "preact/hooks";
-import { LIMITS, type Subtask, type User } from "@flow/shared";
+import type { Subtask, User } from "@flow/shared";
+import { LIMITS } from "@flow/shared/limits";
 import {
   createSubtask,
   setSubtaskAssignee,

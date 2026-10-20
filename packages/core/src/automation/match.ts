@@ -104,6 +104,11 @@ export function matchesTrigger(
       if (!data || !("statusId" in data)) return false;
       const prevStatusId = delta.prev?.["statusId"];
       if (typeof prevStatusId === "string" && prevStatusId === view.task.statusId) return false;
+      // Status ids are per-list, so a cross-list move from "Done" in one list to
+      // "Done" in another changes the id but not the status. Statuses are
+      // referenced by name everywhere else, so the same name means no change —
+      // otherwise `to: ["Done"]` and recurring rules re-fire on every move.
+      if (eqCI(view.prevStatusName, view.statusName)) return false;
       if (trigger.from && trigger.from.length > 0) {
         if (!includesCI(trigger.from, view.prevStatusName)) return false;
       }

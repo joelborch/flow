@@ -59,7 +59,8 @@ export function CommentComposer({
   onSend,
   focusNonce,
 }: {
-  onSend: (body: string) => Promise<void>;
+  /** Resolves false when the post failed, so the draft can come back. */
+  onSend: (body: string) => Promise<boolean>;
   /** Bumped by the board's "C" shortcut; each new value pulls the caret here. */
   focusNonce?: number;
 }) {
@@ -82,7 +83,9 @@ export function CommentComposer({
     setSending(true);
     setBody("");
     try {
-      await onSend(text);
+      // The store has already toasted a failure; put the words back so they
+      // can retry, unless a new draft has been started in the meantime.
+      if (!(await onSend(text))) setBody((cur) => (cur === "" ? body : cur));
     } finally {
       setSending(false);
     }

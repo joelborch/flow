@@ -3,6 +3,7 @@
 import type {
   AutomationRule, BoardSnapshot, Comment, Delta, List, Space, Subtask, Task, User,
 } from "@flow/shared";
+import { api } from "../lib/api.js";
 import { clearBootCache, writeBootCache } from "../lib/boot-cache.js";
 import {
   automationRules, clearPending, comments, flush, getSubtask, hydrated, lastSeq, lists, me,
@@ -66,6 +67,7 @@ export function invalidateBootCache(): void {
 }
 
 export function hydrate(snapshot: BoardSnapshot): void {
+  resetAdoptions();
   resetIndexes();
   spaces.value = [...snapshot.spaces].sort((a, b) => a.position - b.position);
   lists.value = [...snapshot.lists].sort((a, b) => a.position - b.position);
@@ -80,6 +82,11 @@ export function hydrate(snapshot: BoardSnapshot): void {
   scheduleBootCacheFlush();
 }
 
+/**
+ * Apply one delta to a small row array. An `update` carries only the fields
+ * that changed, so it can never stand in for a whole row: one for an id we do
+ * not hold is dropped rather than inserted half-built.
+ */
 function upsertRow<T extends { id: string }>(
   list: T[],
   id: string,
@@ -89,7 +96,7 @@ function upsertRow<T extends { id: string }>(
   if (op === "delete") return list.filter((r) => r.id !== id);
   const i = list.findIndex((r) => r.id === id);
   if (i === -1) {
-    if (!data) return list;
+    if (!data || op !== "create") return list;
     return [...list, { ...(data as unknown as T), id }];
   }
   const next = [...list];
@@ -97,17 +104,103 @@ function upsertRow<T extends { id: string }>(
   return next;
 }
 
+// --- tasks we never held -----------------------------------------------------
+// The snapshot leaves out tasks closed more than 60 days ago, and a task can
+// move into a space this user has only just been let into. The first delta for
+// either is an `update` carrying nothing but the changed fields, so the task is
+// fetched whole instead. One fetch per id: updates that land while it is out
+// queue on the entry and replay on top of the answer, so a response the server
+// built before them cannot roll them back.
+//
+// A bulk edit of old closed tasks reaches every connected client at once, so
+// at most ADOPT_CONCURRENCY fetches run at a time and the rest wait. A task
+// that is still closed beyond the snapshot's window is dropped on arrival: the
+// next snapshot would leave it out, so holding it only bloats the boot cache.
+// `hydrate` bumps the generation, so an answer to a fetch started before a
+// snapshot (which may have just revoked this user's access) is discarded.
+
+const ADOPT_CONCURRENCY = 4;
+/** Mirrors SNAPSHOT_CLOSED_WINDOW_MS in packages/core/src/index.ts. */
+const SNAPSHOT_CLOSED_WINDOW_MS = 60 * 24 * 60 * 60 * 1000;
+
+type Adoption = { patches: Partial<Task>[]; generation: number };
+const adopting = new Map<string, Adoption>();
+const adoptQueue: string[] = [];
+let adoptsInFlight = 0;
+let adoptGeneration = 0;
+
+function isWholeTask(task: Partial<Task> | null | undefined): task is Task {
+  return !!task && typeof task.title === "string" && typeof task.listId === "string";
+}
+
+function outsideSnapshotWindow(task: Task): boolean {
+  return task.closedAt != null && task.closedAt < Date.now() - SNAPSHOT_CLOSED_WINDOW_MS;
+}
+
+/** Forget every pending adoption: a fresh snapshot supersedes them all. */
+function resetAdoptions(): void {
+  adoptGeneration++;
+  adopting.clear();
+  adoptQueue.length = 0;
+}
+
+function adoptUnknownTask(id: string, patch: Partial<Task>): void {
+  const pending = adopting.get(id);
+  if (pending) {
+    pending.patches.push(patch);
+    return;
+  }
+  adopting.set(id, { patches: [patch], generation: adoptGeneration });
+  adoptQueue.push(id);
+  pumpAdoptions();
+}
+
+function pumpAdoptions(): void {
+  while (adoptsInFlight < ADOPT_CONCURRENCY && adoptQueue.length > 0) {
+    const id = adoptQueue.shift()!;
+    const entry = adopting.get(id);
+    if (!entry) continue; // deleted while it waited
+    adoptsInFlight++;
+    // Background work nobody asked for, so a 401 must not bounce the page to
+    // login, and a 403/404/422 (a private task, or one already gone) is simply
+    // not ours to show. Every failure is dropped; the next update retries.
+    void api
+      .taskDetail(id, { authRedirect: false })
+      .then((detail) => {
+        // Deleted while in flight, or superseded by a snapshot.
+        if (adopting.get(id) !== entry || entry.generation !== adoptGeneration) return;
+        adopting.delete(id);
+        // A create landed it meanwhile, and that copy has seen every delta
+        // since, so it wins.
+        if (taskIndex.has(id) || !isWholeTask(detail?.task)) return;
+        let task: Task = detail.task;
+        for (const p of entry.patches) task = { ...task, ...p };
+        if (outsideSnapshotWindow(task)) return;
+        mergeTaskDetail({ ...detail, task });
+        scheduleBootCacheFlush();
+      })
+      .catch(() => {
+        if (adopting.get(id) === entry) adopting.delete(id);
+      })
+      .finally(() => {
+        adoptsInFlight--;
+        pumpAdoptions();
+      });
+  }
+}
+
 function applyOne(d: Delta): void {
   switch (d.entity) {
     case "task": {
       if (d.op === "delete") {
         removeTask(d.id);
+        adopting.delete(d.id);
       } else if (d.op === "create") {
         if (d.data) putTask({ ...(d.data as unknown as Task), id: d.id });
-      } else {
+      } else if (d.data) {
         const prev = taskIndex.get(d.id);
-        if (prev && d.data) putTask({ ...prev, ...(d.data as Partial<Task>) });
-        else if (d.data) putTask({ ...(d.data as unknown as Task), id: d.id });
+        if (prev) putTask({ ...prev, ...(d.data as Partial<Task>) });
+        else adoptUnknownTask(d.id, d.data as Partial<Task>);
       }
       clearPending(d.id);
       return;
@@ -115,10 +208,13 @@ function applyOne(d: Delta): void {
     case "subtask": {
       if (d.op === "delete") {
         removeSubtask(d.id);
-      } else {
+      } else if (d.op === "create") {
+        if (d.data) putSubtask({ ...(d.data as unknown as Subtask), id: d.id });
+      } else if (d.data) {
+        // Same rule as upsertRow: an update for an id we do not hold is dropped.
+        // Subtasks of a task adopted above arrive with its detail.
         const prev = getSubtask(d.id);
-        if (prev && d.op === "update" && d.data) putSubtask({ ...prev, ...(d.data as Partial<Subtask>) });
-        else if (d.data) putSubtask({ ...(d.data as unknown as Subtask), id: d.id });
+        if (prev) putSubtask({ ...prev, ...(d.data as Partial<Subtask>) });
       }
       return;
     }

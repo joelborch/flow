@@ -76,6 +76,23 @@ describe("API session recovery", () => {
     expect(replace).not.toHaveBeenCalled();
   });
 
+  it("leaves the page alone when a background fetch opts out of the redirect", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "Access token expired" }), { status: 401 })
+      )
+    );
+    const { api } = await import("./api.js");
+
+    await expect(api.taskDetail("tk_1", { authRedirect: false })).rejects.toMatchObject({
+      status: 401,
+      message: "Access token expired",
+    });
+    expect(replace).not.toHaveBeenCalled();
+    expect(localStorage.getItem("flow.boot")).toBe("cached");
+  });
+
   it("clears the retry guard after a successful request", async () => {
     vi.stubGlobal("sessionStorage", storage({ "flow.auth-retry": String(Date.now()) }));
     vi.stubGlobal(

@@ -28,6 +28,13 @@ importRoutes.post("/admin/backup", async (c) => {
   return c.json({ ok: true, ...result });
 });
 
+// Full backup status, including the last error message and object key that
+// the public /api/health deliberately leaves out.
+importRoutes.get("/admin/backup", async (c) => {
+  requireAdmin(c);
+  return c.json(await workspace(c.env).getBackupStatus());
+});
+
 importRoutes.post("/import/batch", async (c) => {
   const auth = requireAdmin(c);
   const batch = (await c.req.json()) as ImportBatch;

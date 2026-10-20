@@ -188,7 +188,10 @@ export default function Shell({ children }: { children?: ComponentChildren }) {
         </main>
       </div>
 
-      {taskId !== null && <TaskPanel taskId={taskId} onClose={closeTask} />}
+      {/* Keyed so opening another task over this one starts from clean panel
+          state — otherwise the last task's attachments, uploads and comment
+          draft carry over and the draft posts to the new task. */}
+      {taskId !== null && <TaskPanel key={taskId} taskId={taskId} onClose={closeTask} />}
 
       {/* Mounted on the frame rather than inside the nav: the palette's
           "New list…" opens it, and below `sm` the nav is translated off-screen

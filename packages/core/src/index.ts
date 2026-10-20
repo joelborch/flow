@@ -129,6 +129,7 @@ import { type ScopedDelta, Turn, diffOf, toActor } from "./turn.js";
 import { requireAssignee } from "./users.js";
 import { websocketCloseReplyCode } from "./websocket-close.js";
 import { alarmLog } from "./alarm-observability.js";
+import { SIDE_EFFECTS_MESSAGE_BYTES, chunkSideEffects } from "./side-effect-size.js";
 import {
   automationRulesForSnapshot,
   canSeeSpace,
@@ -163,55 +164,17 @@ export interface Env {
   EMAIL_DRY_RUN?: string;
 }
 
-/** Queue.sendBatch's hard cap on messages per call. */
-export const SIDE_EFFECTS_BATCH_SIZE = 100;
-/**
- * Queues also caps a sendBatch call at 256KB total. Budget 200KB of estimated
- * serialized payload per chunk: JSON.stringify().length counts UTF-16 code
- * units, not UTF-8 bytes, and the queue adds its own per-message envelope, so
- * the 56KB margin absorbs both.
- */
-export const SIDE_EFFECTS_BATCH_BYTES = 200 * 1024;
-
-/**
- * Split a turn's side effects into sendBatch-sized chunks: at most 100
- * messages AND at most ~200KB of estimated serialized payload per chunk. A
- * single message over the byte budget can't be split, so it is logged and
- * still attempted alone in its own chunk — sendBatch may reject it, but
- * silently dropping it would be worse.
- */
-export function chunkSideEffects<T>(payloads: readonly T[]): T[][] {
-  const chunks: T[][] = [];
-  let current: T[] = [];
-  let currentBytes = 0;
-  const flushCurrent = (): void => {
-    if (current.length > 0) chunks.push(current);
-    current = [];
-    currentBytes = 0;
-  };
-  for (const payload of payloads) {
-    const bytes = JSON.stringify(payload).length;
-    if (bytes > SIDE_EFFECTS_BATCH_BYTES) {
-      console.error(
-        `side effect payload estimated at ${bytes} bytes exceeds the ${SIDE_EFFECTS_BATCH_BYTES}-byte chunk budget; attempting it alone`,
-        { kind: (payload as { kind?: unknown }).kind }
-      );
-      flushCurrent();
-      chunks.push([payload]);
-      continue;
-    }
-    if (
-      current.length >= SIDE_EFFECTS_BATCH_SIZE ||
-      currentBytes + bytes > SIDE_EFFECTS_BATCH_BYTES
-    ) {
-      flushCurrent();
-    }
-    current.push(payload);
-    currentBytes += bytes;
-  }
-  flushCurrent();
-  return chunks;
-}
+// Queues' per-message (128KB) and per-sendBatch (100 msgs / 256KB) limits:
+// oversized payloads are truncated to fit, and chunking respects both caps.
+export {
+  SIDE_EFFECTS_BATCH_BYTES,
+  SIDE_EFFECTS_BATCH_SIZE,
+  SIDE_EFFECTS_MESSAGE_BYTES,
+  TRUNCATION_MARKER,
+  chunkSideEffects,
+  fitSideEffect,
+  sideEffectBytes,
+} from "./side-effect-size.js";
 
 // Zod schemas carry defaults, so the *output* type is what the DO receives.
 // Deriving these from the schemas keeps packages/shared the only definition.
@@ -237,6 +200,32 @@ export const CHANGES_RETENTION = 50_000;
 export const AUTOMATION_RUNS_RETENTION = 20_000;
 /** Objects kept under `backups/` in R2 — one per day, so 30 is ~a month. */
 export const BACKUP_RETENTION = 30;
+/**
+ * Audit rows older than this are deleted by the same daily job. Unlike
+ * automation_runs this one can be age-based: `idx_audit_at` covers `at`, so
+ * the oldest-first range read is an index walk, not a table scan.
+ */
+export const AUDIT_RETENTION_DAYS = 365;
+/**
+ * Rows per audit DELETE, and DELETEs per daily run. A first run over a big
+ * backlog stops at 100k rows and leaves the rest for tomorrow instead of
+ * turning one alarm into an unbounded one.
+ */
+export const AUDIT_PRUNE_BATCH = 5_000;
+export const AUDIT_PRUNE_MAX_BATCHES = 20;
+/** /api/health reports the backup stale when its last success is older than this. */
+export const BACKUP_STALE_MS = 36 * 3_600_000;
+
+/** Last outcome of the daily backup, as persisted in `job_status`. */
+export interface BackupStatus {
+  lastSuccessAt: number | null;
+  /** R2 key, row count and gzipped bytes of the last successful backup. */
+  lastSuccess: { key: string; rows: number; bytes: number } | null;
+  lastFailureAt: number | null;
+  lastFailureError: string | null;
+  /** No successful backup within BACKUP_STALE_MS (or ever). */
+  stale: boolean;
+}
 
 interface ConnState {
   userId: string;
@@ -416,6 +405,12 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     // snapshot and the replay are both filtered by the identity this socket was
     // accepted with, so a member never receives private-space rows either way.
     const userId = this.connUserId(ws);
+    // upsertUser closes a deactivated user's sockets, and the Worker refuses
+    // them at upgrade; this catches a socket accepted in between the two.
+    if (this.isDeactivated(userId)) {
+      this.closeSocket(ws, 1008, "user deactivated");
+      return;
+    }
     const maxSeq = this.maxSeq();
     if (msg.sinceSeq === null) {
       this.send(ws, { type: "snapshot", snapshot: this.getSnapshot(userId) });
@@ -489,7 +484,9 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
-    ws.close(websocketCloseReplyCode(code), reason);
+    // The reply can race a close we started (a deactivated user's socket), in
+    // which case the socket is already closing and close() throws.
+    this.closeSocket(ws, websocketCloseReplyCode(code), reason);
   }
 
   async webSocketError(_ws: WebSocket, error: unknown): Promise<void> {
@@ -596,6 +593,77 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   }
 
   /**
+   * Resync the users for whom a task or list changed space in this turn.
+   *
+   * A move is broadcast as an ordinary update stamped with the NEW space, which
+   * is only a correct patch for someone who sees both ends: a member who sees
+   * only the destination gets `{listId, statusId, …}` for a task they never
+   * held, and one who sees only the source never learns it left (nor, for a
+   * list, that its tasks went with it). Like a visibility flip, that cannot be
+   * patched, so the floor is bumped and exactly those users resync. Same-list
+   * and same-space moves stop at the first checks, so ordinary drags stay cheap.
+   *
+   * Runs before `flush`, so an affected client sees `resync` first and drops
+   * the half-patch that follows instead of briefly rendering it.
+   */
+  private resyncForSpaceMoves(t: Turn): void {
+    const moves: Array<{ from: string | null; to: string | null }> = [];
+    for (const { delta, spaceId } of t.entries) {
+      if (delta.op !== "update" || delta.data === null) continue;
+      let from: string | null;
+      if (delta.entity === "task" && "listId" in delta.data) {
+        const prevListId = delta.prev?.["listId"];
+        if (typeof prevListId !== "string") continue;
+        from = this.spaceIdForList(prevListId);
+      } else if (delta.entity === "list" && "spaceId" in delta.data) {
+        const prevSpaceId = delta.prev?.["spaceId"];
+        if (typeof prevSpaceId !== "string") continue;
+        from = prevSpaceId;
+      } else {
+        continue;
+      }
+      if (from !== spaceId) moves.push({ from, to: spaceId });
+    }
+    if (moves.length === 0) return;
+
+    // Between two workspace-visible spaces everyone sees both ends already.
+    const restricted = privateSpaceIds(this.sql);
+    const isRestricted = (id: string | null) => id !== null && restricted.has(id);
+    if (!moves.some((m) => isRestricted(m.from) || isRestricted(m.to))) return;
+
+    // Offline clients replaying across this seq would hit the same hole.
+    bumpResyncFloor(this.sql, this.maxSeq());
+    this.resyncFor((userId) => {
+      const visible = visibleSpaceIds(this.sql, userId);
+      if (visible === null) return false;
+      const sees = (id: string | null) => id !== null && visible.has(id);
+      return moves.some((m) => sees(m.from) !== sees(m.to));
+    });
+  }
+
+  /** Every open socket accepted for this user id (see `ConnState`). */
+  private socketsFor(userId: string): WebSocket[] {
+    return this.ctx.getWebSockets().filter((ws) => this.connUserId(ws) === userId);
+  }
+
+  private closeSocket(ws: WebSocket, code: number, reason: string): void {
+    try {
+      ws.close(code, reason);
+    } catch {
+      // Already closing; the close handler cleans up.
+    }
+  }
+
+  /** Unknown ids are not "deactivated": they keep the member treatment. */
+  private isDeactivated(userId: string): boolean {
+    if (userId === "") return false;
+    const row = this.sql
+      .exec<{ deactivated: number }>("SELECT deactivated FROM users WHERE id = ?", userId)
+      .toArray()[0];
+    return row?.deactivated === 1;
+  }
+
+  /**
    * Replayed deltas paired with the space id STORED on each `changes` row at
    * emit time (null for pre-migration rows and genuinely space-less deltas).
    * The stored value survives row deletion, which live resolution does not.
@@ -641,6 +709,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     this.drainAutomations(t);
     // After automations, so a rule that reassigns or moves a task also notifies.
     this.drainNotifications(t);
+    // After automations too: a move_to_list rule can carry a task across spaces.
+    this.resyncForSpaceMoves(t);
     this.flush(t);
     return result;
   }
@@ -732,8 +802,15 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       }
       if ("statusId" in data) {
         const statusName = getStatus(this.sql, String(data["statusId"]))?.name ?? facts.statusName;
-        for (const rid of recipientsFor("status", { assigneeId: facts.task.assigneeId, creatorId: facts.task.createdBy }, actorId)) {
-          this.sendNotification(t, "status", facts, rid, actorId, { statusName });
+        // Status ids are per-list: a cross-list move from "Done" to "Done" swaps
+        // the id but is not a status change anyone should be emailed about.
+        const prevStatusId = delta.prev?.["statusId"];
+        const prevName =
+          typeof prevStatusId === "string" ? getStatus(this.sql, prevStatusId)?.name : undefined;
+        if (prevName?.toLowerCase() !== statusName.toLowerCase()) {
+          for (const rid of recipientsFor("status", { assigneeId: facts.task.assigneeId, creatorId: facts.task.createdBy }, actorId)) {
+            this.sendNotification(t, "status", facts, rid, actorId, { statusName });
+          }
         }
       }
       return;
@@ -842,16 +919,30 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   private flush(t: Turn): void {
     this.broadcastDeltas(t.scopedBroadcastable());
 
-    // Queues' sendBatch caps at 100 messages / 256KB. A single bulk operation
-    // (e.g. a bulk status change firing a webhook rule) can enqueue far more
-    // than that in one turn, so chunk on both limits rather than let sendBatch
-    // throw the whole turn's side effects away.
-    for (const chunk of chunkSideEffects(t.sideEffects)) {
+    // Queues' sendBatch caps at 100 messages / 256KB, and each message at
+    // 128KB. A single bulk operation (e.g. a bulk status change firing a
+    // webhook rule) can enqueue far more than that in one turn, and one big
+    // task description can blow the per-message cap, so chunkSideEffects
+    // truncates oversized payloads and chunks on both batch limits rather than
+    // let sendBatch throw the whole chunk away. Anything that still never
+    // reaches the queue gets an ok:false run-log row, because the engine
+    // already logged it as "queued".
+    const chunks = chunkSideEffects(t.sideEffects, (payload, bytes) =>
+      this.recordEnqueueFailures(
+        [payload],
+        `not sent: payload is ${bytes} bytes even after truncation, over the ${SIDE_EFFECTS_MESSAGE_BYTES}-byte queue message budget`
+      )
+    );
+    for (const chunk of chunks) {
       const batch = chunk.map((body) => ({ body }));
       this.ctx.waitUntil(
-        this.env.SIDE_EFFECTS.sendBatch(batch).catch((err: unknown) =>
-          console.error("side effect enqueue failed", err)
-        )
+        this.env.SIDE_EFFECTS.sendBatch(batch).catch((err: unknown) => {
+          console.error("side effect enqueue failed", { messages: chunk.length }, err);
+          this.recordEnqueueFailures(
+            chunk,
+            `not sent: queue rejected the batch (${err instanceof Error ? err.message : String(err)})`
+          );
+        })
       );
     }
 
@@ -860,6 +951,28 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       .exec<{ next: number | null }>("SELECT MIN(run_at) AS next FROM scheduled_jobs")
       .one();
     if (next !== null && next !== this.armedAlarm) this.ctx.waitUntil(this.armAlarm());
+  }
+
+  /**
+   * Same ok:false row the queue consumer writes for a failed delivery, for
+   * side effects that never made it onto the queue at all. Only automation
+   * payloads have a rule to log against; notification emails (ruleId
+   * "notify:*") get the console line alone.
+   */
+  private recordEnqueueFailures(payloads: readonly unknown[], detail: string): void {
+    for (const payload of payloads) {
+      const p = payload as { kind?: unknown; ruleId?: unknown; taskId?: unknown; url?: unknown };
+      if (p.kind !== "webhook" && p.kind !== "email") continue;
+      if (typeof p.ruleId !== "string" || typeof p.taskId !== "string") continue;
+      if (p.ruleId.startsWith("notify:")) continue;
+      const target = p.kind === "webhook" ? `webhook ${String(p.url)}` : "email";
+      this.recordDeliveryFailure({
+        ruleId: p.ruleId,
+        taskId: p.taskId,
+        kind: p.kind,
+        detail: `${target} ${detail}`,
+      });
+    }
   }
 
   private automationContext(t: Turn, depth: number): AutomationContext {
@@ -2734,7 +2847,11 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         after as unknown as Record<string, unknown>,
         ["name", "archived", "position", "spaceId"]
       );
-      t.emit("update", "list", after.id, patch);
+      // `prev.spaceId` is how resyncForSpaceMoves spots a cross-space move: the
+      // list and every task under it just changed visibility for someone.
+      t.emit("update", "list", after.id, patch, {
+        prev: prevOf(before as unknown as Record<string, unknown>, patch),
+      });
       t.audit("list.update", after.id, patch);
       return after;
     });
@@ -2871,10 +2988,27 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
   /** Upsert by id when given, otherwise by email (case-insensitive). */
   upsertUser(input: UpsertUserInput, actor: string | Actor): User {
-    return this.runTurn(toActor(actor), (t) => this.applyUserUpsert(t, input));
+    const { before, after } = this.runTurn(toActor(actor), (t) => this.applyUserUpsert(t, input));
+    if (before === null) return after;
+    // Crossing member <-> owner/admin changes everything this user may see,
+    // automation rules included. The user delta cannot express that, so replay
+    // from any earlier seq is invalid and their open sockets resync.
+    if (isPrivilegedRole(before.role) !== isPrivilegedRole(after.role)) {
+      bumpResyncFloor(this.sql, this.maxSeq());
+      if (!after.deactivated) {
+        for (const ws of this.socketsFor(after.id)) this.send(ws, { type: "resync" });
+      }
+    }
+    // The Worker refuses a deactivated user at upgrade, but a socket that is
+    // already open would otherwise keep streaming deltas indefinitely.
+    if (after.deactivated) {
+      for (const ws of this.socketsFor(after.id)) this.closeSocket(ws, 1008, "user deactivated");
+    }
+    return after;
   }
 
-  private applyUserUpsert(t: Turn, input: UpsertUserInput): User {
+  /** `before` is null for a newly created user, and equals `after` on a no-op. */
+  private applyUserUpsert(t: Turn, input: UpsertUserInput): { before: User | null; after: User } {
     const email = input.email.trim();
     const existingRows = this.sql
       .exec<UserRow>(
@@ -2909,7 +3043,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       );
       t.emit("create", "user", user.id, user as unknown as Record<string, unknown>);
       t.audit("user.create", user.id, { email: user.email, role: user.role });
-      return user;
+      return { before: null, after: user };
     }
 
     const before = toUser(existing);
@@ -2935,7 +3069,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       sets.push("clickup_id = ?");
       params.push(input.clickupId);
     }
-    if (sets.length === 0) return before;
+    if (sets.length === 0) return { before, after: before };
     this.sql.exec(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`, ...params, before.id);
     const after = toUser(
       this.sql
@@ -2953,7 +3087,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     );
     t.emit("update", "user", after.id, patch);
     t.audit("user.update", after.id, patch);
-    return after;
+    return { before, after };
   }
 
   createApiKey(input: CreateApiKeyInput, actor: string | Actor): ApiKey {
@@ -3584,9 +3718,13 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     const alarmStartedAt = Date.now();
     const now = Date.now();
+    // Oldest first, except the backup always goes last: it is the one job
+    // heavy enough to kill the isolate (it holds every table in memory), so
+    // everything else due in this alarm has already run if it does.
     const jobs = this.sql
       .exec<JobRow>(
-        "SELECT id, run_at, kind, payload, every_ms FROM scheduled_jobs WHERE run_at <= ? ORDER BY run_at LIMIT 100",
+        `SELECT id, run_at, kind, payload, every_ms FROM scheduled_jobs
+         WHERE run_at <= ? ORDER BY kind = 'backup', run_at LIMIT 100`,
         now
       )
       .toArray();
@@ -3603,6 +3741,14 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     let completed = 0;
     let failed = 0;
     for (const job of jobs) {
+      // Claim the job BEFORE running it, and wait for that write to be
+      // durable. A job that kills the isolate outright (OOM, CPU limit) never
+      // reaches the catch below, so if the reschedule came after the await,
+      // every alarm retry would pick the same job again and starve the rest.
+      // Claimed first, a crash costs only that one run.
+      this.claimJob(job, now);
+      await this.ctx.storage.sync();
+
       const jobStartedAt = Date.now();
       let result: Record<string, number> = { processed: 0 };
       let status = "ok";
@@ -3626,20 +3772,6 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
           })
         );
       }
-      this.sql.exec("DELETE FROM scheduled_jobs WHERE id = ?", job.id);
-      if (job.every_ms !== null && job.every_ms > 0) {
-        // Skip missed intervals rather than firing a backlog.
-        let nextRun = job.run_at + job.every_ms;
-        while (nextRun <= now) nextRun += job.every_ms;
-        this.sql.exec(
-          "INSERT INTO scheduled_jobs (run_at, kind, payload, every_ms, created_at) VALUES (?, ?, ?, ?, ?)",
-          nextRun,
-          job.kind,
-          job.payload,
-          job.every_ms,
-          now
-        );
-      }
     }
 
     this.armedAlarm = null;
@@ -3653,6 +3785,21 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         duration_ms: Math.max(0, Date.now() - alarmStartedAt),
       })
     );
+  }
+
+  /**
+   * Take a due job off the schedule: a one-off is deleted, a recurring one is
+   * advanced to its next slot. At-most-once per slot, whatever the outcome.
+   */
+  private claimJob(job: JobRow, now: number): void {
+    if (job.every_ms !== null && job.every_ms > 0) {
+      // Skip missed intervals rather than firing a backlog.
+      let nextRun = job.run_at + job.every_ms;
+      while (nextRun <= now) nextRun += job.every_ms;
+      this.sql.exec("UPDATE scheduled_jobs SET run_at = ? WHERE id = ?", nextRun, job.id);
+    } else {
+      this.sql.exec("DELETE FROM scheduled_jobs WHERE id = ?", job.id);
+    }
   }
 
   /** Queue a one-off job; automations can use this via ctx.sql too. */
@@ -3673,7 +3820,13 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       case "prune_changes": {
         const changes = this.pruneChanges();
         const runs = this.pruneAutomationRuns();
-        return { changes_pruned: changes, automation_runs_pruned: runs, processed: changes + runs };
+        const audit = this.pruneAudit(now);
+        return {
+          changes_pruned: changes,
+          automation_runs_pruned: runs,
+          audit_pruned: audit,
+          processed: changes + runs + audit,
+        };
       }
       case "backup":
         return this.runBackup(now);
@@ -3719,38 +3872,145 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     return this.sql.exec("DELETE FROM automation_runs WHERE id <= ?", floor).rowsWritten;
   }
 
+  /**
+   * Deletes audit rows older than AUDIT_RETENTION_DAYS, oldest first, in
+   * batches of AUDIT_PRUNE_BATCH and at most AUDIT_PRUNE_MAX_BATCHES per run.
+   * The inner SELECT walks `idx_audit_at` and the outer DELETE is by rowid.
+   * RETURNING gives an exact count; rowsWritten would include index writes.
+   */
+  private pruneAudit(now: number): number {
+    const cutoff = now - AUDIT_RETENTION_DAYS * DAY_MS;
+    let deleted = 0;
+    for (let batch = 0; batch < AUDIT_PRUNE_MAX_BATCHES; batch++) {
+      const n = this.sql
+        .exec(
+          `DELETE FROM audit WHERE id IN (
+             SELECT id FROM audit WHERE at < ? ORDER BY at LIMIT ?
+           ) RETURNING id`,
+          cutoff,
+          AUDIT_PRUNE_BATCH
+        )
+        .toArray().length;
+      deleted += n;
+      if (n < AUDIT_PRUNE_BATCH) break;
+    }
+    return deleted;
+  }
+
   /** Manual trigger for the daily backup (admin route); same code path as the
-   *  scheduled job, including the prune and orphan sweep. */
+   *  scheduled job, including the prune, the orphan sweep and the outcome
+   *  recorded in `job_status`. */
   runBackupNow(): Promise<Record<string, number>> {
     return this.runBackup(Date.now());
   }
 
   /**
+   * The backup's last recorded outcome. `stale` compares against `now`, so it
+   * also catches a backup that stopped running without ever reporting a
+   * failure (an isolate killed mid-dump never reaches the catch). The error
+   * text and object key are for admins; /api/health exposes only the times
+   * and the flag.
+   */
+  getBackupStatus(now: number = Date.now()): BackupStatus {
+    const row = this.sql
+      .exec<{
+        last_success_at: number | null;
+        last_success_detail: string | null;
+        last_failure_at: number | null;
+        last_failure_error: string | null;
+      }>(
+        `SELECT last_success_at, last_success_detail, last_failure_at, last_failure_error
+         FROM job_status WHERE kind = 'backup'`
+      )
+      .toArray()[0];
+    const lastSuccessAt = row?.last_success_at ?? null;
+    const detail =
+      row?.last_success_detail != null
+        ? (safeJson(row.last_success_detail) as BackupStatus["lastSuccess"])
+        : null;
+    return {
+      lastSuccessAt,
+      lastSuccess: detail,
+      lastFailureAt: row?.last_failure_at ?? null,
+      lastFailureError: row?.last_failure_error ?? null,
+      stale: lastSuccessAt === null || now - lastSuccessAt > BACKUP_STALE_MS,
+    };
+  }
+
+  /**
    * Dumps every user table to gzipped NDJSON in R2 (`backups/YYYY-MM-DD.ndjson.gz`,
    * one `{"table":...,"row":...}` line per row) and prunes to the newest 30
-   * objects under `backups/`. A thrown error here is caught by alarm()'s
-   * per-job try/catch like every other job kind — it does not wedge the
-   * schedule, and the job's `every_ms` reschedule (also in alarm(), outside
-   * the try/catch) fires it again tomorrow regardless of today's outcome.
+   * objects under `backups/`. The outcome lands in `job_status` either way: a
+   * success once the object is in R2, a failure (then rethrown to alarm()'s
+   * per-job catch) if the dump, the put, or the post-backup cleanup throws.
+   * alarm() has already advanced the job to tomorrow before this runs.
    */
   private async runBackup(now: number): Promise<Record<string, number>> {
-    const tables = backupTableNames(this.sql);
-    let rows = 0;
-    const lines: string[] = [];
-    for (const table of tables) {
-      const tableRows = this.sql.exec<Record<string, SqlStorageValue>>(`SELECT * FROM ${table}`).toArray();
-      for (const row of tableRows) {
-        lines.push(JSON.stringify({ table, row }));
-        rows += 1;
+    let written: string | null = null;
+    try {
+      const tables = backupTableNames(this.sql);
+      let rows = 0;
+      const lines: string[] = [];
+      for (const table of tables) {
+        const tableRows = this.sql.exec<Record<string, SqlStorageValue>>(`SELECT * FROM ${table}`).toArray();
+        for (const row of tableRows) {
+          lines.push(JSON.stringify({ table, row }));
+          rows += 1;
+        }
       }
+      const ndjson = lines.length > 0 ? lines.join("\n") + "\n" : "";
+      const gz = await gzipText(ndjson);
+      const key = `backups/${backupDateKey(now)}.ndjson.gz`;
+      await this.env.ATTACHMENTS.put(key, gz);
+      written = key;
+      this.recordJobOutcome("backup", now, { success: { key, rows, bytes: gz.byteLength } });
+      const pruned = await pruneOldBackups(this.env.ATTACHMENTS, BACKUP_RETENTION);
+      const sweptDeletes = await this.sweepPendingObjectDeletes();
+      return { processed: rows, tables: tables.length, bytes: gz.byteLength, pruned, sweptDeletes };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.recordJobOutcome("backup", now, {
+        failure:
+          written === null ? message : `${written} was written, but post-backup cleanup failed: ${message}`,
+      });
+      throw err;
     }
-    const ndjson = lines.length > 0 ? lines.join("\n") + "\n" : "";
-    const gz = await gzipText(ndjson);
-    const key = `backups/${backupDateKey(now)}.ndjson.gz`;
-    await this.env.ATTACHMENTS.put(key, gz);
-    const pruned = await pruneOldBackups(this.env.ATTACHMENTS, BACKUP_RETENTION);
-    const sweptDeletes = await this.sweepPendingObjectDeletes();
-    return { processed: rows, tables: tables.length, bytes: gz.byteLength, pruned, sweptDeletes };
+  }
+
+  /**
+   * Upsert one job kind's row in `job_status`. Never throws: failing to
+   * record an outcome must not turn a good backup into a failed job.
+   */
+  private recordJobOutcome(
+    kind: string,
+    at: number,
+    outcome: { success: Record<string, unknown> } | { failure: string }
+  ): void {
+    try {
+      if ("success" in outcome) {
+        this.sql.exec(
+          `INSERT INTO job_status (kind, last_success_at, last_success_detail) VALUES (?, ?, ?)
+           ON CONFLICT (kind) DO UPDATE SET
+             last_success_at = excluded.last_success_at,
+             last_success_detail = excluded.last_success_detail`,
+          kind,
+          at,
+          JSON.stringify(outcome.success)
+        );
+      } else {
+        this.sql.exec(
+          `INSERT INTO job_status (kind, last_failure_at, last_failure_error) VALUES (?, ?, ?)
+           ON CONFLICT (kind) DO UPDATE SET
+             last_failure_at = excluded.last_failure_at,
+             last_failure_error = excluded.last_failure_error`,
+          kind,
+          at,
+          outcome.failure.slice(0, 2_000)
+        );
+      }
+    } catch (err) {
+      console.error("cannot record job outcome", kind, err);
+    }
   }
 
   /**

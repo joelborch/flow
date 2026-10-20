@@ -1,5 +1,5 @@
 // ClickUp -> Flow importer. Runs locally in Node (tsx), never deployed.
-// Owned by the importer agent. Three passes: extract to raw JSON on disk,
+// Three passes: extract to raw JSON on disk,
 // transform to Flow entities, load via the Flow REST API (import mode:
 // automations never fire on imported mutations — that guarantee is the API's,
 // this CLI just uses the import routes).

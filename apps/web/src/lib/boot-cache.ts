@@ -19,8 +19,11 @@ import type { BoardSnapshot, User } from "@flow/shared";
  * 1 — snapshots carried full `Task` rows.
  * 2 — snapshots carry `SnapshotTask` (no description/startDate/createdBy/
  *     closedAt/clickupId, plus `hasDescription`).
+ * 3 — same layout. Bumped to discard caches written while an `update` delta
+ *     for an unknown id could insert a partial row (no title, listId or
+ *     statuses) that then survived every reload.
  */
-export const SCHEMA_STAMP = 2;
+export const SCHEMA_STAMP = 3;
 
 /** Mirrored in index.html. */
 export const BOOT_KEY = "flow.boot";
@@ -46,11 +49,20 @@ export function readBootCache(): BootCache | null {
       typeof parsed.userId !== "string" ||
       typeof parsed.seq !== "number" ||
       !parsed.snapshot ||
-      !Array.isArray(parsed.snapshot.tasks)
+      !Array.isArray(parsed.snapshot.tasks) ||
+      !Array.isArray(parsed.snapshot.lists)
     ) {
       clearBootCache();
       return null;
     }
+    // Belt and braces for the partial-row bug stamp 3 retired: a row missing
+    // what every view indexes on would throw on first render, so drop it. The
+    // client never held the real row anyway, only a fragment of an update.
+    const snapshot = parsed.snapshot;
+    snapshot.tasks = snapshot.tasks.filter(
+      (t) => typeof t?.title === "string" && typeof t?.listId === "string"
+    );
+    snapshot.lists = snapshot.lists.filter((l) => Array.isArray(l?.statuses));
     return parsed as BootCache;
   } catch {
     // Corrupt entry or private mode. Either way, boot as if there were none.

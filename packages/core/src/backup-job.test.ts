@@ -39,13 +39,18 @@ function sqliteStorage(db: DatabaseSync): SqlStorage {
   return { exec } as unknown as SqlStorage;
 }
 
-function fakeCtx(db: DatabaseSync): DurableObjectState {
+function fakeCtx(db: DatabaseSync, events: string[] = []): DurableObjectState {
   return {
     id: { toString: () => "do_test" },
     storage: {
       sql: sqliteStorage(db),
       getAlarm: async () => null,
       setAlarm: async () => undefined,
+      // alarm() waits on this after claiming each job; the log lets a test
+      // check the claim was durable before the job started.
+      sync: async () => {
+        events.push("sync");
+      },
       // Migrations run inside storage.transactionSync in production; emulate
       // its throws-roll-back contract with a node:sqlite savepoint (explicit
       // savepoints are legal here, unlike in workerd's sql.exec).
@@ -75,10 +80,11 @@ interface StoredObject {
 }
 
 /** Minimal in-memory R2Bucket: enough of put/list/delete for the backup job. */
-function fakeR2Bucket() {
+function fakeR2Bucket(events: string[] = []) {
   const objects = new Map<string, StoredObject>();
   const bucket = {
     async put(key: string, value: ArrayBuffer) {
+      events.push("put");
       objects.set(key, { key, body: value });
       return undefined;
     },
@@ -96,13 +102,21 @@ function fakeR2Bucket() {
   return { bucket: bucket as unknown as R2Bucket, objects };
 }
 
-async function freshWorkspace(bucket: R2Bucket) {
+async function freshWorkspace(bucket: R2Bucket, db = new DatabaseSync(":memory:"), events: string[] = []) {
   const { Workspace } = await import("./index.js");
-  const db = new DatabaseSync(":memory:");
-  const ctx = fakeCtx(db);
+  const ctx = fakeCtx(db, events);
   const env = { ATTACHMENTS: bucket } as never;
   return { ws: new Workspace(ctx, env), db };
 }
+
+type JobRunner = { runJob(job: unknown, now: number): Promise<Record<string, number>> };
+const backupJob = (now: number) => ({
+  id: 1,
+  run_at: now,
+  kind: "backup",
+  payload: null,
+  every_ms: 86_400_000,
+});
 
 async function gunzip(buf: ArrayBuffer): Promise<string> {
   const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
@@ -216,5 +230,141 @@ describe("backup job", () => {
     // The oldest ones are gone.
     expect(objects.has("backups/2026-01-01.ndjson.gz")).toBe(false);
     expect(objects.has("backups/2026-01-02.ndjson.gz")).toBe(false);
+  });
+});
+
+describe("backup outcome in job_status", () => {
+  const HOUR = 3_600_000;
+
+  it("records the last success with its key and row count, and goes stale after 36h", async () => {
+    const { BACKUP_STALE_MS } = await import("./index.js");
+    const r2 = fakeR2Bucket();
+    const { ws } = await freshWorkspace(r2.bucket);
+    expect(ws.getBackupStatus()).toEqual({
+      lastSuccessAt: null,
+      lastSuccess: null,
+      lastFailureAt: null,
+      lastFailureError: null,
+      stale: true, // never backed up
+    });
+
+    const now = Date.UTC(2026, 8, 20, 5, 0, 0);
+    const stats = await (ws as unknown as JobRunner).runJob(backupJob(now), now);
+
+    const status = ws.getBackupStatus(now + HOUR);
+    expect(status.lastSuccessAt).toBe(now);
+    expect(status.lastSuccess).toEqual({
+      key: "backups/2026-09-20.ndjson.gz",
+      rows: stats.processed,
+      bytes: stats.bytes,
+    });
+    expect(status.lastFailureAt).toBeNull();
+    expect(status.stale).toBe(false);
+    expect(ws.getBackupStatus(now + BACKUP_STALE_MS).stale).toBe(false);
+    expect(ws.getBackupStatus(now + BACKUP_STALE_MS + 1).stale).toBe(true);
+  });
+
+  it("records a failed run's time and error, rethrows, and keeps the previous success", async () => {
+    const r2 = fakeR2Bucket();
+    const { ws } = await freshWorkspace(r2.bucket);
+    const day1 = Date.UTC(2026, 7, 10, 5, 0, 0);
+    await (ws as unknown as JobRunner).runJob(backupJob(day1), day1);
+
+    r2.bucket.put = (async () => {
+      throw new Error("R2 put failed: 503 Service Unavailable");
+    }) as unknown as R2Bucket["put"];
+    const day2 = day1 + 24 * HOUR;
+    await expect((ws as unknown as JobRunner).runJob(backupJob(day2), day2)).rejects.toThrow(
+      "R2 put failed"
+    );
+
+    const status = ws.getBackupStatus(day2 + 13 * HOUR); // 37h after the last success
+    expect(status.lastSuccessAt).toBe(day1);
+    expect(status.lastFailureAt).toBe(day2);
+    expect(status.lastFailureError).toBe("R2 put failed: 503 Service Unavailable");
+    expect(status.stale).toBe(true);
+  });
+
+  it("counts a backup whose post-write cleanup fails as written, and records the cleanup failure", async () => {
+    const r2 = fakeR2Bucket();
+    r2.bucket.list = (async () => {
+      throw new Error("list timed out");
+    }) as unknown as R2Bucket["list"];
+    const { ws } = await freshWorkspace(r2.bucket);
+    const now = Date.UTC(2026, 8, 20, 5, 0, 0);
+    await expect((ws as unknown as JobRunner).runJob(backupJob(now), now)).rejects.toThrow(
+      "list timed out"
+    );
+
+    const status = ws.getBackupStatus(now);
+    expect(status.lastSuccessAt).toBe(now);
+    expect(status.stale).toBe(false);
+    expect(status.lastFailureAt).toBe(now);
+    expect(status.lastFailureError).toBe(
+      "backups/2026-09-20.ndjson.gz was written, but post-backup cleanup failed: list timed out"
+    );
+  });
+
+  it("runBackupNow records its outcome too", async () => {
+    const r2 = fakeR2Bucket();
+    const { ws } = await freshWorkspace(r2.bucket);
+    const before = Date.now();
+    await ws.runBackupNow();
+    const status = ws.getBackupStatus();
+    expect(status.lastSuccessAt).toBeGreaterThanOrEqual(before);
+    expect(status.stale).toBe(false);
+  });
+});
+
+describe("alarm: a backup that kills the isolate cannot wedge the schedule", () => {
+  const jobRow = (db: DatabaseSync, kind: string) =>
+    db
+      .prepare("SELECT id, run_at FROM scheduled_jobs WHERE kind = ? AND every_ms IS NOT NULL")
+      .all(kind)[0] as { id: number; run_at: number };
+
+  it("runs the other due jobs first, and claims the backup durably before starting it", async () => {
+    const events: string[] = [];
+    const r2 = fakeR2Bucket(events);
+    // A put that never settles stands in for the isolate dying mid-backup:
+    // nothing after it in runBackup, or in alarm(), ever runs.
+    let putStarted!: () => void;
+    const started = new Promise<void>((resolve) => (putStarted = resolve));
+    r2.bucket.put = (() => {
+      events.push("put");
+      putStarted();
+      return new Promise(() => undefined);
+    }) as unknown as R2Bucket["put"];
+
+    const db = new DatabaseSync(":memory:");
+    const first = await freshWorkspace(r2.bucket, db, events);
+    const now = Date.now();
+    // The backup is the OLDEST due job, which used to make it run first.
+    db.prepare("UPDATE scheduled_jobs SET run_at = ? WHERE kind = 'backup'").run(now - 2_000);
+    db.prepare("UPDATE scheduled_jobs SET run_at = ? WHERE kind = 'prune_changes'").run(now - 1_000);
+
+    void first.ws.alarm();
+    await started;
+
+    // prune_changes ran and was rescheduled before the backup started ...
+    expect(jobRow(db, "prune_changes").run_at).toBeGreaterThan(now);
+    // ... and the backup was advanced to tomorrow, with the write synced,
+    // before it touched R2.
+    expect(jobRow(db, "backup").run_at).toBeGreaterThan(now);
+    expect(events.slice(-2)).toEqual(["sync", "put"]);
+
+    // "Restart": a fresh instance over the same storage. A due one-off job
+    // runs; the backup that killed the last one is not retried first.
+    const healthy = fakeR2Bucket(events);
+    const second = await freshWorkspace(healthy.bucket, db, events);
+    second.ws.scheduleJob({ runAt: Date.now() - 1, kind: "snooze_wake" });
+    const putsBefore = events.filter((e) => e === "put").length;
+    await second.ws.alarm();
+
+    expect(events.filter((e) => e === "put").length).toBe(putsBefore);
+    expect(healthy.objects.size).toBe(0);
+    const oneOffs = db
+      .prepare("SELECT COUNT(*) AS n FROM scheduled_jobs WHERE kind = 'snooze_wake'")
+      .all()[0] as { n: number };
+    expect(oneOffs.n).toBe(0);
   });
 });

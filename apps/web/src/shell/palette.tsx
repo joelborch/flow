@@ -138,7 +138,9 @@ function taskItem(
 function localTasks(q: string): Item[] {
   const out: Item[] = [];
   for (const t of tasks.value.values()) {
-    const s = score(t.title, q);
+    // A row without a title should never reach the store, but one bad row must
+    // not take the whole palette down with it.
+    const s = score(t.title ?? "", q);
     if (s === null) continue;
     out.push(taskItem(t, s));
   }

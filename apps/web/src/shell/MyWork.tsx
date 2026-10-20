@@ -2,6 +2,7 @@
 // by when it's due — the view that answers "what am I doing today".
 import { useState } from "preact/hooks";
 import { isSnoozed, snoozeUntilLabel } from "../lib/fmt.js";
+import { titleLink } from "../lib/title-link.js";
 import type { StoreTask } from "../store/index.js";
 import { me, toggleSubtask } from "../store/index.js";
 import {
@@ -17,7 +18,9 @@ import {
 } from "./data.js";
 import { cn, formatDue, startOfDay, today } from "./format.js";
 import { openTask } from "./nav.js";
-import { Avatar, ChevronDown, ChevronRight, NoteLines, PriorityFlag, StatusDot } from "./ui.js";
+import {
+  Avatar, ChevronDown, ChevronRight, NoteLines, PriorityFlag, StatusDot, TitleLinkIcon,
+} from "./ui.js";
 
 const DAY = 86_400_000;
 
@@ -90,6 +93,7 @@ function TaskRow({ task }: { task: StoreTask }) {
   const space = spaceOfList(task.listId);
   const snoozed = isSnoozed(task.snoozedUntil);
   const overdue = !snoozed && task.dueDate !== null && startOfDay(task.dueDate) < today();
+  const link = titleLink(task.title);
 
   return (
     <li>
@@ -107,6 +111,7 @@ function TaskRow({ task }: { task: StoreTask }) {
         <span class="min-w-0 flex-[3_1_0%] truncate text-[13.5px] text-text group-hover:text-text">
           {task.title}
         </span>
+        {link ? <TitleLinkIcon url={link} /> : null}
 
         {task.priority && <PriorityFlag priority={task.priority} class="shrink-0" />}
 

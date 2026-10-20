@@ -1,6 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AUTOMATION_RUNS_RETENTION, CHANGES_RETENTION } from "./index.js";
+import {
+  AUDIT_PRUNE_BATCH,
+  AUDIT_PRUNE_MAX_BATCHES,
+  AUDIT_RETENTION_DAYS,
+  AUTOMATION_RUNS_RETENTION,
+  CHANGES_RETENTION,
+} from "./index.js";
 
 vi.mock("cloudflare:workers", () => ({
   DurableObject: class {
@@ -15,7 +21,7 @@ vi.mock("cloudflare:workers", () => ({
 
 function sqliteStorage(db: DatabaseSync): SqlStorage {
   const exec = (query: string, ...params: unknown[]): unknown => {
-    const isRead = /^\s*SELECT/i.test(query);
+    const isRead = /^\s*SELECT/i.test(query) || /RETURNING/i.test(query);
     if (!isRead) {
       const result = db.prepare(query).run(...(params as never[])) as { changes?: number | bigint };
       return { toArray: () => [], one: () => undefined, rowsWritten: Number(result.changes ?? 0) };
@@ -97,6 +103,7 @@ describe("prune_changes job", () => {
     expect(result).toEqual({
       changes_pruned: 0,
       automation_runs_pruned: 0,
+      audit_pruned: 0,
       processed: 0,
     });
 
@@ -127,6 +134,7 @@ describe("prune_changes job", () => {
     expect(result).toEqual({
       changes_pruned: 0,
       automation_runs_pruned: 30,
+      audit_pruned: 0,
       processed: 30,
     });
 
@@ -171,6 +179,7 @@ describe("prune_changes job", () => {
     expect(result).toEqual({
       changes_pruned: 15,
       automation_runs_pruned: 25,
+      audit_pruned: 0,
       processed: 40,
     });
 
@@ -191,5 +200,72 @@ describe("prune_changes job", () => {
     expect(runsRemaining.c).toBe(AUTOMATION_RUNS_RETENTION);
     expect(runsRemaining.minId).toBe(26);
     expect(runsRemaining.maxId).toBe(totalRuns);
+  });
+});
+
+describe("prune_changes job: audit retention", () => {
+  const DAY = 86_400_000;
+  const NOW = Date.UTC(2026, 8, 24, 9, 0, 0);
+  const CUTOFF = NOW - AUDIT_RETENTION_DAYS * DAY;
+  let ws: Awaited<ReturnType<typeof freshWorkspace>>["ws"];
+  let db: DatabaseSync;
+
+  beforeEach(async () => {
+    ({ ws, db } = await freshWorkspace());
+  });
+
+  const insertAudit = (ats: number[]) => {
+    db.prepare("BEGIN TRANSACTION").run();
+    const insert = db.prepare(
+      "INSERT INTO audit (actor, action, entity, diff, at) VALUES ('{}', 'task.update', 'tk_1', NULL, ?)"
+    );
+    for (const at of ats) insert.run(at);
+    db.prepare("COMMIT").run();
+  };
+  const runPrune = () =>
+    (ws as unknown as { runJob(job: unknown, now: number): Promise<Record<string, number>> }).runJob(
+      { id: 1, run_at: NOW, kind: "prune_changes", payload: null, every_ms: DAY },
+      NOW
+    );
+  const auditAts = () =>
+    (db.prepare("SELECT at FROM audit ORDER BY at").all() as Array<{ at: number }>).map((r) => r.at);
+
+  it("deletes audit rows older than AUDIT_RETENTION_DAYS and keeps the rest", async () => {
+    const baseline = auditAts().length; // workspace setup may audit a few rows at NOW-ish
+    insertAudit([CUTOFF - 10 * DAY, CUTOFF - 1, CUTOFF, CUTOFF + 1, NOW - DAY]);
+
+    const result = await runPrune();
+
+    expect(result.audit_pruned).toBe(2);
+    expect(result.processed).toBe(2);
+    const left = auditAts();
+    expect(left).toHaveLength(baseline + 3);
+    expect(left.every((at) => at >= CUTOFF)).toBe(true);
+  });
+
+  it("stops at AUDIT_PRUNE_MAX_BATCHES batches per run, oldest first, and finishes the backlog next run", async () => {
+    const backlog = AUDIT_PRUNE_BATCH * AUDIT_PRUNE_MAX_BATCHES + 7;
+    insertAudit(Array.from({ length: backlog }, (_, i) => CUTOFF - DAY - backlog + i));
+
+    const first = await runPrune();
+    expect(first.audit_pruned).toBe(AUDIT_PRUNE_BATCH * AUDIT_PRUNE_MAX_BATCHES);
+    // The 7 survivors are the newest of the backlog.
+    const oldest = auditAts()[0];
+    expect(oldest).toBe(CUTOFF - DAY - 7);
+
+    const second = await runPrune();
+    expect(second.audit_pruned).toBe(7);
+    expect(auditAts().every((at) => at >= CUTOFF)).toBe(true);
+  });
+
+  it("reads the expired range through idx_audit_at rather than scanning the table", () => {
+    const plan = db
+      .prepare(
+        "EXPLAIN QUERY PLAN DELETE FROM audit WHERE id IN (SELECT id FROM audit WHERE at < ? ORDER BY at LIMIT ?)"
+      )
+      .all(CUTOFF, AUDIT_PRUNE_BATCH) as Array<{ detail: string }>;
+    const details = plan.map((row) => row.detail).join("\n");
+    expect(details).toMatch(/idx_audit_at/);
+    expect(details).not.toMatch(/SCAN audit(?! USING)/);
   });
 });
