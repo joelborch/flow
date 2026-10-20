@@ -49,7 +49,19 @@ function recoverExpiredSession(): boolean {
   return true;
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+export type RequestOptions = {
+  /** Default true. Background fetches the user never asked for pass false, so a
+   *  401 there throws instead of bouncing the page through Access; the next real
+   *  request still does the redirect. */
+  authRedirect?: boolean;
+};
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  opts: RequestOptions = {}
+): Promise<T> {
   let res: Response;
   try {
     res = await fetch(path, {
@@ -62,7 +74,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     throw new ApiError(0, err instanceof Error ? err.message : "Network unreachable");
   }
   if (!res.ok) {
-    if (res.status === 401 && typeof window !== "undefined") {
+    if (res.status === 401 && opts.authRedirect !== false && typeof window !== "undefined") {
       if (recoverExpiredSession()) {
         throw new ApiError(401, "Session expired, redirecting to login");
       }
@@ -107,8 +119,8 @@ export const api = {
   deleteTask: (taskId: string) =>
     request<void>("DELETE", `/api/tasks/${encodeURIComponent(taskId)}`),
 
-  taskDetail: (taskId: string) =>
-    request<TaskDetail>("GET", `/api/tasks/${encodeURIComponent(taskId)}`),
+  taskDetail: (taskId: string, opts?: RequestOptions) =>
+    request<TaskDetail>("GET", `/api/tasks/${encodeURIComponent(taskId)}`, undefined, opts),
 
   createSubtask: (taskId: string, title: string, assigneeId?: string | null) =>
     request<Subtask>("POST", `/api/tasks/${encodeURIComponent(taskId)}/subtasks`, {
