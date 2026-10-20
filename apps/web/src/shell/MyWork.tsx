@@ -4,10 +4,20 @@ import { useState } from "preact/hooks";
 import { isSnoozed, snoozeUntilLabel } from "../lib/fmt.js";
 import type { StoreTask } from "../store/index.js";
 import { me, toggleSubtask } from "../store/index.js";
-import { listById, myOpenSubtasks, myOpenTasks, spaceOfList, statusOfTask, type MyOpenSubtask } from "./data.js";
+import {
+  assignedOutBy,
+  listById,
+  myOpenSubtasks,
+  myOpenTasks,
+  spaceOfList,
+  statusOfTask,
+  userById,
+  type AssignedOutItem,
+  type MyOpenSubtask,
+} from "./data.js";
 import { cn, formatDue, startOfDay, today } from "./format.js";
 import { openTask } from "./nav.js";
-import { ChevronDown, ChevronRight, NoteLines, PriorityFlag, StatusDot } from "./ui.js";
+import { Avatar, ChevronDown, ChevronRight, NoteLines, PriorityFlag, StatusDot } from "./ui.js";
 
 const DAY = 86_400_000;
 
@@ -191,6 +201,155 @@ function SubtaskRow({ subtask, parent }: { subtask: MyOpenSubtask["subtask"]; pa
   );
 }
 
+const ASSIGNED_OUT_PREVIEW = 5;
+
+function assignedTask(item: AssignedOutItem): StoreTask {
+  return item.kind === "task" ? item.task : item.parent;
+}
+
+function assignedDue(item: AssignedOutItem): number | null {
+  return item.kind === "task" ? item.task.dueDate : item.subtask.dueDate;
+}
+
+function assignedAssigneeId(item: AssignedOutItem): string | null {
+  return item.kind === "task" ? item.task.assigneeId : item.subtask.assigneeId;
+}
+
+function assignedTitle(item: AssignedOutItem): string {
+  return item.kind === "task" ? item.task.title : item.subtask.title;
+}
+
+function assignedIsSnoozed(item: AssignedOutItem): boolean {
+  return isSnoozed(assignedTask(item).snoozedUntil);
+}
+
+function AssignedOutRow({ item }: { item: AssignedOutItem }) {
+  const task = assignedTask(item);
+  const list = listById(task.listId);
+  const assignee = userById(assignedAssigneeId(item));
+  const due = assignedDue(item);
+  const snoozed = assignedIsSnoozed(item);
+  const overdue = !snoozed && due !== null && startOfDay(due) < today();
+
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => openTask(task.id)}
+        class="group flex w-full items-start gap-2.5 border-b border-line px-3 py-3 text-left transition-colors last:border-b-0 hover:bg-raised"
+      >
+        <Avatar user={assignee} size="sm" />
+        <span class="min-w-0 flex-1">
+          <span class="line-clamp-2 text-[12.5px] leading-[1.35] text-text">
+            {assignedTitle(item)}
+          </span>
+          <span class="mt-1 block truncate text-[11px] text-faint">
+            {assignee?.name ?? "Unassigned"}
+            {list ? ` · ${list.name}` : ""}
+            {item.kind === "subtask" ? ` · ${task.title}` : ""}
+          </span>
+        </span>
+        <span
+          class={cn(
+            "mt-0.5 max-w-[64px] shrink-0 text-right text-[10.5px] tabular-nums",
+            snoozed || due === null ? "text-faint" : overdue ? "font-medium text-danger" : "text-muted"
+          )}
+        >
+          {snoozed && task.snoozedUntil !== null
+            ? `zZ ${formatDue(task.snoozedUntil)}`
+            : due === null
+              ? "No date"
+              : formatDue(due)}
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function AssignedOutCard({ items, compact = false }: { items: AssignedOutItem[]; compact?: boolean }) {
+  const [open, setOpen] = useState(!compact);
+  const [showAll, setShowAll] = useState(false);
+  const ordered = [...items].sort((a, b) => {
+    const snoozed = Number(assignedIsSnoozed(a)) - Number(assignedIsSnoozed(b));
+    return snoozed;
+  });
+  const visible = showAll ? ordered : ordered.slice(0, ASSIGNED_OUT_PREVIEW);
+  const t0 = today();
+  const overdue = items.filter((item) => {
+    const due = assignedDue(item);
+    return !assignedIsSnoozed(item) && due !== null && startOfDay(due) < t0;
+  }).length;
+  const dueToday = items.filter((item) => {
+    const due = assignedDue(item);
+    return !assignedIsSnoozed(item) && due !== null && startOfDay(due) === t0;
+  }).length;
+  const summary = items.length === 0
+    ? "Nothing delegated right now"
+    : [overdue > 0 ? `${overdue} overdue` : null, dueToday > 0 ? `${dueToday} today` : null]
+        .filter(Boolean)
+        .join(" · ") || "No immediate deadlines";
+
+  return (
+    <section aria-label="Assigned out" class="overflow-hidden rounded-xl border border-line bg-surface">
+      {compact ? (
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          class="flex w-full items-center gap-3 px-4 py-3 text-left"
+        >
+          <span class="min-w-0 flex-1">
+            <span class="flex items-center gap-2 text-[13px] font-semibold text-text">
+              Assigned out
+              <span class="rounded-full bg-accent-soft px-2 py-0.5 text-[10.5px] font-semibold tabular-nums text-accent">
+                {items.length}
+              </span>
+            </span>
+            <span class="mt-0.5 block text-[11.5px] text-muted">{summary}</span>
+          </span>
+          {open ? <ChevronDown class="h-3.5 w-3.5 text-faint" /> : <ChevronRight class="h-3.5 w-3.5 text-faint" />}
+        </button>
+      ) : (
+        <div class="flex items-start gap-3 border-b border-line px-4 py-3.5">
+          <span class="min-w-0 flex-1">
+            <span class="block text-[13px] font-semibold text-text">Assigned out</span>
+            <span class="mt-0.5 block text-[11.5px] text-muted">{summary}</span>
+          </span>
+          <span class="rounded-full bg-accent-soft px-2.5 py-1 text-[11px] font-semibold tabular-nums text-accent">
+            {items.length}
+          </span>
+        </div>
+      )}
+
+      {open ? (
+        items.length === 0 ? (
+          <p class="px-4 py-5 text-center text-[12px] text-faint">
+            Tasks you assign to other people will appear here.
+          </p>
+        ) : (
+          <>
+            <ul>{visible.map((item) => (
+              <AssignedOutRow
+                key={item.kind === "task" ? item.task.id : item.subtask.id}
+                item={item}
+              />
+            ))}</ul>
+            {items.length > ASSIGNED_OUT_PREVIEW ? (
+              <button
+                type="button"
+                onClick={() => setShowAll((value) => !value)}
+                class="w-full px-4 py-2.5 text-center text-[11.5px] font-medium text-accent transition-colors hover:bg-raised"
+              >
+                {showAll ? "Show less" : `View all ${items.length}`}
+              </button>
+            ) : null}
+          </>
+        )
+      ) : null}
+    </section>
+  );
+}
+
 /** The snoozed pile at the bottom: present, countable, collapsed by default. */
 function SnoozedBucket({ tasks }: { tasks: StoreTask[] }) {
   const [open, setOpen] = useState(false);
@@ -237,67 +396,80 @@ export function MyWork() {
     ...activeSubtasks.map((s): WorkItem => ({ kind: "subtask", subtask: s.subtask, parent: s.parent })),
   ].sort(compareItems);
   const buckets = bucketize(items);
+  const delegated = assignedOutBy(user?.id);
 
   return (
-    <div class="mx-auto max-w-[860px] px-3 py-6 sm:px-6 sm:py-8">
-      <div class="mb-6">
-        <h2 class="text-[20px] font-semibold tracking-[-0.02em] text-text">
-          {user ? `Hi ${user.name.split(" ")[0] ?? user.name}` : "My Work"}
-        </h2>
-        {/* Counts everything assigned, snoozed included, so this never
-            contradicts the sidebar's badge; the snoozed share is called out
-            separately because it is not work for today. */}
-        <p class="mt-1 text-[13px] text-muted">
-          {all.length === 0 && allSubtasks.length === 0
-            ? "Nothing is assigned to you right now."
-            : (() => {
-                const listCount = new Set([
-                  ...all.map((t) => t.listId),
-                  ...allSubtasks.map((s) => s.parent.listId),
-                ]).size;
-                const parts = [];
-                if (all.length > 0) parts.push(`${all.length} open ${all.length === 1 ? "task" : "tasks"}`);
-                if (allSubtasks.length > 0)
-                  parts.push(`${allSubtasks.length} ${allSubtasks.length === 1 ? "subtask" : "subtasks"}`);
-                return `${parts.join(" and ")} across ${listCount} ${listCount === 1 ? "list" : "lists"}${snoozedTasks.length > 0 ? `, ${snoozedTasks.length} snoozed` : ""}.`;
-              })()}
-        </p>
+    <div class="mx-auto max-w-[1240px] px-3 py-6 sm:px-6 sm:py-8">
+      <div class="grid items-start gap-y-6 xl:grid-cols-[minmax(0,860px)_320px] xl:gap-x-7">
+        <header class="min-w-0 xl:col-start-1 xl:row-start-1">
+          <h2 class="text-[20px] font-semibold tracking-[-0.02em] text-text">
+            {user ? `Hi ${user.name.split(" ")[0] ?? user.name}` : "My Work"}
+          </h2>
+          {/* Counts everything assigned, snoozed included, so this never
+              contradicts the sidebar's badge; the snoozed share is called out
+              separately because it is not work for today. */}
+          <p class="mt-1 text-[13px] text-muted">
+            {all.length === 0 && allSubtasks.length === 0
+              ? "Nothing is assigned to you right now."
+              : (() => {
+                  const listCount = new Set([
+                    ...all.map((t) => t.listId),
+                    ...allSubtasks.map((s) => s.parent.listId),
+                  ]).size;
+                  const parts = [];
+                  if (all.length > 0) parts.push(`${all.length} open ${all.length === 1 ? "task" : "tasks"}`);
+                  if (allSubtasks.length > 0)
+                    parts.push(`${allSubtasks.length} ${allSubtasks.length === 1 ? "subtask" : "subtasks"}`);
+                  return `${parts.join(" and ")} across ${listCount} ${listCount === 1 ? "list" : "lists"}${snoozedTasks.length > 0 ? `, ${snoozedTasks.length} snoozed` : ""}.`;
+                })()}
+          </p>
+        </header>
+
+        <div class="xl:hidden">
+          <AssignedOutCard items={delegated} compact />
+        </div>
+
+        <main class="min-w-0 xl:col-start-1 xl:row-start-2">
+          {buckets.length === 0 && snoozedTasks.length === 0 ? (
+            <div class="rounded-xl border border-dashed border-line px-6 py-10 text-center">
+              <p class="text-[13.5px] text-muted">Pick a list in the sidebar to see the board and assign yourself work.</p>
+            </div>
+          ) : (
+            <div class="space-y-7">
+              {buckets.map((b) => (
+                <section key={b.key}>
+                  <div class="mb-1 flex items-baseline gap-2 px-2">
+                    <h3
+                      class={cn(
+                        "text-[11px] font-semibold uppercase tracking-[0.07em]",
+                        b.tone === "overdue" ? "text-danger" : b.tone === "now" ? "text-accent" : "text-faint"
+                      )}
+                    >
+                      {b.label}
+                    </h3>
+                    <span class="text-[11px] tabular-nums text-faint">{b.items.length}</span>
+                  </div>
+                  <ul class="rounded-xl border border-line bg-surface px-1">
+                    {b.items.map((item) =>
+                      item.kind === "task" ? (
+                        <TaskRow key={item.task.id} task={item.task} />
+                      ) : (
+                        <SubtaskRow key={item.subtask.id} subtask={item.subtask} parent={item.parent} />
+                      )
+                    )}
+                  </ul>
+                </section>
+              ))}
+
+              <SnoozedBucket tasks={snoozedTasks} />
+            </div>
+          )}
+        </main>
+
+        <aside class="sticky top-[72px] hidden max-h-[calc(100vh-88px)] overflow-y-auto xl:col-start-2 xl:row-start-1 xl:row-span-2 xl:block">
+          <AssignedOutCard items={delegated} />
+        </aside>
       </div>
-
-      {buckets.length === 0 && snoozedTasks.length === 0 ? (
-        <div class="rounded-xl border border-dashed border-line px-6 py-10 text-center">
-          <p class="text-[13.5px] text-muted">Pick a list in the sidebar to see the board and assign yourself work.</p>
-        </div>
-      ) : (
-        <div class="space-y-7">
-          {buckets.map((b) => (
-            <section key={b.key}>
-              <div class="mb-1 flex items-baseline gap-2 px-2">
-                <h3
-                  class={cn(
-                    "text-[11px] font-semibold uppercase tracking-[0.07em]",
-                    b.tone === "overdue" ? "text-danger" : b.tone === "now" ? "text-accent" : "text-faint"
-                  )}
-                >
-                  {b.label}
-                </h3>
-                <span class="text-[11px] tabular-nums text-faint">{b.items.length}</span>
-              </div>
-              <ul class="rounded-xl border border-line bg-surface px-1">
-                {b.items.map((item) =>
-                  item.kind === "task" ? (
-                    <TaskRow key={item.task.id} task={item.task} />
-                  ) : (
-                    <SubtaskRow key={item.subtask.id} subtask={item.subtask} parent={item.parent} />
-                  )
-                )}
-              </ul>
-            </section>
-          ))}
-
-          <SnoozedBucket tasks={snoozedTasks} />
-        </div>
-      )}
     </div>
   );
 }

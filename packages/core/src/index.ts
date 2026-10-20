@@ -106,6 +106,7 @@ import {
   writeNotificationPrefs,
 } from "./notifications.js";
 import {
+  ASSIGNMENT_ATTRIBUTION_MIGRATION_ID,
   CHANGES_SPACE_ID_MIGRATION_ID,
   PLACEHOLDER_EMAIL_DOMAIN,
   needsMigration,
@@ -279,7 +280,7 @@ export interface SetAttachmentDriveStorageInput {
   driveDestination: "shared" | "private";
 }
 
-const TASK_COLUMNS = `id, list_id, title, description, status_id, assignee_id,
+const TASK_COLUMNS = `id, list_id, title, description, status_id, assignee_id, assigned_by, assigned_at,
   priority, due_date, start_date, snoozed_until, blocked_note, tags, position,
   created_by, created_at, updated_at, closed_at, clickup_id`;
 
@@ -288,7 +289,7 @@ const TASK_COLUMNS = `id, list_id, title, description, status_id, assignee_id,
  * collapsed to a boolean in SQL. Keep it in step with `SnapshotTask` in
  * packages/shared/src/events.ts and `toSnapshotTask` in ./rows.ts.
  */
-const SNAPSHOT_TASK_COLUMNS = `id, list_id, title, status_id, assignee_id, priority,
+const SNAPSHOT_TASK_COLUMNS = `id, list_id, title, status_id, assignee_id, assigned_by, assigned_at, priority,
   due_date, tags, position, created_at, updated_at, snoozed_until, blocked_note,
   (description != '') AS has_description`;
 
@@ -303,6 +304,8 @@ const TASK_DIFF_KEYS = [
   "description",
   "statusId",
   "assigneeId",
+  "assignedBy",
+  "assignedAt",
   "priority",
   "dueDate",
   "startDate",
@@ -342,9 +345,12 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         // Pre-0007 changes rows carry no space_id, so replaying them can
         // withhold legitimate delete-deltas from members (fail-closed
         // fallback in filterReplay). Bump the resync floor to the current
-        // MAX(seq) exactly once — when 0007 first applies — so every
-        // client's next hello takes one full snapshot instead.
-        if (applied.includes(CHANGES_SPACE_ID_MIGRATION_ID)) {
+        // MAX(seq) exactly once when either snapshot-affecting migration first
+        // applies, so every client's next hello takes one full snapshot.
+        if (
+          applied.includes(CHANGES_SPACE_ID_MIGRATION_ID) ||
+          applied.includes(ASSIGNMENT_ATTRIBUTION_MIGRATION_ID)
+        ) {
           bumpResyncFloor(this.sql, this.maxSeq());
         }
         seedIfEmpty(this.sql);
@@ -1319,7 +1325,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     const visibleTaskIds = visibleListIds === null ? null : new Set(tasks.map((t) => t.id));
     const subtasks = this.sql
       .exec<SubtaskRow>(
-        `SELECT s.id, s.task_id, s.title, s.done, s.assignee_id, s.due_date, s.note, s.position, s.created_at
+        `SELECT s.id, s.task_id, s.title, s.done, s.assignee_id, s.assigned_by, s.assigned_at,
+                s.due_date, s.note, s.position, s.created_at
          FROM subtasks s JOIN tasks t ON t.id = s.task_id
          WHERE t.closed_at IS NULL OR t.closed_at >= ?
          ORDER BY s.task_id, s.position`,
@@ -1475,7 +1482,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   listSubtasks(taskId: string): Subtask[] {
     return this.sql
       .exec<SubtaskRow>(
-        `SELECT id, task_id, title, done, assignee_id, due_date, note, position, created_at
+        `SELECT id, task_id, title, done, assignee_id, assigned_by, assigned_at,
+                due_date, note, position, created_at
          FROM subtasks WHERE task_id = ? ORDER BY position`,
         taskId
       )
@@ -1770,13 +1778,17 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
     const tags = normalizeTags(input.tags ?? []);
     const taskId = id("tk_");
+    const assigneeId = input.assigneeId ?? null;
+    const assignedBy = this.humanAssigner(t, assigneeId);
     const task: Task = {
       id: taskId,
       listId: listRow.id,
       title: input.title,
       description: input.description,
       statusId: status.id,
-      assigneeId: input.assigneeId ?? null,
+      assigneeId,
+      assignedBy,
+      assignedAt: assignedBy === null ? null : t.now,
       priority: input.priority ?? null,
       dueDate: input.dueDate ?? null,
       startDate: input.startDate ?? null,
@@ -1832,7 +1844,11 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     }
     if (input.assigneeId !== undefined && (input.assigneeId ?? null) !== before.assigneeId) {
       requireAssignee(this.sql, input.assigneeId);
-      set("assignee_id", input.assigneeId ?? null);
+      const assigneeId = input.assigneeId ?? null;
+      const assignedBy = this.humanAssigner(t, assigneeId);
+      set("assignee_id", assigneeId);
+      set("assigned_by", assignedBy);
+      set("assigned_at", assignedBy === null ? null : t.now);
     }
     if (input.priority !== undefined && (input.priority ?? null) !== before.priority) {
       set("priority", input.priority ?? null);
@@ -2091,24 +2107,30 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   ): Subtask {
     this.requireTaskRow(input.taskId);
     requireAssignee(this.sql, input.assigneeId);
+    const assignedBy = this.humanAssigner(t, input.assigneeId);
     const subtask: Subtask = {
       id: id("sb_"),
       taskId: input.taskId,
       title: input.title,
       done: false,
       assigneeId: input.assigneeId,
+      assignedBy,
+      assignedAt: assignedBy === null ? null : t.now,
       dueDate: input.dueDate,
       note: input.note ?? null,
       position: nextSubtaskPosition(this.sql, input.taskId),
       createdAt: t.now,
     };
     this.sql.exec(
-      `INSERT INTO subtasks (id, task_id, title, done, assignee_id, due_date, note, position, created_at)
-       VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+      `INSERT INTO subtasks (id, task_id, title, done, assignee_id, assigned_by, assigned_at,
+                             due_date, note, position, created_at)
+       VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`,
       subtask.id,
       subtask.taskId,
       subtask.title,
       subtask.assigneeId,
+      subtask.assignedBy,
+      subtask.assignedAt,
       subtask.dueDate,
       subtask.note,
       subtask.position,
@@ -2136,8 +2158,10 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       }
       if (input.assigneeId !== undefined && (input.assigneeId ?? null) !== before.assigneeId) {
         requireAssignee(this.sql, input.assigneeId);
-        sets.push("assignee_id = ?");
-        params.push(input.assigneeId ?? null);
+        const assigneeId = input.assigneeId ?? null;
+        const assignedBy = this.humanAssigner(t, assigneeId);
+        sets.push("assignee_id = ?", "assigned_by = ?", "assigned_at = ?");
+        params.push(assigneeId, assignedBy, assignedBy === null ? null : t.now);
       }
       if (input.dueDate !== undefined && (input.dueDate ?? null) !== before.dueDate) {
         sets.push("due_date = ?");
@@ -2157,7 +2181,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       const patch = diffOf(
         before as unknown as Record<string, unknown>,
         after as unknown as Record<string, unknown>,
-        ["title", "assigneeId", "dueDate", "note", "position", "done"]
+        ["title", "assigneeId", "assignedBy", "assignedAt", "dueDate", "note", "position", "done"]
       );
       t.emit("update", "subtask", after.id, patch, { taskId: after.taskId });
       t.audit("subtask.update", after.id, patch);
@@ -3257,7 +3281,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         if (existing) {
           this.sql.exec(
             `UPDATE tasks SET list_id = ?, title = ?, description = ?, status_id = ?, assignee_id = ?,
-               priority = ?, due_date = ?, start_date = ?, tags = ?, tags_text = ?, updated_at = ?,
+               assigned_by = NULL, assigned_at = NULL, priority = ?, due_date = ?, start_date = ?,
+               tags = ?, tags_text = ?, updated_at = ?,
                closed_at = ?, clickup_id = COALESCE(?, clickup_id) WHERE id = ?`,
             listId,
             truncateImportTitle(task.title),
@@ -3285,6 +3310,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
             description: task.description ?? "",
             statusId: status.id,
             assigneeId,
+            assignedBy: null,
+            assignedAt: null,
             priority: task.priority ?? null,
             dueDate: task.dueDate ?? null,
             startDate: task.startDate ?? null,
@@ -3315,7 +3342,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         const existing = this.findExisting("subtasks", sub.id, sub.clickupId);
         if (existing) {
           this.sql.exec(
-            `UPDATE subtasks SET task_id = ?, title = ?, done = ?, assignee_id = ?, due_date = ?,
+            `UPDATE subtasks SET task_id = ?, title = ?, done = ?, assignee_id = ?,
+               assigned_by = NULL, assigned_at = NULL, due_date = ?,
                clickup_id = COALESCE(?, clickup_id) WHERE id = ?`,
             taskId,
             truncateImportTitle(sub.title),
@@ -3330,8 +3358,9 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         } else {
           const subtaskId = sub.id ?? id("sb_");
           this.sql.exec(
-            `INSERT INTO subtasks (id, task_id, title, done, assignee_id, due_date, position, created_at, clickup_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO subtasks (id, task_id, title, done, assignee_id, assigned_by, assigned_at,
+                                   due_date, position, created_at, clickup_id)
+             VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
             subtaskId,
             taskId,
             truncateImportTitle(sub.title),
@@ -3849,22 +3878,34 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     return row?.id ?? "us_system";
   }
 
+  /** Attribute only deliberate human/API assignment choices. A rule, import,
+   * or webhook can route work, but it must not appear as personal delegation. */
+  private humanAssigner(t: Turn, assigneeId: string | null): string | null {
+    if (assigneeId === null || t.automationRuleId !== null) return null;
+    if (t.actor.via === "automation" || t.actor.via === "import" || t.actor.via === "webhook") {
+      return null;
+    }
+    return t.actor.userId;
+  }
+
   // =========================================================================
   // Row helpers
   // =========================================================================
 
   private insertTaskRow(task: Task): void {
     this.sql.exec(
-      `INSERT INTO tasks (id, list_id, title, description, status_id, assignee_id, priority,
+      `INSERT INTO tasks (id, list_id, title, description, status_id, assignee_id, assigned_by, assigned_at, priority,
          due_date, start_date, snoozed_until, blocked_note, tags, tags_text, position,
          created_by, created_at, updated_at, closed_at, clickup_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       task.id,
       task.listId,
       task.title,
       task.description,
       task.statusId,
       task.assigneeId,
+      task.assignedBy,
+      task.assignedAt,
       task.priority,
       task.dueDate,
       task.startDate,
@@ -3897,7 +3938,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   private requireSubtask(subtaskId: string): Subtask {
     const rows = this.sql
       .exec<SubtaskRow>(
-        `SELECT id, task_id, title, done, assignee_id, due_date, note, position, created_at
+        `SELECT id, task_id, title, done, assignee_id, assigned_by, assigned_at,
+                due_date, note, position, created_at
          FROM subtasks WHERE id = ?`,
         subtaskId
       )

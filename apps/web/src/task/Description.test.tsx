@@ -22,6 +22,8 @@ const sampleTask: StoreTask = {
   hasDescription: true,
   priority: "urgent",
   assigneeId: null,
+  assignedBy: null,
+  assignedAt: null,
   dueDate: null,
   startDate: null,
   snoozedUntil: null,

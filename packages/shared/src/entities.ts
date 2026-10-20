@@ -132,6 +132,11 @@ export const Task = z.object({
   statusId: Id,
   // Single assignee by design (2 of 4,709 imported tasks had more than one).
   assigneeId: Id.nullable().default(null),
+  // The human who last chose the current assignee. Automation/import changes
+  // deliberately clear this so My Work never presents system routing as a
+  // personal delegation.
+  assignedBy: Id.nullable().default(null),
+  assignedAt: Ts.nullable().default(null),
   priority: Priority.nullable().default(null),
   dueDate: Ts.nullable().default(null),
   startDate: Ts.nullable().default(null),
@@ -167,6 +172,8 @@ export const Subtask = z.object({
     .max(LIMITS.subtaskTitleMax, `Subtask title must be ${LIMITS.subtaskTitleMax} characters or fewer.`),
   done: z.boolean().default(false),
   assigneeId: Id.nullable().default(null),
+  assignedBy: Id.nullable().default(null),
+  assignedAt: Ts.nullable().default(null),
   dueDate: Ts.nullable().default(null),
   // Plain text, not markdown: a step's context is a sentence or two, and the
   // checklist row has nowhere sensible to render formatting anyway.
