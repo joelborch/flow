@@ -78,6 +78,26 @@ describe("trigger: status_changed", () => {
   it("does not match on task creation", () => {
     expect(match({ kind: "status_changed" }, facts, taskDelta({ statusId: "st_sent" }, null, "create"))).toBe(false);
   });
+
+  describe("cross-list moves (status ids are per-list)", () => {
+    // "Done" in list A and "done" in list B are different ids, same status.
+    const names: Record<string, string> = { st_done_a: "Done", st_done_b: "done", st_todo_b: "To Do" };
+    /** Move from "Done" in ls_a to `toId` in ls_b. */
+    const moveTo = (trigger: Trigger, toId: string) => {
+      const moved = makeFacts({ task: makeTask({ listId: "ls_b", statusId: toId }), statusName: names[toId]! });
+      const delta = taskDelta({ listId: "ls_b", statusId: toId }, { listId: "ls_a", statusId: "st_done_a" });
+      return matchesTrigger(trigger, delta, buildTaskView(moved, delta, HOSTNAME, (id) => names[id] ?? null));
+    };
+
+    it("does not fire when the status name is unchanged, case-insensitively", () => {
+      expect(moveTo({ kind: "status_changed", to: ["Done"] }, "st_done_b")).toBe(false);
+      expect(moveTo({ kind: "status_changed" }, "st_done_b")).toBe(false);
+    });
+
+    it("still fires when the move lands on a differently named status", () => {
+      expect(moveTo({ kind: "status_changed", from: ["done"], to: ["to do"] }, "st_todo_b")).toBe(true);
+    });
+  });
 });
 
 describe("trigger: tag_added", () => {

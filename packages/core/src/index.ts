@@ -813,8 +813,15 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       }
       if ("statusId" in data) {
         const statusName = getStatus(this.sql, String(data["statusId"]))?.name ?? facts.statusName;
-        for (const rid of recipientsFor("status", { assigneeId: facts.task.assigneeId, creatorId: facts.task.createdBy }, actorId)) {
-          this.sendNotification(t, "status", facts, rid, actorId, { statusName });
+        // Status ids are per-list: a cross-list move from "Done" to "Done" swaps
+        // the id but is not a status change anyone should be emailed about.
+        const prevStatusId = delta.prev?.["statusId"];
+        const prevName =
+          typeof prevStatusId === "string" ? getStatus(this.sql, prevStatusId)?.name : undefined;
+        if (prevName?.toLowerCase() !== statusName.toLowerCase()) {
+          for (const rid of recipientsFor("status", { assigneeId: facts.task.assigneeId, creatorId: facts.task.createdBy }, actorId)) {
+            this.sendNotification(t, "status", facts, rid, actorId, { statusName });
+          }
         }
       }
       return;
