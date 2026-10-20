@@ -8,7 +8,7 @@ An honest comparison. Flow wins on cost, speed, data ownership, and agent access
 |---|---|---|---|---|---|
 | **Cost, 10 people** | ~$0–5/mo (Cloudflare free tier covers small teams; R2/Queues pennies) | ~$70–190/mo | ~$110–250/mo | ~$80–140/mo | $5–20/mo VPS + your ops time |
 | **Where the data lives** | Your Cloudflare account, one SQLite DB you can export | Their cloud | Their cloud | Their cloud | Your server |
-| **Agent access** | Built-in MCP server, 15 annotated tools; keys impersonate users; audit trail separates human from agent | REST + emerging MCP integrations, rate-limited (~100 req/min), agent actions look like user actions | REST, OAuth ceremony, no first-class agent identity | Good GraphQL API, MCP via integrations | REST APIs of varying quality, no MCP, DIY |
+| **Agent access** | Built-in MCP server, 18 annotated tools; keys impersonate users; audit trail separates human from agent | REST + emerging MCP integrations, rate-limited (~100 req/min), agent actions look like user actions | REST, OAuth ceremony, no first-class agent identity | Good GraphQL API, MCP via integrations | REST APIs of varying quality, no MCP, DIY |
 | **Speed** | Single-digit-ms DO reads, snapshot+delta sync, optimistic UI, boot cache — no spinners after first load | Noticeably heavy | Moderate | Fast (the bar Flow aims at) | Varies; usually fine |
 | **Realtime sync** | WebSocket deltas, replay on reconnect | Yes | Yes | Yes | Sometimes polling |
 | **Automations** | Trigger/condition/action rules, inline, HMAC webhooks, run log | Extensive | Extensive | Good | Limited |
