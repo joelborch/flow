@@ -229,6 +229,12 @@ export const SNAPSHOT_CLOSED_WINDOW_MS = 60 * DAY_MS;
 // snapshot-vs-replay decision; re-exported below to keep the surface stable.
 /** Rows kept by the prune_changes job. */
 export const CHANGES_RETENTION = 50_000;
+/**
+ * Run-log rows kept by the same job. Capped by count rather than age because
+ * `automation_runs` is indexed on (rule_id, at) and (task_id, at), so a bare
+ * date-range delete would be a full scan; `id` is the rowid, so this is not.
+ */
+export const AUTOMATION_RUNS_RETENTION = 20_000;
 /** Objects kept under `backups/` in R2 — one per day, so 30 is ~a month. */
 export const BACKUP_RETENTION = 30;
 
@@ -3664,8 +3670,11 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
   private async runJob(job: JobRow, now: number): Promise<Record<string, number>> {
     switch (job.kind) {
-      case "prune_changes":
-        return { processed: this.pruneChanges() };
+      case "prune_changes": {
+        const changes = this.pruneChanges();
+        const runs = this.pruneAutomationRuns();
+        return { changes_pruned: changes, automation_runs_pruned: runs, processed: changes + runs };
+      }
       case "backup":
         return this.runBackup(now);
       // The hourly maintenance tick. It carries the snooze wake pass too —
@@ -3700,6 +3709,14 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     const floor = max - CHANGES_RETENTION;
     if (floor <= 0) return 0;
     return this.sql.exec("DELETE FROM changes WHERE seq <= ?", floor).rowsWritten;
+  }
+
+  private pruneAutomationRuns(): number {
+    const row = this.sql.exec("SELECT MAX(id) AS maxId FROM automation_runs").one() as { maxId: number | null } | undefined;
+    const maxId = row?.maxId ?? 0;
+    const floor = maxId - AUTOMATION_RUNS_RETENTION;
+    if (floor <= 0) return 0;
+    return this.sql.exec("DELETE FROM automation_runs WHERE id <= ?", floor).rowsWritten;
   }
 
   /** Manual trigger for the daily backup (admin route); same code path as the

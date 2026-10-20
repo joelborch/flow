@@ -16,7 +16,7 @@ import {
 import { requireAuth } from "../auth.js";
 import { workspace } from "../do.js";
 import type { AppEnv } from "../env.js";
-import { notFound, parseOrThrow, readJson } from "../errors.js";
+import { badRequest, notFound, parseOrThrow, readJson } from "../errors.js";
 
 export const taskRoutes = new Hono<AppEnv>();
 
@@ -256,9 +256,13 @@ taskRoutes.patch("/subtasks/:subtaskId", async (c) => {
   const hasFieldEdit = ["title", "assigneeId", "dueDate", "note"].some(
     (k) => (fields as Record<string, unknown>)[k] !== undefined
   );
+  if (!hasFieldEdit && done === undefined) {
+    throw badRequest(
+      "PATCH /subtasks/:id needs at least one of title, assigneeId, dueDate, note, done"
+    );
+  }
   if (hasFieldEdit) result = await ws.updateSubtask(fields, auth.actor);
   if (done !== undefined) result = await ws.toggleSubtask({ subtaskId, done }, auth.actor);
-  if (!result) result = await ws.toggleSubtask({ subtaskId, done: false }, auth.actor);
   return c.json(result);
 });
 
