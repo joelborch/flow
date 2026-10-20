@@ -1,17 +1,56 @@
 // Asana-style checklist: done/not-done plus optional
 // assignee and due date. No statuses — that's the board's job, not a step's.
 import { useMemo, useRef, useState } from "preact/hooks";
-import type { Subtask, User } from "@flow/shared";
+import { LIMITS, type Subtask, type User } from "@flow/shared";
 import {
   createSubtask,
   setSubtaskAssignee,
+  setSubtaskNote,
   subtasks as subtaskStore,
   toggleSubtask,
   users,
 } from "../store/index.js";
 import { userById } from "../shell/data.js";
 import { cn, formatDue, isOverdue } from "../shell/format.js";
-import { Avatar, Menu, MenuItem, PersonIcon, Plus, SectionLabel, Search } from "../shell/ui.js";
+import { Avatar, Menu, MenuItem, NoteLines, PersonIcon, Plus, SectionLabel, Search } from "../shell/ui.js";
+import { isSubmitChord, useAutogrow } from "./autogrow.js";
+
+/** Inline plain-text editor for a step's note. Saves on blur or ⌘/Ctrl+Enter;
+ *  an emptied-out note saves as null so the row goes back to quiet. */
+function NoteEditor({ subtask, onClose }: { subtask: Subtask; onClose: () => void }) {
+  const [draft, setDraft] = useState(subtask.note ?? "");
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useAutogrow(ref, draft, { min: 34, max: 180 });
+
+  const save = () => {
+    const next = draft.trim() === "" ? null : draft.trim();
+    if (next !== (subtask.note ?? null)) void setSubtaskNote(subtask.id, next);
+    onClose();
+  };
+
+  return (
+    <textarea
+      ref={ref}
+      autofocus
+      value={draft}
+      maxLength={LIMITS.subtaskNoteMax}
+      placeholder="Add a note…"
+      onInput={(e) => setDraft((e.currentTarget as HTMLTextAreaElement).value)}
+      onBlur={save}
+      onKeyDown={(e) => {
+        if (isSubmitChord(e)) {
+          e.preventDefault();
+          save();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          onClose();
+        }
+      }}
+      class="w-full resize-none rounded-md bg-bg px-2 py-1.5 text-[16px] leading-relaxed text-text placeholder:text-faint focus:outline-none sm:text-[12.5px]"
+    />
+  );
+}
 
 function SubtaskAssignee({ subtask, assignee }: { subtask: Subtask; assignee: User | undefined }) {
   const [q, setQ] = useState("");
@@ -104,6 +143,7 @@ export function Subtasks({ taskId, fallback }: { taskId: string; fallback: Subta
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [noteEditId, setNoteEditId] = useState<string | null>(null);
   // Synchronous re-entry guard. State alone can't prevent the double-fire:
   // Enter -> add() -> setSaving(true) -> re-render disables the focused input
   // -> the browser fires blur -> onBlur's stale closure still sees saving=false.
@@ -164,7 +204,8 @@ export function Subtasks({ taskId, fallback }: { taskId: string; fallback: Subta
         {rows.map((s) => {
           const assignee = userById(s.assigneeId);
           return (
-            <li key={s.id} class="group flex items-center gap-2.5 rounded-lg px-2 py-2.5 hover:bg-raised sm:py-[7px]">
+            <li key={s.id} class="group rounded-lg px-2 py-2.5 hover:bg-raised sm:py-[7px]">
+              <div class="flex items-center gap-2.5">
               <button
                 type="button"
                 role="checkbox"
@@ -207,7 +248,38 @@ export function Subtasks({ taskId, fallback }: { taskId: string; fallback: Subta
                   {formatDue(s.dueDate)}
                 </span>
               )}
+              {!s.note && noteEditId !== s.id && (
+                // Same hover-quiet treatment as the unassigned avatar slot:
+                // visible on touch, revealed on hover elsewhere.
+                <button
+                  type="button"
+                  aria-label={`Add a note to “${s.title}”`}
+                  onClick={() => setNoteEditId(s.id)}
+                  class="flex shrink-0 items-center rounded-md p-0.5 text-faint hover:text-muted sm:opacity-0 sm:group-hover:opacity-100"
+                >
+                  <NoteLines class="h-3.5 w-3.5" />
+                </button>
+              )}
               <SubtaskAssignee subtask={s} assignee={assignee} />
+              </div>
+
+              {/* The note lives under the title, indented past the checkbox. */}
+              {(noteEditId === s.id || s.note) && (
+                <div class="mt-1 pl-[26px] pr-1">
+                  {noteEditId === s.id ? (
+                    <NoteEditor subtask={s} onClose={() => setNoteEditId(null)} />
+                  ) : (
+                    <button
+                      type="button"
+                      aria-label={`Edit the note on “${s.title}”`}
+                      onClick={() => setNoteEditId(s.id)}
+                      class="block w-full whitespace-pre-wrap break-words text-left text-[12.5px] leading-relaxed text-muted hover:text-text"
+                    >
+                      {s.note}
+                    </button>
+                  )}
+                </div>
+              )}
             </li>
           );
         })}

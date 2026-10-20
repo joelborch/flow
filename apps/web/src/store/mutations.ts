@@ -59,6 +59,8 @@ export async function createTask(input: CreateTaskInput): Promise<Task | null> {
     description: input.description ?? "",
     statusId: status.id,
     assigneeId: input.assigneeId ?? null,
+    assignedBy: input.assigneeId == null ? null : (me.value?.id ?? null),
+    assignedAt: input.assigneeId == null ? null : now,
     priority: input.priority ?? null,
     dueDate: input.dueDate ?? null,
     startDate: input.startDate ?? null,
@@ -86,7 +88,10 @@ export async function createTask(input: CreateTaskInput): Promise<Task | null> {
         title: s.title,
         done: false,
         assigneeId: s.assigneeId ?? null,
+        assignedBy: s.assigneeId == null ? null : (me.value?.id ?? null),
+        assignedAt: s.assigneeId == null ? null : now,
         dueDate: null,
+        note: null,
         position: pos++,
         createdAt: now,
       });
@@ -120,7 +125,11 @@ export async function updateTask(input: UpdateTaskInput): Promise<void> {
   const next: StoreTask = { ...prev, statusId, updatedAt: Date.now() };
   if (input.title !== undefined) next.title = input.title;
   if (input.description !== undefined) next.description = input.description;
-  if (input.assigneeId !== undefined) next.assigneeId = input.assigneeId;
+  if (input.assigneeId !== undefined) {
+    next.assigneeId = input.assigneeId;
+    next.assignedBy = input.assigneeId === null ? null : (me.value?.id ?? null);
+    next.assignedAt = input.assigneeId === null ? null : next.updatedAt;
+  }
   if (input.priority !== undefined) next.priority = input.priority;
   if (input.dueDate !== undefined) next.dueDate = input.dueDate;
   if (input.startDate !== undefined) next.startDate = input.startDate;
@@ -180,7 +189,12 @@ export async function setSubtaskAssignee(
 ): Promise<void> {
   const prev = getSubtask(subtaskId);
   if (!prev || prev.assigneeId === assigneeId) return;
-  putSubtask({ ...prev, assigneeId });
+  putSubtask({
+    ...prev,
+    assigneeId,
+    assignedBy: assigneeId === null ? null : (me.value?.id ?? null),
+    assignedAt: assigneeId === null ? null : Date.now(),
+  });
   flush();
   try {
     putSubtask(await api.setSubtaskAssignee(subtaskId, assigneeId));
@@ -189,6 +203,21 @@ export async function setSubtaskAssignee(
     putSubtask(prev);
     flush();
     toast(`Couldn't assign the subtask — ${reason(err)}`, "error");
+  }
+}
+
+export async function setSubtaskNote(subtaskId: string, note: string | null): Promise<void> {
+  const prev = getSubtask(subtaskId);
+  if (!prev || (prev.note ?? null) === note) return;
+  putSubtask({ ...prev, note });
+  flush();
+  try {
+    putSubtask(await api.setSubtaskNote(subtaskId, note));
+    flush();
+  } catch (err) {
+    putSubtask(prev);
+    flush();
+    toast(`Couldn't save the note — ${reason(err)}`, "error");
   }
 }
 
@@ -201,7 +230,10 @@ export async function createSubtask(taskId: string, title: string): Promise<void
     title,
     done: false,
     assigneeId: null,
+    assignedBy: null,
+    assignedAt: null,
     dueDate: null,
+    note: null,
     position: append(existing.map((s) => s.position)),
     createdAt: Date.now(),
   };

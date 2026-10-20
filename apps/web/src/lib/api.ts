@@ -17,6 +17,38 @@ export class ApiError extends Error {
   }
 }
 
+const AUTH_RETRY_KEY = "flow.auth-retry";
+const AUTH_RETRY_WINDOW_MS = 60_000;
+let authRedirecting = false;
+
+function recoverExpiredSession(): boolean {
+  if (authRedirecting) return true;
+
+  try {
+    const retriedAt = Number(sessionStorage.getItem(AUTH_RETRY_KEY));
+    if (Number.isFinite(retriedAt) && Date.now() - retriedAt < AUTH_RETRY_WINDOW_MS) {
+      return false;
+    }
+  } catch {
+    /* storage is optional; continue with a single redirect for this page */
+  }
+
+  try {
+    localStorage.removeItem("flow.boot");
+    localStorage.removeItem("flow.me");
+    sessionStorage.setItem(AUTH_RETRY_KEY, String(Date.now()));
+  } catch {
+    /* Access recovery still works without browser storage */
+  }
+
+  authRedirecting = true;
+  const returnTo = window.location.href;
+  window.location.replace(
+    `/cdn-cgi/access/logout?returnTo=${encodeURIComponent(returnTo)}`
+  );
+  return true;
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response;
   try {
@@ -30,6 +62,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     throw new ApiError(0, err instanceof Error ? err.message : "Network unreachable");
   }
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== "undefined") {
+      if (recoverExpiredSession()) {
+        throw new ApiError(401, "Session expired, redirecting to login");
+      }
+    }
     let detail = `${res.status} ${res.statusText}`;
     try {
       const text = await res.text();
@@ -45,6 +82,13 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       /* keep the status line */
     }
     throw new ApiError(res.status, detail);
+  }
+  if (typeof window !== "undefined") {
+    try {
+      sessionStorage.removeItem(AUTH_RETRY_KEY);
+    } catch {
+      /* optional; a successful request already proves the session recovered */
+    }
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -81,6 +125,11 @@ export const api = {
     request<Subtask>("PATCH", `/api/subtasks/${encodeURIComponent(subtaskId)}`, {
       subtaskId,
       assigneeId,
+    }),
+  setSubtaskNote: (subtaskId: string, note: string | null) =>
+    request<Subtask>("PATCH", `/api/subtasks/${encodeURIComponent(subtaskId)}`, {
+      subtaskId,
+      note,
     }),
 
   addComment: (taskId: string, body: string) =>

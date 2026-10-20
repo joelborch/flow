@@ -353,6 +353,89 @@ const SYNC_META: string[] = [
 // so the key survives even if the request never reaches the R2 delete: a
 // route's waitUntil clears the row once the object is actually gone, and the
 // daily backup job sweeps whatever is still here as a fallback.
+// Plain-text context on a checklist step. Nullable with no default, so every
+// existing subtask reads back as "no note" without a backfill.
+const SUBTASK_NOTE: string[] = [
+  `ALTER TABLE subtasks ADD COLUMN note TEXT`,
+];
+
+// Human assignment attribution for the My Work delegated rail. Task rows can
+// be seeded conservatively from their creator; later audited assignment changes
+// override that seed. Subtasks have no creator column, so only an explicit
+// audited assignment is backfilled. The LIKE predicates match Flow's own
+// JSON.stringify output without making the migration depend on SQLite JSON1.
+const ASSIGNMENT_ATTRIBUTION: string[] = [
+  `ALTER TABLE tasks ADD COLUMN assigned_by TEXT`,
+  `ALTER TABLE tasks ADD COLUMN assigned_at INTEGER`,
+  `ALTER TABLE subtasks ADD COLUMN assigned_by TEXT`,
+  `ALTER TABLE subtasks ADD COLUMN assigned_at INTEGER`,
+  `UPDATE tasks
+     SET assigned_by = created_by, assigned_at = created_at
+     WHERE assignee_id IS NOT NULL`,
+  `UPDATE tasks
+     SET assigned_by = (
+           SELECT CASE
+             WHEN a.actor LIKE '%"via":"automation"%'
+               OR a.actor LIKE '%"via":"import"%'
+               OR a.actor LIKE '%"via":"webhook"%' THEN NULL
+             ELSE a.actor_user_id
+           END
+           FROM audit a
+           WHERE a.entity = tasks.id
+             AND a.diff LIKE '%"assigneeId":"' || tasks.assignee_id || '"%'
+           ORDER BY a.id DESC LIMIT 1
+         ),
+         assigned_at = (
+           SELECT CASE
+             WHEN a.actor LIKE '%"via":"automation"%'
+               OR a.actor LIKE '%"via":"import"%'
+               OR a.actor LIKE '%"via":"webhook"%' THEN NULL
+             ELSE a.at
+           END
+           FROM audit a
+           WHERE a.entity = tasks.id
+             AND a.diff LIKE '%"assigneeId":"' || tasks.assignee_id || '"%'
+           ORDER BY a.id DESC LIMIT 1
+         )
+     WHERE assignee_id IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM audit a
+         WHERE a.entity = tasks.id
+           AND a.diff LIKE '%"assigneeId":"' || tasks.assignee_id || '"%'
+       )`,
+  `UPDATE subtasks
+     SET assigned_by = (
+           SELECT CASE
+             WHEN a.actor LIKE '%"via":"automation"%'
+               OR a.actor LIKE '%"via":"import"%'
+               OR a.actor LIKE '%"via":"webhook"%' THEN NULL
+             ELSE a.actor_user_id
+           END
+           FROM audit a
+           WHERE a.entity = subtasks.id
+             AND a.diff LIKE '%"assigneeId":"' || subtasks.assignee_id || '"%'
+           ORDER BY a.id DESC LIMIT 1
+         ),
+         assigned_at = (
+           SELECT CASE
+             WHEN a.actor LIKE '%"via":"automation"%'
+               OR a.actor LIKE '%"via":"import"%'
+               OR a.actor LIKE '%"via":"webhook"%' THEN NULL
+             ELSE a.at
+           END
+           FROM audit a
+           WHERE a.entity = subtasks.id
+             AND a.diff LIKE '%"assigneeId":"' || subtasks.assignee_id || '"%'
+           ORDER BY a.id DESC LIMIT 1
+         )
+     WHERE assignee_id IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM audit a
+         WHERE a.entity = subtasks.id
+           AND a.diff LIKE '%"assigneeId":"' || subtasks.assignee_id || '"%'
+       )`,
+];
+
 const PENDING_OBJECT_DELETES: string[] = [
   `CREATE TABLE pending_object_deletes (
      r2_key TEXT PRIMARY KEY,
@@ -381,6 +464,7 @@ const PENDING_OBJECT_DELETES: string[] = [
  * replaying the ambiguous rows.
  */
 export const CHANGES_SPACE_ID_MIGRATION_ID = "core-0007-changes-space-id";
+export const ASSIGNMENT_ATTRIBUTION_MIGRATION_ID = "core-0010-assignment-attribution";
 
 export const MIGRATIONS: readonly Migration[] = [
   { id: "core-0001-initial", statements: BASE_STATEMENTS },
@@ -393,6 +477,8 @@ export const MIGRATIONS: readonly Migration[] = [
   { id: "core-0006-sync-meta", statements: SYNC_META },
   { id: CHANGES_SPACE_ID_MIGRATION_ID, statements: CHANGES_SPACE_ID },
   { id: "core-0008-pending-object-deletes", statements: PENDING_OBJECT_DELETES },
+  { id: "core-0009-subtask-note", statements: SUBTASK_NOTE },
+  { id: ASSIGNMENT_ATTRIBUTION_MIGRATION_ID, statements: ASSIGNMENT_ATTRIBUTION },
 ];
 
 /**

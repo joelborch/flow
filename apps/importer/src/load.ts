@@ -60,13 +60,20 @@ export async function runLoad(opts: LoadOptions): Promise<void> {
     info(`${kind}: ${pending.length} to load (${rows.length - pending.length} already done)`);
     let n = 0;
     for (const batch of chunk(pending, opts.batchSize)) {
-      await client.postBatch(kind, batch);
+      const res = await client.postBatch(kind, batch);
+      if (res.errors && res.errors.length > 0) {
+        for (const e of res.errors) {
+          warn(`${kind} failed row ${e.ref}: ${e.error}`);
+        }
+      }
+      const failedRefs = new Set((res.errors ?? []).map((e) => e.ref));
+      const successfulIds = batch.map((r) => r.id).filter((id) => !failedRefs.has(id));
       // Only record after the server accepted the batch, so a mid-batch crash
       // re-sends rather than skips. Upsert semantics make the re-send harmless.
       // Never persist in dry-run: a rehearsal must not convince the next real
       // run that the work is already done.
       if (!opts.dryRun) {
-        loaded.ids[kind] = [...(loaded.ids[kind] ?? []), ...batch.map((r) => r.id)];
+        loaded.ids[kind] = [...(loaded.ids[kind] ?? []), ...successfulIds];
         writeJson(loadedPath, loaded);
       }
       n += batch.length;

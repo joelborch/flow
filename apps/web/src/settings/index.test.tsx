@@ -2,7 +2,7 @@
 import { act } from "preact/test-utils";
 import { render } from "preact";
 import type { Space, User } from "@flow/shared";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Settings } from "./index.js";
 import { activeTab } from "./route.js";
 import { me, spaces, users } from "../store/index.js";
@@ -38,6 +38,15 @@ const space: Space = {
 let root: HTMLDivElement;
 
 beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ apiKeys: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    )
+  );
   root = document.createElement("div");
   document.body.append(root);
   spaces.value = [space];
@@ -53,6 +62,7 @@ afterEach(() => {
   });
   document.body.innerHTML = "";
   me.value = null;
+  vi.unstubAllGlobals();
 });
 
 function tabLabels(): string[] {

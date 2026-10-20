@@ -22,6 +22,8 @@ export const LIMITS = {
   tagsMax: 50,
   /** "waiting on…" note that rides along with a snooze. One line, not an essay. */
   blockedNoteMax: 200,
+  /** Plain-text context on a checklist step — a paragraph, not a document. */
+  subtaskNoteMax: 2_000,
   /** importBatch only: titles longer than this are truncated, never rejected. */
   importTitleMax: 2_000,
 } as const;
@@ -40,6 +42,12 @@ export const taskTags = (): z.ZodArray<z.ZodString> =>
   z
     .array(z.string().max(LIMITS.tagMax, `Each tag must be ${LIMITS.tagMax} characters or fewer.`))
     .max(LIMITS.tagsMax, `A task can carry at most ${LIMITS.tagsMax} tags.`);
+
+/** Plain text riding along with a subtask: the "how", where the title is the "what". */
+export const subtaskNote = (): z.ZodString =>
+  z
+    .string()
+    .max(LIMITS.subtaskNoteMax, `Note must be ${LIMITS.subtaskNoteMax} characters or fewer.`);
 
 /** The free-text half of a snooze: who or what the task is waiting on. */
 export const blockedNote = (): z.ZodString =>
@@ -124,6 +132,11 @@ export const Task = z.object({
   statusId: Id,
   // Single assignee by design (2 of 4,709 imported tasks had more than one).
   assigneeId: Id.nullable().default(null),
+  // The human who last chose the current assignee. Automation/import changes
+  // deliberately clear this so My Work never presents system routing as a
+  // personal delegation.
+  assignedBy: Id.nullable().default(null),
+  assignedAt: Ts.nullable().default(null),
   priority: Priority.nullable().default(null),
   dueDate: Ts.nullable().default(null),
   startDate: Ts.nullable().default(null),
@@ -159,7 +172,12 @@ export const Subtask = z.object({
     .max(LIMITS.subtaskTitleMax, `Subtask title must be ${LIMITS.subtaskTitleMax} characters or fewer.`),
   done: z.boolean().default(false),
   assigneeId: Id.nullable().default(null),
+  assignedBy: Id.nullable().default(null),
+  assignedAt: Ts.nullable().default(null),
   dueDate: Ts.nullable().default(null),
+  // Plain text, not markdown: a step's context is a sentence or two, and the
+  // checklist row has nowhere sensible to render formatting anyway.
+  note: subtaskNote().nullable().default(null),
   position: z.number(),
   createdAt: Ts,
 });

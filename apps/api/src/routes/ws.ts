@@ -3,7 +3,7 @@ import type { Context } from "hono";
 import { resolveAuth } from "../auth.js";
 import { workspaceStub } from "../do.js";
 import { WS_USER_HEADER, type AppEnv } from "../env.js";
-import { badRequest } from "../errors.js";
+import { badRequest, forbidden } from "../errors.js";
 
 /**
  * GET /ws — authenticate, then hand the upgrade straight to the DO.
@@ -20,6 +20,29 @@ export async function handleWebSocketUpgrade(c: Context<AppEnv>): Promise<Respon
   }
 
   const auth = await resolveAuth(c);
+
+  const origin = c.req.header("Origin");
+  if (origin) {
+    let originUrl: URL;
+    try {
+      originUrl = new URL(origin);
+    } catch {
+      throw forbidden("invalid websocket origin header");
+    }
+    const host = originUrl.hostname.toLowerCase();
+    // Same-origin, judged against the host this request actually arrived on
+    // rather than a fixed localhost allowlist. In dev the Vite proxy forwards to
+    // localhost:8787, so a localhost origin matches; on the deployed Worker the
+    // request host is the real hostname, so a page served from the victim's own
+    // localhost — the one way a browser can produce that Origin — no longer
+    // gets a socket.
+    const selfHost = new URL(c.req.url).hostname.toLowerCase();
+    const allowedHost = c.env.APP_HOSTNAME?.toLowerCase();
+    const isAllowed = host === allowedHost || host === selfHost;
+    if (!isAllowed) {
+      throw forbidden(`cross-origin websocket connection rejected from ${origin}`);
+    }
+  }
 
   const headers = new Headers(c.req.raw.headers);
   // Never let a client inject its own identity.

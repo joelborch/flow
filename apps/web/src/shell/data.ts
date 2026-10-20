@@ -3,10 +3,10 @@
 // re-scanning arrays, and must be called during render so the signal reads
 // register as dependencies.
 import { computed, type ReadonlySignal } from "@preact/signals";
-import type { List, Space, Status, User } from "@flow/shared";
+import type { List, Space, Status, Subtask, User } from "@flow/shared";
 import {
   listById as listMap, lists, listsBySpace, spaceById as spaceMap, spaces,
-  statusById as statusMap, tasks, userById as userMap, type StoreTask,
+  statusById as statusMap, subtasks, tasks, userById as userMap, type StoreTask,
 } from "../store/index.js";
 
 export function listById(listId: string | null | undefined): List | undefined {
@@ -60,6 +60,77 @@ export function myOpenTasks(meId: string | null | undefined): StoreTask[] {
     const bp = b.priority ? (rank[b.priority] ?? 9) : 9;
     if (ap !== bp) return ap - bp;
     return a.title.localeCompare(b.title);
+  });
+}
+
+/** A subtask assigned to me, paired with the open parent task it belongs to. */
+export type MyOpenSubtask = { subtask: Subtask; parent: StoreTask };
+
+/** Assigned to me, not done, on a still-open parent; due date then title.
+ *  A closed parent retires its checklist with it, so those never surface. */
+export function myOpenSubtasks(meId: string | null | undefined): MyOpenSubtask[] {
+  if (!meId) return [];
+  const out: MyOpenSubtask[] = [];
+  for (const arr of subtasks.value.values()) {
+    for (const s of arr) {
+      if (s.done || s.assigneeId !== meId) continue;
+      const parent = tasks.value.get(s.taskId);
+      if (!parent || isClosed(parent)) continue;
+      out.push({ subtask: s, parent });
+    }
+  }
+  return out.sort((a, b) => {
+    const ad = a.subtask.dueDate ?? Number.MAX_SAFE_INTEGER;
+    const bd = b.subtask.dueDate ?? Number.MAX_SAFE_INTEGER;
+    if (ad !== bd) return ad - bd;
+    return a.subtask.title.localeCompare(b.subtask.title);
+  });
+}
+
+/** Open work whose current assignee was most recently chosen by me. */
+export type AssignedOutItem =
+  | { kind: "task"; task: StoreTask }
+  | { kind: "subtask"; subtask: Subtask; parent: StoreTask };
+
+export function assignedOutBy(meId: string | null | undefined): AssignedOutItem[] {
+  if (!meId) return [];
+  const out: AssignedOutItem[] = [];
+  for (const task of tasks.value.values()) {
+    if (
+      task.assignedBy === meId &&
+      task.assigneeId !== null &&
+      task.assigneeId !== meId &&
+      !isClosed(task)
+    ) {
+      out.push({ kind: "task", task });
+    }
+  }
+  for (const arr of subtasks.value.values()) {
+    for (const subtask of arr) {
+      if (
+        subtask.done ||
+        subtask.assignedBy !== meId ||
+        subtask.assigneeId === null ||
+        subtask.assigneeId === meId
+      ) {
+        continue;
+      }
+      const parent = tasks.value.get(subtask.taskId);
+      if (!parent || isClosed(parent)) continue;
+      out.push({ kind: "subtask", subtask, parent });
+    }
+  }
+  return out.sort((a, b) => {
+    const ad = a.kind === "task" ? a.task.dueDate : a.subtask.dueDate;
+    const bd = b.kind === "task" ? b.task.dueDate : b.subtask.dueDate;
+    const due = (ad ?? Number.MAX_SAFE_INTEGER) - (bd ?? Number.MAX_SAFE_INTEGER);
+    if (due !== 0) return due;
+    const aa = a.kind === "task" ? a.task.assignedAt : a.subtask.assignedAt;
+    const ba = b.kind === "task" ? b.task.assignedAt : b.subtask.assignedAt;
+    if (aa !== ba) return (ba ?? 0) - (aa ?? 0);
+    const at = a.kind === "task" ? a.task.title : a.subtask.title;
+    const bt = b.kind === "task" ? b.task.title : b.subtask.title;
+    return at.localeCompare(bt);
   });
 }
 

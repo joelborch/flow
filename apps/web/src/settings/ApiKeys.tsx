@@ -185,7 +185,12 @@ function CreateKey({
 export function ApiKeysTab() {
   const { status, data, error, reload } = useAsync(() => settingsApi.apiKeys(), []);
   const [created, setCreated] = useState<CreatedApiKey | null>(null);
+  const [showRevoked, setShowRevoked] = useState(false);
   const admin = isWorkspaceAdmin();
+
+  const activeKeys = data?.filter((k) => k.revokedAt === null) ?? [];
+  const revokedKeys = data?.filter((k) => k.revokedAt !== null) ?? [];
+  const visibleKeys = showRevoked ? (data ?? []) : activeKeys;
 
   return (
     <div class="space-y-4">
@@ -197,9 +202,20 @@ export function ApiKeysTab() {
             : "A key acts as you: anything it does shows up as your work, with the key id recorded beside it in the audit trail. You see and manage only your own keys."
         }
         right={
-          <Button size="xs" onClick={reload}>
-            Refresh
-          </Button>
+          <div class="flex items-center gap-2">
+            {revokedKeys.length > 0 && (
+              <Button
+                size="xs"
+                tone="ghost"
+                onClick={() => setShowRevoked((prev) => !prev)}
+              >
+                {showRevoked ? "Hide revoked" : `Show revoked (${revokedKeys.length})`}
+              </Button>
+            )}
+            <Button size="xs" onClick={reload}>
+              Refresh
+            </Button>
+          </div>
         }
       >
         <CreateKey
@@ -213,11 +229,17 @@ export function ApiKeysTab() {
 
         {status === "loading" && <Loading />}
         {status === "error" && error && <ErrorNote message={error} onRetry={reload} />}
-        {status === "ok" && data && data.length === 0 && (
-          <Empty>{admin ? "No API keys yet." : "You have no API keys yet."}</Empty>
+        {status === "ok" && visibleKeys.length === 0 && (
+          <Empty>
+            {activeKeys.length === 0 && revokedKeys.length > 0
+              ? `All ${revokedKeys.length} API keys are revoked.`
+              : admin
+                ? "No API keys yet."
+                : "You have no API keys yet."}
+          </Empty>
         )}
         {status === "ok" &&
-          data?.map((k) => (
+          visibleKeys.map((k) => (
             <KeyRow key={k.id} apiKey={k} showImpersonates={admin} onRevoked={reload} />
           ))}
       </Panel>

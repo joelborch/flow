@@ -10,7 +10,7 @@
 import type { List, Space } from "@flow/shared";
 import { listById, me, statusById, updateList, updateSpace, type StoreTask } from "../store/index.js";
 import {
-  listsOfSpace, myOpenTasks, openCountOfList, openCountOfSpace, orderedSpaces, spaceById,
+  listsOfSpace, myOpenSubtasks, myOpenTasks, openCountOfList, openCountOfSpace, orderedSpaces, spaceById,
 } from "./data.js";
 import { cn, relativeTime } from "./format.js";
 import { activeView, closeDrawer, openList, openTask, showArchived, showMyWork } from "./nav.js";
@@ -475,7 +475,9 @@ export function Sidebar() {
   const view = activeView.value;
   const includeArchived = showArchived.value;
   const spaceList = orderedSpaces(includeArchived);
-  const myCount = myOpenTasks(me.value?.id).length;
+  // Tasks plus checklist steps assigned to me — the same population My Work
+  // itself counts, so the badge and the header never disagree.
+  const myCount = myOpenTasks(me.value?.id).length + myOpenSubtasks(me.value?.id).length;
   const activeId = view.kind === "list" ? view.listId : null;
   const mode = sidebarMode.value;
 

@@ -141,6 +141,8 @@ export const Archive = svg([
   <path d="M3.5 6v6.5a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V6M6.5 9h3" />,
 ]);
 export const Bars = svg(<path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />);
+/** Short text lines — "there are words here": subtask notes and the like. */
+export const NoteLines = svg(<path d="M3 5h10M3 8h10M3 11h5.5" />);
 export const ListIcon = svg([
   <path d="M3 4.5h10M3 8h10M3 11.5h6" />,
 ]);

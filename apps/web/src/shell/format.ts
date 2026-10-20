@@ -1,18 +1,12 @@
 // Formatting helpers. Date/priority/initials formatting
 // is shared with the board through lib/fmt so a chip reads the same everywhere;
 // what's here is what only the shell and the task panel need.
-import { dueLabel, isOverdue as isOverdueTs } from "../lib/fmt.js";
+import { dueLabel, isOverdue as isOverdueTs, startOfDay } from "../lib/fmt.js";
 
-export { initials, dueLabel as formatDue } from "../lib/fmt.js";
+export { initials, dueLabel as formatDue, startOfDay } from "../lib/fmt.js";
 
 export function cn(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(" ");
-}
-
-export function startOfDay(ts: number): number {
-  const d = new Date(ts);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
 }
 
 export function today(): number {

@@ -116,7 +116,7 @@ export interface WorkspaceApi extends WorkspaceRpc {
   createSubtask(input: CreateSubtaskInput, actor: string | Actor): Promise<Subtask>;
   toggleSubtask(input: ToggleSubtaskInput, actor: string | Actor): Promise<Subtask>;
   updateSubtask(
-    input: { subtaskId: string; title?: string; assigneeId?: string | null; dueDate?: number | null; position?: number },
+    input: { subtaskId: string; title?: string; assigneeId?: string | null; dueDate?: number | null; note?: string | null; position?: number },
     actor: string | Actor
   ): Promise<Subtask>;
   deleteSubtask(subtaskId: string, actor: string | Actor): Promise<Ok>;
@@ -259,6 +259,15 @@ export interface WorkspaceApi extends WorkspaceRpc {
     userId?: string;
     action?: string;
   }): Promise<{ entries: AuditEntry[]; nextBefore: number | null }>;
+
+  // --- ops ------------------------------------------------------------------
+  /**
+   * Run the daily backup immediately — same code path as the scheduled job,
+   * so a failed night can be re-run without waiting 24h. Admin-gated at the
+   * route; the DO method itself takes no actor because it exposes no data
+   * (it only writes to R2).
+   */
+  runBackupNow(): Promise<Record<string, number>>;
 }
 
 /**

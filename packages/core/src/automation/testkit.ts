@@ -29,6 +29,8 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     description: "Body **copy** here",
     statusId: "st_todo",
     assigneeId: null,
+    assignedBy: null,
+    assignedAt: null,
     priority: null,
     dueDate: null,
     startDate: null,

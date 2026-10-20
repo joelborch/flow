@@ -50,7 +50,7 @@ export type BatchKind = keyof BatchBody;
 export type BatchResponse = {
   ok?: boolean;
   counts?: Record<string, number>;
-  errors?: { id?: string; error: string }[];
+  errors?: { id?: string; ref?: string; error: string }[];
 };
 
 export type FlowClientOptions = {
@@ -120,13 +120,7 @@ export class FlowClient {
   /** One batch of one entity kind. Order across kinds is the caller's job. */
   async postBatch(kind: BatchKind, rows: unknown[]): Promise<BatchResponse> {
     const body = { [kind]: rows } as BatchBody;
-    const res = await this.post<BatchResponse>(ENDPOINTS.batch, body);
-    if (res.ok === false) {
-      throw new Error(
-        `Flow rejected ${kind} batch: ${JSON.stringify(res.errors ?? res).slice(0, 500)}`
-      );
-    }
-    return res;
+    return this.post<BatchResponse>(ENDPOINTS.batch, body);
   }
 
   /**

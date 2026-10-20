@@ -23,7 +23,7 @@ export function visibleTags(tags: readonly string[]): string[] {
 
 const DAY = 86_400_000;
 
-function startOfDay(ts: number): number {
+export function startOfDay(ts: number): number {
   const d = new Date(ts);
   d.setHours(0, 0, 0, 0);
   return d.getTime();

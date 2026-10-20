@@ -110,6 +110,8 @@ export function devSnapshot(taskCount = 48): BoardSnapshot {
         title: `${TITLES[Math.floor(rnd() * TITLES.length)]!}${i > TITLES.length ? ` (${i})` : ""}`,
         statusId: status.id,
         assigneeId: rnd() > 0.25 ? users[Math.floor(rnd() * users.length)]!.id : null,
+        assignedBy: null,
+        assignedAt: null,
         priority: PRIORITIES[Math.floor(rnd() * PRIORITIES.length)]!,
         dueDate: hasDue ? now + Math.round((rnd() * 20 - 6)) * DAY : null,
         snoozedUntil: snoozed ? now + Math.round(1 + rnd() * 9) * DAY : null,
@@ -125,13 +127,19 @@ export function devSnapshot(taskCount = 48): BoardSnapshot {
 
       const subCount = rnd() > 0.55 ? 2 + Math.floor(rnd() * 4) : 0;
       for (let s = 0; s < subCount; s++) {
+        // Some steps carry an assignee and a due date so My Work's subtask
+        // rows have something to show under vite dev.
+        const owned = rnd() > 0.6;
         subtasks.push({
           id: `sb_${id}_${s}`,
           taskId: id,
           title: `Step ${s + 1}`,
           done: rnd() > 0.5,
-          assigneeId: null,
-          dueDate: null,
+          assigneeId: owned ? users[Math.floor(rnd() * users.length)]!.id : null,
+          assignedBy: null,
+          assignedAt: null,
+          dueDate: owned && rnd() > 0.4 ? now + Math.round((rnd() * 14 - 4)) * DAY : null,
+          note: rnd() > 0.7 ? "Use the March numbers, not April — see the shared sheet." : null,
           position: s,
           createdAt: now - DAY,
         });
