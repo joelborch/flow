@@ -142,7 +142,7 @@ describe("row mapping", () => {
 
   it("maps comment via, reading null and unknown values as unrecorded", () => {
     const comment = (via: string | null) =>
-      toComment({ id: "cm_1", task_id: "tk_1", author_id: "us_a", body: "b", created_at: 0, via });
+      toComment({ id: "cm_1", task_id: "tk_1", author_id: "us_a", body: "b", created_at: 0, via, email_to: null, email_status: null });
     expect(comment("mcp").via).toBe("mcp");
     expect(comment(null).via).toBeNull();
     expect(comment("carrier pigeon").via).toBeNull();

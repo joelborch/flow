@@ -70,7 +70,7 @@ function subtask(id: string, taskId: string, patch: Partial<Subtask> = {}): Subt
 }
 
 function detail(t: Task, extra: Partial<TaskDetail> = {}): TaskDetail {
-  return { task: t, subtasks: [], comments: [], attachments: [], ...extra };
+  return { task: t, subtasks: [], comments: [], attachments: [], emailReplyTo: null, emailReplySubject: null, ...extra };
 }
 
 let seq = 10;

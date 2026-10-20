@@ -365,3 +365,66 @@ describe("seedJobs", () => {
     expect(recurring.map((r) => r.kind).sort()).toEqual(["backup", "due_date_check", "prune_changes"]);
   });
 });
+
+describe("core-0014-email-replies", () => {
+  const columns = (sql: SqlStorage, table: string): string[] =>
+    sql
+      .exec<{ name: string }>(`SELECT name FROM pragma_table_info('${table}') ORDER BY cid`)
+      .toArray()
+      .map((r) => r.name);
+
+  it("adds the comment email columns and email_messages.authenticated", () => {
+    const { sql } = freshDb();
+    expect(migrationApplied(sql, "core-0014-email-replies")).toBe(true);
+    expect(columns(sql, "comments")).toEqual(expect.arrayContaining(["email_to", "email_status"]));
+    expect(columns(sql, "email_messages")).toContain("authenticated");
+    expect(columns(sql, "api_keys")).toContain("can_email_requesters");
+  });
+
+  it("backfills authenticated from each message's email.ingest audit row, defaulting to unverified", () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = sqliteStorage(db);
+    const txn = savepointTxn(db);
+    sql.exec("CREATE TABLE IF NOT EXISTS _migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)");
+    applyMigrations(sql, MIGRATIONS.filter((m) => m.id !== "core-0014-email-replies"), txn);
+
+    const message = (messageId: string, taskId: string) =>
+      sql.exec(
+        `INSERT INTO email_messages (message_id, list_id, alias, task_id, comment_id, sender, received_at)
+         VALUES (?, 'ls_1', 'support', ?, NULL, 'pat@clinic.com', 0)`,
+        messageId,
+        taskId
+      );
+    const ingestAudit = (messageId: string, taskId: string, authenticated: boolean, listId = "ls_1") =>
+      sql.exec(
+        `INSERT INTO audit (actor, action, entity, diff, at, actor_user_id, api_key_id)
+         VALUES ('{}', 'email.ingest', ?, ?, 0, 'us_1', NULL)`,
+        taskId,
+        JSON.stringify({ listId, alias: "support", sender: "pat@clinic.com", authenticated, messageId, commentId: null })
+      );
+    message("verified@x", "tk_1");
+    ingestAudit("verified@x", "tk_1", true);
+    message("forged@x", "tk_2");
+    ingestAudit("forged@x", "tk_2", false);
+    message("other-list@x", "tk_3");
+    ingestAudit("other-list@x", "tk_3", true, "ls_2");
+    message("no-audit@x", "tk_4");
+    sql.exec(
+      `INSERT INTO comments (id, task_id, author_id, body, created_at) VALUES ('cm_old', 'tk_1', 'us_1', 'hi', 0)`
+    );
+
+    expect(runMigrations(sql, txn)).toEqual(["core-0014-email-replies"]);
+    const flags = Object.fromEntries(
+      sql
+        .exec<{ message_id: string; authenticated: number }>("SELECT message_id, authenticated FROM email_messages")
+        .toArray()
+        .map((r) => [r.message_id, r.authenticated])
+    );
+    expect(flags).toEqual({ "verified@x": 1, "forged@x": 0, "other-list@x": 0, "no-audit@x": 0 });
+    expect(
+      sql.exec<{ email_to: string | null; email_status: string | null }>(
+        "SELECT email_to, email_status FROM comments WHERE id = 'cm_old'"
+      ).one()
+    ).toEqual({ email_to: null, email_status: null });
+  });
+});

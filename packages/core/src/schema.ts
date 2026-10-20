@@ -517,6 +517,33 @@ const HANDOFFS: string[] = [
      WHERE handoff_state IS NOT NULL`,
 ];
 
+// Email replies (see createComment): a comment the team chose to send back to
+// the person whose email opened the ticket records who it went to and where
+// delivery stands ("sending", then "sent" or "failed" from the queue consumer).
+// NULL in both is an ordinary internal comment, which every earlier one is.
+// `api_keys.can_email_requesters` lets an owner or admin allow one key (say,
+// the one a CLI uses) to send those replies too; every key starts without it.
+// `email_messages.authenticated` keeps whether Cloudflare vouched for each
+// sender. Rows filed before it are backfilled from their email.ingest audit
+// row, and any row that audit can't vouch for reads as unverified (0). Replies
+// go to unverified senders too: the sender is always on the allowlist, and a
+// reply goes to that address, so someone forging it never gets the reply.
+const EMAIL_REPLIES: string[] = [
+  `ALTER TABLE comments ADD COLUMN email_to TEXT`,
+  `ALTER TABLE comments ADD COLUMN email_status TEXT`,
+  `ALTER TABLE api_keys ADD COLUMN can_email_requesters INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE email_messages ADD COLUMN authenticated INTEGER NOT NULL DEFAULT 0`,
+  `UPDATE email_messages SET authenticated = 1
+     WHERE EXISTS (
+       SELECT 1 FROM audit a
+        WHERE a.entity = email_messages.task_id
+          AND a.action = 'email.ingest'
+          AND json_extract(a.diff, '$.messageId') = email_messages.message_id
+          AND json_extract(a.diff, '$.listId') = email_messages.list_id
+          AND json_extract(a.diff, '$.authenticated') = 1
+     )`,
+];
+
 /**
  * Base schema first, then the automation engine's tables, then notifications.
  *
@@ -556,6 +583,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { id: "core-0011-job-status", statements: JOB_STATUS },
   { id: "core-0012-email-intake", statements: EMAIL_INTAKE },
   { id: "core-0013-handoffs", statements: HANDOFFS },
+  { id: "core-0014-email-replies", statements: EMAIL_REPLIES },
 ];
 
 /**

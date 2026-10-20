@@ -73,6 +73,24 @@ export type SideEffectPayload =
       body: string;
       ruleId: string;
       taskId: string;
+    }
+  | {
+      /**
+       * A comment a person chose to email back to the ticket's requester (see
+       * Workspace.createComment). The consumer sends it in the requester's
+       * thread and reports back through markEmailReply.
+       */
+      kind: "email-reply";
+      to: string;
+      /** The intake alias; the consumer adds EMAIL_INTAKE_DOMAIN for Reply-To. */
+      alias: string;
+      subject: string;
+      /** The comment's markdown, exactly as it shows on the card. */
+      body: string;
+      inReplyTo: string | null;
+      references: string[];
+      taskId: string;
+      commentId: string;
     };
 
 /**
