@@ -591,6 +591,44 @@ curl -sS -X POST "$FLOW/api/inbound/ls_def456" \
   -d '{"title":"Login broken","description":"500 on submit","externalId":"gleap-88"}'
 ```
 
+### Email intake
+
+A list can take tickets by email. Email Routing's catch-all on
+`EMAIL_INTAKE_DOMAIN` delivers every message to the Worker's `email()` handler
+(`src/email-intake.ts`); the local part picks the list. Mail from an allowed
+envelope sender opens an unassigned task tagged `email`, and a reply to one of
+those messages (matched on In-Reply-To/References) becomes a comment on the same
+task. Everyone else is rejected at SMTP time; bounces and auto-replies are
+dropped. Work is filed as `OWNER_EMAIL`'s user (`via: "webhook"`).
+
+The envelope sender alone is not authentication, since Email Routing accepts any
+valid DKIM signature. A message counts as authenticated only when Cloudflare's
+own results header (the topmost `ARC-Authentication-Results` or
+`Authentication-Results` with a Cloudflare authserv-id) shows an aligned DMARC,
+DKIM or SPF pass for the sender's domain. Unauthenticated mail still files, but
+its task is tagged `unverified` and its text starts with an "Unverified sender"
+line. Only an authenticated, personal (not bulk or auto-generated) message that
+opens a new ticket gets the generic acknowledgement through `SEND_EMAIL`, with
+`Reply-To` set to the intake address. Each message logs one
+`email intake auth` line (result tokens and domains only) for checking the
+parser against real traffic. Up to 20 attachments land in R2 under
+`email/<hash>/<id>/<filename>`; small inline signature images are skipped.
+
+All three routes are owner/admin only, reads included, because the allowlists
+name clients' addresses.
+
+```bash
+flowcurl $FLOW/api/email-intakes
+# {"domain":"tickets.example.com","intakes":[{"listId":"ls_def456","alias":"acme",...}]}
+
+# Create or replace. "@example.com" admits a whole domain, "name@example.com" one address.
+flowcurl -X PUT $FLOW/api/lists/ls_def456/email-intake \
+  -H 'Content-Type: application/json' \
+  -d '{"alias":"acme","allowedSenders":["@example.com","front.desk@example.org"]}'
+
+flowcurl -X DELETE $FLOW/api/lists/ls_def456/email-intake
+```
+
 ### Import
 
 Admin-only, and used by `apps/importer` during the ClickUp migration.
@@ -892,6 +930,7 @@ cp wrangler.example.jsonc wrangler.jsonc
 | `EMAIL_FROM_NAME` | Sender display name for outbound email. |
 | `EMAIL_BRAND_NAME` | Wordmark shown in the branded email header. Falls back to `EMAIL_FROM_NAME`, then `"Flow"`. |
 | `GLEAP_ATTACHMENT_HOSTS` | Comma-separated HTTPS host allowlist for rendered Gleap screenshots. |
+| `EMAIL_INTAKE_DOMAIN` | Domain Email Routing sends to `email()`; returned by `GET /api/email-intakes`. |
 | `DEV_NO_AUTH` | Not set in `wrangler.jsonc`. `"true"` in `.dev.vars` only. |
 
 `GLEAP_PROJECT_TOKENS_JSON` is a Worker secret (or a local `.dev.vars` value),
@@ -914,10 +953,11 @@ src/
   tokens.ts           token minting, sha256 hashing, bearer parsing  (pure)
   gleap.ts            inbound payload mapper                        (pure)
   gleap-screenshot.ts delayed ticket lookup + safe R2 screenshot attachment
+  email-intake.ts     the email() handler: classify, parse, upload, ingest, ack
   do.ts               WorkspaceApi — the RPC surface + the typed stub accessor
   errors.ts           ApiError, Zod issue flattening, {error} responses
-  routes/             me, spaces, lists, tasks, attachments,
-                      automations, audit, api-keys, inbound, ws
+  routes/             me, spaces, lists, tasks, attachments, automations,
+                      audit, api-keys, inbound, email-intake, ws
   mcp/index.ts        the /mcp handler: server + transport per request
   mcp/tools.ts        the 15 tools, each a wrapper over one DO RPC call
   mcp/schemas.ts      tool inputs, built from the shared contract schemas

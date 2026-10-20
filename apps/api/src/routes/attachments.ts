@@ -440,9 +440,10 @@ attachmentRoutes.delete("/attachments/:attachmentId", async (c) => {
 
 /**
  * RFC 5987 filename, ASCII-safe with a UTF-8 fallback. `inline` only for
- * INLINE_MIME_TYPES; everything else downloads.
+ * INLINE_MIME_TYPES; everything else downloads. Also used by email intake,
+ * which stores attachments with the same metadata as uploads.
  */
-function contentDisposition(filename: string, mimeType: string): string {
+export function contentDisposition(filename: string, mimeType: string): string {
   const essence = mimeEssence(mimeType);
   const kind = essence !== null && INLINE_MIME_TYPES.has(essence) ? "inline" : "attachment";
   const ascii = filename.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, "");

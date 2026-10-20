@@ -202,6 +202,19 @@ export function requireAdmin(c: Context<AppEnv>): AuthContext {
   return auth;
 }
 
+/**
+ * The workspace owner (OWNER_EMAIL) as the actor for an unattended entry
+ * point: `via: "webhook"` and no api key. Null when no user has that email.
+ */
+export async function findOwnerActor(env: Env): Promise<{ user: User; actor: Actor } | null> {
+  const owner = await findUserByEmail(env, (env.OWNER_EMAIL || "").toLowerCase());
+  if (!owner) return null;
+  return {
+    user: owner,
+    actor: { userId: owner.id, via: "webhook", apiKeyId: null, automationRuleId: null },
+  };
+}
+
 /** Resolve the identity an inbound webhook acts as: the gleap key, else owner. */
 export async function resolveInboundActor(env: Env): Promise<{ user: User; actor: Actor }> {
   const found = await findApiKeyByName(env, ["gleap", "gleap-inbound"]);
@@ -217,14 +230,11 @@ export async function resolveInboundActor(env: Env): Promise<{ user: User; actor
     };
   }
 
-  const owner = await findUserByEmail(env, (env.OWNER_EMAIL || "").toLowerCase());
+  const owner = await findOwnerActor(env);
   if (!owner) {
     throw unauthorized(
       "inbound webhook has no identity to act as: no 'gleap' api key and no OWNER_EMAIL user"
     );
   }
-  return {
-    user: owner,
-    actor: { userId: owner.id, via: "webhook", apiKeyId: null, automationRuleId: null },
-  };
+  return owner;
 }

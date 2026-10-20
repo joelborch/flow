@@ -29,6 +29,20 @@ export type Env = CoreEnv & {
   /** Comma-separated HTTPS host allowlist for rendered Gleap screenshot URLs. */
   GLEAP_ATTACHMENT_HOSTS?: string;
   /**
+   * Domain Email Routing sends to the `email()` handler, e.g.
+   * "tickets.example.com". Informational: GET /api/email-intakes
+   * returns it so the UI can show full intake addresses.
+   */
+  EMAIL_INTAKE_DOMAIN?: string;
+  /**
+   * "true" turns on intake acknowledgements. Off until a real Cloudflare-routed
+   * message has confirmed which authentication-results header Cloudflare
+   * writes, because an ack only goes to senders that header vouches for.
+   */
+  EMAIL_INTAKE_ACK?: string;
+  /** Email Service binding (`send_email` in wrangler.jsonc): notifications, automations, intake acks. */
+  SEND_EMAIL?: SendEmail;
+  /**
    * Local-dev escape hatch. Auth resolves to the owner user when this is
    * exactly the string "true". Anything else (including unset) fails closed.
    */
