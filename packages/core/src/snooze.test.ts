@@ -89,6 +89,11 @@ const taskRow = (overrides: Partial<TaskRowSql> = {}): TaskRowSql => ({
   updated_at: NOW,
   closed_at: null,
   clickup_id: null,
+  handoff_requested_by: null,
+  handoff_state: null,
+  handoff_return: null,
+  handoff_context: null,
+  handoff_state_changed_at: null,
   ...overrides,
 });
 

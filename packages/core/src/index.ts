@@ -1,6 +1,12 @@
 /// <reference types="@cloudflare/workers-types" />
 import { DurableObject } from "cloudflare:workers";
-import { ClientMsg as ClientMsgSchema } from "@flow/shared";
+import {
+  ClientMsg as ClientMsgSchema,
+  ListHandoffsInput as ListHandoffsSchema,
+  ReplyHandoffInput as ReplyHandoffSchema,
+  RequestHandoffInput as RequestHandoffSchema,
+  SetEmailIntakeInput as SetEmailIntakeSchema,
+} from "@flow/shared";
 import type {
   Action,
   Actor,
@@ -19,13 +25,20 @@ import type {
   CreateSubtaskInput,
   CreateTaskInput,
   Delta,
+  EmailIntake,
+  Handoff,
+  HandoffState,
   List,
+  ListHandoffsInput,
   MoveTaskInput,
   NotificationPref,
+  ReplyHandoffInput,
+  RequestHandoffInput,
   Role,
   SearchTasksInput,
   SearchTasksResult,
   ServerMsg,
+  SetEmailIntakeInput,
   Space,
   SpaceVisibility,
   Status,
@@ -41,7 +54,7 @@ import type {
 import { AUTOMATION_MAX_DEPTH, mergeNotificationPrefs } from "@flow/shared";
 
 import { evaluateAutomations } from "./automation/engine.js";
-import { nextRecurringDue } from "./automation/recurrence.js";
+import { dueDateWithCutoff, nextRecurringDue } from "./automation/recurrence.js";
 import { pruneDueFires, sweepDueDateAutomations } from "./automation/schedule.js";
 import type {
   AutomationContext,
@@ -50,6 +63,25 @@ import type {
   SideEffectPayload,
   TaskFacts,
 } from "./automation/types.js";
+import {
+  EMAIL_INTAKE_HOURLY_LIMIT,
+  EMAIL_INTAKE_LIST_HOURLY_LIMIT,
+  EMAIL_INTAKE_TAG,
+  EMAIL_INTAKE_UNVERIFIED_TAG,
+  type EmailIngestAttachment,
+  type EmailIntakeCheck,
+  type IngestEmailInput,
+  type IngestEmailResult,
+  normalizeMessageId,
+  senderAllowed,
+} from "./email-intake.js";
+import {
+  HANDOFF_TAG,
+  OPEN_HANDOFF_STATES,
+  decideHandoffState,
+  handoffStateForStatusMove,
+  handoffStatusMove,
+} from "./handoffs.js";
 import { id, token } from "./id.js";
 import {
   type ImportBatch,
@@ -73,6 +105,7 @@ import {
   type AuditRow,
   type ChangeRow,
   type CommentRow,
+  type EmailIntakeRow,
   type JobRow,
   type ListRow,
   type RuleRow,
@@ -86,6 +119,7 @@ import {
   toAttachment,
   toAuditEntry,
   toComment,
+  toEmailIntake,
   toList,
   toListWithSecrets,
   toRule,
@@ -117,6 +151,7 @@ import {
 import { searchTasks as runSearch } from "./search.js";
 import { type SnoozedRow, WAKE_SWEEP_LIMIT, wakeCandidates, wakesOnComment } from "./snooze.js";
 import {
+  closedStatus,
   getStatus,
   insertStatuses,
   listStatuses,
@@ -148,7 +183,15 @@ import {
 } from "./visibility.js";
 
 export type { ImportBatch, ImportResult, ImportCounts } from "./import.js";
+export type {
+  EmailIngestAttachment, EmailIntakeCheck, IngestEmailInput, IngestEmailResult,
+} from "./email-intake.js";
+export {
+  EMAIL_INTAKE_HOURLY_LIMIT, EMAIL_INTAKE_LIST_HOURLY_LIMIT, EMAIL_INTAKE_TAG, EMAIL_INTAKE_UNVERIFIED_TAG,
+  messageIdsIn, normalizeMessageId, senderAllowed,
+} from "./email-intake.js";
 export { ID_PREFIX, INBOUND_TOKEN_PREFIX, id, token } from "./id.js";
+export { HANDOFF_TAG, OPEN_HANDOFF_STATES } from "./handoffs.js";
 
 export interface Env {
   WORKSPACE: DurableObjectNamespace<Workspace>;
@@ -275,9 +318,14 @@ export interface SetAttachmentDriveStorageInput {
   driveDestination: "shared" | "private";
 }
 
+/** core-0013-handoffs; mapped to `Task.handoff` by `toHandoff` in ./rows.ts. */
+const HANDOFF_COLUMNS = `handoff_requested_by, handoff_state, handoff_return, handoff_context,
+  handoff_state_changed_at`;
+
 const TASK_COLUMNS = `id, list_id, title, description, status_id, assignee_id, assigned_by, assigned_at,
   priority, due_date, start_date, snoozed_until, blocked_note, tags, position,
-  created_by, created_at, updated_at, closed_at, clickup_id`;
+  created_by, created_at, updated_at, closed_at, clickup_id,
+  ${HANDOFF_COLUMNS}`;
 
 /**
  * The snapshot projection: board-render columns only, with the description
@@ -286,12 +334,36 @@ const TASK_COLUMNS = `id, list_id, title, description, status_id, assignee_id, a
  */
 const SNAPSHOT_TASK_COLUMNS = `id, list_id, title, status_id, assignee_id, assigned_by, assigned_at, priority,
   due_date, tags, position, created_at, updated_at, snoozed_until, blocked_note,
-  (description != '') AS has_description`;
+  ${HANDOFF_COLUMNS}, (description != '') AS has_description`;
 
 /** Every space read goes through this, so `visibility` can never be forgotten. */
 const SPACE_COLUMNS = `id, name, color, position, archived, visibility, created_at, clickup_id`;
 
 const LIST_COLUMNS = `id, space_id, name, position, archived, inbound_token, created_at, clickup_id`;
+
+const EMAIL_INTAKE_COLUMNS = `list_id, alias, allowed_senders, created_at, updated_at`;
+
+/** The window both email rate limits count over. */
+const EMAIL_RATE_WINDOW_MS = 3_600_000;
+
+/**
+ * How many of a message's In-Reply-To/References ids threading looks up. The
+ * Worker caps the list too, but one turn must never run an unbounded number of
+ * queries on what a sender put in a header.
+ */
+const EMAIL_THREAD_REFERENCE_LIMIT = 20;
+
+/**
+ * Prefix of every error ingestEmail throws for a condition no retry can fix:
+ * no Message-ID, an attachment id already in use, or an inbound actor that may
+ * not write to the target list or task. The Worker matches it to reject the
+ * message outright instead of asking the sending server to try again; any
+ * other throw is treated as transient.
+ */
+export const EMAIL_INGEST_PERMANENT_ERROR = "Email intake permanent failure";
+
+const permanentEmailError = (detail: string): Error =>
+  new Error(`${EMAIL_INGEST_PERMANENT_ERROR}: ${detail}`);
 
 const TASK_DIFF_KEYS = [
   "listId",
@@ -309,6 +381,9 @@ const TASK_DIFF_KEYS = [
   "tags",
   "position",
   "closedAt",
+  // An object: diffOf compares it by value, so an unchanged handoff emits
+  // nothing and a changed one ships whole.
+  "handoff",
 ] as const;
 
 /**
@@ -790,6 +865,21 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     const actorId = delta.actorUserId;
     const data = delta.data ?? {};
 
+    // A new handoff tells its recipient. Only handoffs: an ordinary task
+    // created with an assignee has never emailed anyone (assignment
+    // notifications ride the update path below), and changing that for every
+    // create is a separate decision from filing a request for a teammate.
+    if (delta.entity === "task" && delta.op === "create") {
+      if (data["handoff"] == null) return;
+      const facts = this.loadTaskFacts(delta.id);
+      if (facts === null) return;
+      const newAssigneeId = (data["assigneeId"] as string | null) ?? null;
+      for (const rid of recipientsFor("assigned", { assigneeId: null, creatorId: facts.task.createdBy, newAssigneeId }, actorId)) {
+        this.sendNotification(t, "assigned", facts, rid, actorId, {});
+      }
+      return;
+    }
+
     if (delta.entity === "task" && delta.op === "update") {
       const facts = this.loadTaskFacts(delta.id);
       if (facts === null) return;
@@ -1086,6 +1176,11 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         case "set_priority":
           this.applyTaskUpdate(t, { taskId, priority: action.priority }, "automation.set_priority");
           break;
+        case "set_due_date": {
+          const dueDate = dueDateWithCutoff(t.now, action.cutoffHour, action.timeZone, action.businessDays);
+          this.applyTaskUpdate(t, { taskId, dueDate }, "automation.set_due_date");
+          break;
+        }
         case "add_tags": {
           const current = toTask(this.requireTaskRow(taskId)).tags;
           const seen = new Set(current.map((x) => x.toLowerCase()));
@@ -1316,18 +1411,24 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * import) are exempt by design.
    */
   private assertSpaceWritable(actor: Actor, spaceId: string | null): void {
-    if (spaceId === null || isSystemActor(actor)) return;
+    const refusal = this.spaceWriteRefusal(actor, spaceId);
+    if (refusal !== null) throw new Error(refusal);
+  }
+
+  /** The write guard's verdict without the throw: the error message, or null when allowed. */
+  private spaceWriteRefusal(actor: Actor, spaceId: string | null): string | null {
+    if (spaceId === null || isSystemActor(actor)) return null;
     const row = this.sql
       .exec<SpaceRow>(`SELECT ${SPACE_COLUMNS} FROM spaces WHERE id = ?`, spaceId)
       .toArray()[0];
-    if (!row) return;
+    if (!row) return null;
     const space = toSpace(row);
-    if (space.visibility !== "private") return;
+    if (space.visibility !== "private") return null;
     const allowed = canSeeSpace(roleOf(this.sql, actor.userId), {
       visibility: space.visibility,
       isMember: isSpaceMember(this.sql, spaceId, actor.userId),
     });
-    if (!allowed) throw new Error(privateSpaceError(spaceId));
+    return allowed ? null : privateSpaceError(spaceId);
   }
 
   private assertTaskWritable(actor: Actor, taskId: string): void {
@@ -1613,7 +1714,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   listComments(taskId: string): Comment[] {
     return this.sql
       .exec<CommentRow>(
-        "SELECT id, task_id, author_id, body, created_at FROM comments WHERE task_id = ? ORDER BY created_at",
+        "SELECT id, task_id, author_id, body, created_at, via FROM comments WHERE task_id = ? ORDER BY created_at",
         taskId
       )
       .toArray()
@@ -1883,7 +1984,11 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     });
   }
 
-  private applyTaskCreate(t: Turn, input: CreateTaskInput): Task {
+  /**
+   * `handoff` is internal (requestHandoff): CreateTaskInput has no handoff
+   * field, so no client can file one except through that RPC.
+   */
+  private applyTaskCreate(t: Turn, input: CreateTaskInput, handoff: Handoff | null = null): Task {
     const listRow = this.requireListRow(input.listId);
     const status =
       input.status === undefined
@@ -1921,6 +2026,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       updatedAt: t.now,
       closedAt: status.type === "closed" ? t.now : null,
       clickupId: null,
+      handoff,
     };
 
     this.insertTaskRow(task);
@@ -1946,9 +2052,17 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     });
   }
 
-  private applyTaskUpdate(t: Turn, input: UpdateTaskInput, action: string): Task {
+  /**
+   * `handoff` is internal (replyHandoff), for the same reason as on
+   * applyTaskCreate: UpdateTaskInput cannot carry it. It lands in the same
+   * UPDATE as any status move, so a handoff closing its task is one delta.
+   */
+  private applyTaskUpdate(t: Turn, input: UpdateTaskInput, action: string, explicitHandoff?: Handoff): Task {
     const row = this.requireTaskRow(input.taskId);
     const before = toTask(row);
+    // replyHandoff passes the handoff it decided on; any other status change
+    // to a handoff task may imply one (see handoffStateForStatusMove).
+    let handoff = explicitHandoff;
 
     const sets: string[] = [];
     const params: SqlStorageValue[] = [];
@@ -2003,7 +2117,16 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         else if (status.type !== "closed" && before.closedAt !== null) set("closed_at", null);
         // The task joins the end of its new column.
         set("position", nextTaskPosition(this.sql, before.listId, status.id));
+        if (handoff === undefined) handoff = this.impliedHandoff(t, before, status.type === "closed");
       }
+    }
+    if (handoff !== undefined && JSON.stringify(handoff) !== JSON.stringify(before.handoff)) {
+      const [requestedBy, state, returnFormat, context, stateChangedAt] = handoffValues(handoff);
+      set("handoff_requested_by", requestedBy);
+      set("handoff_state", state);
+      set("handoff_return", returnFormat);
+      set("handoff_context", context);
+      set("handoff_state_changed_at", stateChangedAt);
     }
 
     if (sets.length === 0) return before; // no-op: no delta, no audit row
@@ -2070,6 +2193,16 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
     const closedAt =
       status.type === "closed" ? (before.closedAt ?? t.now) : null;
+    const impliedHandoff = this.impliedHandoff(t, before, status.type === "closed");
+    if (impliedHandoff !== undefined) {
+      const [, state, , , stateChangedAt] = handoffValues(impliedHandoff);
+      this.sql.exec(
+        "UPDATE tasks SET handoff_state = ?, handoff_state_changed_at = ? WHERE id = ?",
+        state,
+        stateChangedAt,
+        before.id
+      );
+    }
 
     this.sql.exec(
       `UPDATE tasks SET list_id = ?, status_id = ?, position = ?, closed_at = ?, updated_at = ?
@@ -2340,42 +2473,53 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
   createComment(input: ParsedCommentInput, actor: string | Actor): Comment {
     return this.runTurn(toActor(actor), (t) => {
-      const taskRow = this.requireTaskRow(input.taskId);
+      // A missing task resolves to no space, so this passes and the not-found
+      // error comes from applyCommentCreate's requireTaskRow instead.
       this.assertTaskWritable(t.actor, input.taskId);
-      const comment: Comment = {
-        id: id("cm_"),
-        taskId: input.taskId,
-        authorId: t.actor.userId,
-        body: input.body,
-        createdAt: t.now,
-      };
-      this.sql.exec(
-        "INSERT INTO comments (id, task_id, author_id, body, created_at) VALUES (?, ?, ?, ?, ?)",
-        comment.id,
-        comment.taskId,
-        comment.authorId,
-        comment.body,
-        comment.createdAt
-      );
-      t.emit("create", "comment", comment.id, comment as unknown as Record<string, unknown>, {
-        taskId: comment.taskId,
-      });
-      t.audit("comment.create", comment.id, { taskId: comment.taskId });
-      // Activity wakes a snoozed task, in this same turn: the comment delta and
-      // the task's snoozedUntil -> null delta commit and broadcast together, so
-      // nobody ever sees the comment land on a card that is still asleep.
-      if (wakesOnComment(taskRow.snoozed_until ?? null)) {
-        this.applyTaskUpdate(t, { taskId: comment.taskId, snoozedUntil: null }, "task.wake");
-      }
-      return comment;
+      return this.applyCommentCreate(t, input);
     });
+  }
+
+  /** The comment write itself, shared with ingestEmail. Callers check access. */
+  private applyCommentCreate(t: Turn, input: ParsedCommentInput): Comment {
+    const taskRow = this.requireTaskRow(input.taskId);
+    const comment: Comment = {
+      id: id("cm_"),
+      taskId: input.taskId,
+      authorId: t.actor.userId,
+      body: input.body,
+      createdAt: t.now,
+      // How it arrived: "api"/"mcp" is the author's agent, "ui" the person,
+      // "webhook" an inbound email. Recorded on the row, not inferred later.
+      via: t.actor.via,
+    };
+    this.sql.exec(
+      "INSERT INTO comments (id, task_id, author_id, body, created_at, via) VALUES (?, ?, ?, ?, ?, ?)",
+      comment.id,
+      comment.taskId,
+      comment.authorId,
+      comment.body,
+      comment.createdAt,
+      comment.via
+    );
+    t.emit("create", "comment", comment.id, comment as unknown as Record<string, unknown>, {
+      taskId: comment.taskId,
+    });
+    t.audit("comment.create", comment.id, { taskId: comment.taskId });
+    // Activity wakes a snoozed task, in this same turn: the comment delta and
+    // the task's snoozedUntil -> null delta commit and broadcast together, so
+    // nobody ever sees the comment land on a card that is still asleep.
+    if (wakesOnComment(taskRow.snoozed_until ?? null)) {
+      this.applyTaskUpdate(t, { taskId: comment.taskId, snoozedUntil: null }, "task.wake");
+    }
+    return comment;
   }
 
   deleteComment(commentId: string, actor: string | Actor): { ok: true } {
     return this.runTurn(toActor(actor), (t) => {
       const rows = this.sql
         .exec<CommentRow>(
-          "SELECT id, task_id, author_id, body, created_at FROM comments WHERE id = ?",
+          "SELECT id, task_id, author_id, body, created_at, via FROM comments WHERE id = ?",
           commentId
         )
         .toArray();
@@ -2391,6 +2535,272 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   }
 
   // =========================================================================
+  // Agent handoffs (see ./handoffs.ts for the state rules)
+  //
+  // A handoff is an ordinary task — title and description carry the ask, the
+  // assignee is the recipient, the due date is when it's needed, tag
+  // "handoff" — plus the five handoff columns: who asked, what they want back,
+  // which tasks to read first, and where the exchange stands. Replies are
+  // ordinary comments. Both mutations check everything before their first
+  // write, because a throw does not roll back what the turn already wrote.
+  // =========================================================================
+
+  /**
+   * File a request for a teammate's agent. One task turn through
+   * applyTaskCreate, so task_created automations fire and the recipient gets
+   * the assignment email (see notifyForDelta).
+   */
+  requestHandoff(input: RequestHandoffInput, actor: string | Actor): Task {
+    const req = contractInput(RequestHandoffSchema.safeParse(input), "handoff request");
+    return this.runTaskTurn(toActor(actor), (t) => {
+      const list = this.requireListRow(req.listId);
+      this.assertSpaceWritable(t.actor, list.space_id);
+      this.requireHandoffRecipient(t.actor, req.toUserId, list.space_id);
+      const contextTaskIds = this.requireHandoffContext(t.actor, req.toUserId, req.contextTaskIds ?? []);
+
+      const handoff: Handoff = {
+        requestedBy: t.actor.userId,
+        state: "requested",
+        returnFormat:
+          req.returnFormat === undefined || req.returnFormat.trim() === "" ? null : req.returnFormat,
+        contextTaskIds,
+        stateChangedAt: t.now,
+      };
+      const task = this.applyTaskCreate(
+        t,
+        {
+          listId: list.id,
+          title: req.title,
+          description: req.ask,
+          assigneeId: req.toUserId,
+          dueDate: req.dueDate ?? null,
+          tags: [HANDOFF_TAG],
+        },
+        handoff
+      );
+      t.audit("handoff.request", task.id, { toUserId: req.toUserId, contextTaskIds });
+      return task;
+    });
+  }
+
+  /**
+   * Answer, ask back, or move a handoff along, in one turn: the message (if
+   * any) is a comment through applyCommentCreate, so `via` is recorded and a
+   * snoozed task wakes; the state change (if any) is one task update carrying
+   * the new `handoff` and, for done/declined or a reopen, the status move.
+   */
+  replyHandoff(
+    input: ReplyHandoffInput,
+    actor: string | Actor
+  ): { task: Task; comment: Comment | null } {
+    const reply = contractInput(ReplyHandoffSchema.safeParse(input), "handoff reply");
+    const out = this.runTurn(toActor(actor), (t) => {
+      const before = toTask(this.requireTaskRow(reply.taskId));
+      this.assertTaskWritable(t.actor, before.id);
+      const handoff = before.handoff;
+      if (handoff === null) {
+        throw new Error(
+          `Task ${before.id} is not a handoff, so it has no handoff state. ` +
+            `Use createComment or updateTask for an ordinary task.`
+        );
+      }
+
+      const decision = decideHandoffState(handoff.state, reply.state, reply.message !== undefined, {
+        recipient: before.assigneeId !== null && before.assigneeId === t.actor.userId,
+        requester: handoff.requestedBy === t.actor.userId,
+        privileged: isSystemActor(t.actor) || isPrivilegedRole(roleOf(this.sql, t.actor.userId)),
+      });
+      if (!decision.ok) throw new Error(this.handoffRefusal(decision.reason, before, handoff));
+      const next = decision.next;
+      const changed = next !== handoff.state;
+      // Resolved before the first write: a malformed list throws here, not
+      // after the comment has already landed.
+      const status = changed ? this.handoffStatusName(before, next) : undefined;
+
+      const comment =
+        reply.message === undefined
+          ? null
+          : this.applyCommentCreate(t, { taskId: before.id, body: reply.message });
+      if (changed) {
+        this.applyTaskUpdate(
+          t,
+          { taskId: before.id, ...(status === undefined ? {} : { status }) },
+          "handoff.reply",
+          { ...handoff, state: next, stateChangedAt: t.now }
+        );
+        t.audit("handoff.state", before.id, { from: handoff.state, to: next });
+      }
+      return { taskId: before.id, comment };
+    });
+    // Re-read after the automation drain, as runTaskTurn does.
+    return { task: toTask(this.requireTaskRow(out.taskId)), comment: out.comment };
+  }
+
+  /**
+   * Handoffs assigned to the actor (incoming) or filed by them (outgoing),
+   * newest state change first, limited to spaces the actor can see. Explicit
+   * `states` filter on the handoff state alone, so asking for done or declined
+   * returns the (closed) tasks behind them. The default (open states) also
+   * skips closed tasks: someone closing a handoff task by hand, without
+   * touching its state, has still taken it off everyone's plate.
+   */
+  listHandoffs(input: ListHandoffsInput, actor: string | Actor): Task[] {
+    const query = contractInput(ListHandoffsSchema.safeParse(input), "handoff query");
+    const userId = toActor(actor).userId;
+    const states = [...new Set(query.states ?? OPEN_HANDOFF_STATES)];
+    const column = query.direction === "outgoing" ? "handoff_requested_by" : "assignee_id";
+
+    const where = [`${column} = ?`, `handoff_state IN (${states.map(() => "?").join(", ")})`];
+    const params: SqlStorageValue[] = [userId, ...states];
+    if (query.states === undefined) where.push("closed_at IS NULL");
+    // Same visibility filter as searchTasks: in SQL, before the LIMIT, so a
+    // page of hidden rows can never come back short or empty.
+    const visible = visibleSpaceIds(this.sql, userId);
+    if (visible !== null) {
+      if (visible.size === 0) return [];
+      where.push(
+        `list_id IN (SELECT id FROM lists WHERE space_id IN (${[...visible].map(() => "?").join(", ")}))`
+      );
+      params.push(...visible);
+    }
+    return this.sql
+      .exec<TaskRowSql>(
+        `SELECT ${TASK_COLUMNS} FROM tasks
+         WHERE handoff_state IS NOT NULL AND ${where.join(" AND ")}
+         ORDER BY handoff_state_changed_at DESC, id DESC LIMIT ?`,
+        ...params,
+        query.limit
+      )
+      .toArray()
+      .map(toTask);
+  }
+
+  /**
+   * The recipient must exist, be someone else, be active, and be able to see
+   * the space the handoff lands in — a handoff they cannot open is one nobody
+   * will ever answer.
+   */
+  private requireHandoffRecipient(actor: Actor, toUserId: string, spaceId: string): void {
+    const recipient = this.userById(toUserId);
+    if (recipient === null) {
+      const teammates = this.listUsers()
+        .filter((u) => !u.deactivated && u.id !== actor.userId)
+        .map((u) => `${u.id} ("${u.name}")`);
+      throw new Error(
+        `Unknown toUserId "${toUserId}". Active teammates: ${teammates.join(", ") || "none"}.`
+      );
+    }
+    if (recipient.id === actor.userId) {
+      throw new Error(
+        `You can't hand off to yourself (${recipient.id}). Pick a teammate, or create an ordinary task.`
+      );
+    }
+    if (recipient.deactivated) {
+      throw new Error(
+        `${recipient.name} (${recipient.id}) is deactivated and can't receive handoffs. Pick an active teammate.`
+      );
+    }
+    const space = this.requireSpace(spaceId);
+    const canSee = canSeeSpace(recipient.role, {
+      visibility: space.visibility,
+      isMember: isSpaceMember(this.sql, space.id, recipient.id),
+    });
+    if (!canSee) {
+      throw new Error(
+        `${recipient.name} (${recipient.id}) can't see space ${space.id} ("${space.name}"), ` +
+          `so they couldn't open this handoff. File it in a list they can see, ` +
+          `or ask an owner/admin to add them to the space.`
+      );
+    }
+  }
+
+  /**
+   * Every context task must exist and be visible to both ends: the requester
+   * (it's their pointer) and the recipient, whose agent would otherwise be
+   * sent to read a task it can't open. De-duplicated, order kept. Called after
+   * requireHandoffRecipient, so the recipient is known to exist.
+   */
+  private requireHandoffContext(
+    actor: Actor,
+    recipientId: string,
+    taskIds: readonly string[]
+  ): string[] {
+    const recipient = this.userById(recipientId);
+    const out: string[] = [];
+    for (const taskId of taskIds) {
+      if (out.includes(taskId)) continue;
+      if (this.taskRow(taskId) === null) {
+        throw new Error(`Context task ${taskId} not found; contextTaskIds must name existing tasks.`);
+      }
+      const spaceId = this.spaceIdForTask(taskId);
+      const refusal = this.spaceWriteRefusal(actor, spaceId);
+      if (refusal !== null) {
+        throw new Error(`Context task ${taskId} isn't visible to you. ${refusal}`);
+      }
+      if (recipient !== null && spaceId !== null) {
+        const space = this.requireSpace(spaceId);
+        const recipientSees = canSeeSpace(recipient.role, {
+          visibility: space.visibility,
+          isMember: isSpaceMember(this.sql, space.id, recipient.id),
+        });
+        if (!recipientSees) {
+          throw new Error(
+            `Context task ${taskId} is in space ${space.id} ("${space.name}"), which ${recipient.name} ` +
+              `can't see, so their agent couldn't read it. Leave it out, or ask an owner/admin to add them to that space.`
+          );
+        }
+      }
+      out.push(taskId);
+    }
+    return out;
+  }
+
+  /**
+   * The handoff a status move implies for a handoff task closed or reopened
+   * without going through replyHandoff, or undefined to leave it as it is.
+   */
+  private impliedHandoff(t: Turn, before: Task, nowClosed: boolean): Handoff | undefined {
+    if (before.handoff === null) return undefined;
+    const next = handoffStateForStatusMove(before.handoff.state, before.closedAt !== null, nowClosed);
+    return next === null ? undefined : { ...before.handoff, state: next, stateChangedAt: t.now };
+  }
+
+  /** The status name a state change moves the task to, or undefined to leave it. */
+  private handoffStatusName(task: Task, next: HandoffState): string | undefined {
+    const closed = getStatus(this.sql, task.statusId)?.type === "closed";
+    switch (handoffStatusMove(next, closed)) {
+      case "close":
+        return closedStatus(this.sql, task.listId).name;
+      case "reopen":
+        return openStatus(this.sql, task.listId).name;
+      case null:
+        return undefined;
+    }
+  }
+
+  /** The refusal sentence, naming who can do what — agents act on these. */
+  private handoffRefusal(reason: "outsider" | "requester_state", task: Task, handoff: Handoff): string {
+    const label = (userId: string | null): string => {
+      if (userId === null) return "nobody; the task is unassigned";
+      const user = this.userById(userId);
+      return user === null ? userId : `${user.name} (${user.id})`;
+    };
+    const recipient = label(task.assigneeId);
+    if (reason === "outsider") {
+      return (
+        `Only handoff ${task.id}'s recipient (${recipient}) or requester (${label(handoff.requestedBy)}) ` +
+        `can reply to it; owners and admins can too. Use createComment to add a note without replying.`
+      );
+    }
+    return (
+      `As the requester you can only withdraw handoff ${task.id} (state "declined"), and only while it's still open. ` +
+      `The recipient (${recipient}) moves it through requested, working, needs_input and done, ` +
+      `and owners and admins can set any state. To answer a needs_input handoff, send a message ` +
+      `without a state; that hands it back as "working".`
+    );
+  }
+
+  // =========================================================================
   // Attachments — the api Worker does the R2 upload, the DO owns the metadata
   // =========================================================================
 
@@ -2398,42 +2808,50 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     return this.runTurn(toActor(actor), (t) => {
       this.requireTaskRow(input.taskId);
       this.assertTaskWritable(t.actor, input.taskId);
-      const attachment: Attachment = {
-        id: input.id ?? id("at_"),
-        taskId: input.taskId,
-        filename: input.filename,
-        r2Key: input.r2Key,
-        storageProvider: "r2",
-        driveFileId: null,
-        driveWebViewLink: null,
-        driveDestination: null,
-        migrationState: "r2",
-        size: input.size,
-        mimeType: input.mimeType,
-        uploadedBy: t.actor.userId,
-        createdAt: t.now,
-      };
-      this.sql.exec(
-        `INSERT INTO attachments (id, task_id, filename, r2_key, size, mime_type, uploaded_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        attachment.id,
-        attachment.taskId,
-        attachment.filename,
-        attachment.r2Key,
-        attachment.size,
-        attachment.mimeType,
-        attachment.uploadedBy,
-        attachment.createdAt
-      );
-      t.emit("create", "attachment", attachment.id, attachment as unknown as Record<string, unknown>, {
-        taskId: attachment.taskId,
-      });
-      t.audit("attachment.create", attachment.id, {
-        taskId: attachment.taskId,
-        filename: attachment.filename,
-      });
-      return attachment;
+      return this.applyAttachmentCreate(t, input);
     });
+  }
+
+  /**
+   * The metadata write, shared with ingestEmail. Honours a caller-supplied id
+   * (the R2 key embeds it); callers check the task exists and is writable.
+   */
+  private applyAttachmentCreate(t: Turn, input: CreateAttachmentInput): Attachment {
+    const attachment: Attachment = {
+      id: input.id ?? id("at_"),
+      taskId: input.taskId,
+      filename: input.filename,
+      r2Key: input.r2Key,
+      storageProvider: "r2",
+      driveFileId: null,
+      driveWebViewLink: null,
+      driveDestination: null,
+      migrationState: "r2",
+      size: input.size,
+      mimeType: input.mimeType,
+      uploadedBy: t.actor.userId,
+      createdAt: t.now,
+    };
+    this.sql.exec(
+      `INSERT INTO attachments (id, task_id, filename, r2_key, size, mime_type, uploaded_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      attachment.id,
+      attachment.taskId,
+      attachment.filename,
+      attachment.r2Key,
+      attachment.size,
+      attachment.mimeType,
+      attachment.uploadedBy,
+      attachment.createdAt
+    );
+    t.emit("create", "attachment", attachment.id, attachment as unknown as Record<string, unknown>, {
+      taskId: attachment.taskId,
+    });
+    t.audit("attachment.create", attachment.id, {
+      taskId: attachment.taskId,
+      filename: attachment.filename,
+    });
+    return attachment;
   }
 
   /**
@@ -2974,12 +3392,338 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
             `or archive the list instead (updateList with archived: true).`
         );
       }
+      // An alias outliving its list would keep accepting mail for nowhere, and
+      // keep the alias from being reused, so the intake goes in the same turn.
+      const intake = this.emailIntakeForList(listId);
+      this.sql.exec("DELETE FROM email_intakes WHERE list_id = ?", listId);
       this.sql.exec("DELETE FROM statuses WHERE list_id = ?", listId);
       this.sql.exec("DELETE FROM lists WHERE id = ?", listId);
       t.emit("delete", "list", listId, null, { spaceId: row.space_id });
-      t.audit("list.delete", listId, { name: row.name });
+      t.audit("list.delete", listId, {
+        name: row.name,
+        ...(intake === null ? {} : { emailIntakeAlias: intake.alias }),
+      });
       return { ok: true } as const;
     });
+  }
+
+  // =========================================================================
+  // Email intake (see ./email-intake.ts)
+  //
+  // The api Worker's email() handler runs checkEmailIntake before it parses or
+  // uploads anything, then hands the formatted message to ingestEmail. The
+  // pre-check is advisory: ingestEmail repeats every check inside its own turn
+  // and writes the task or comment together with the email_messages row that
+  // turns a redelivery into a no-op.
+  // =========================================================================
+
+  /** Every list's intake, by alias. Holds sender allowlists: the Worker admin-gates it. */
+  listEmailIntakes(): EmailIntake[] {
+    return this.sql
+      .exec<EmailIntakeRow>(`SELECT ${EMAIL_INTAKE_COLUMNS} FROM email_intakes ORDER BY alias`)
+      .toArray()
+      .map(toEmailIntake);
+  }
+
+  /**
+   * Create or replace (`input`) or remove (`null`) one list's intake.
+   *
+   * Owner/admin only, checked here as well as on the route: an intake lets
+   * people outside the workspace write into it, so the sole writer does not
+   * take the caller's word for it. Intakes are not in the snapshot, so this
+   * writes an audit row and no delta.
+   */
+  setEmailIntake(
+    listId: string,
+    input: SetEmailIntakeInput | null,
+    actor: string | Actor
+  ): EmailIntake | null {
+    return this.runTurn(toActor(actor), (t) => {
+      this.requirePrivileged(t.actor, "Configuring a list's email intake");
+      const list = this.requireListRow(listId);
+      const before = this.emailIntakeForList(list.id);
+      if (input === null) {
+        if (before === null) return null;
+        this.sql.exec("DELETE FROM email_intakes WHERE list_id = ?", list.id);
+        t.audit("list.email_intake.remove", list.id, { alias: before.alias });
+        return null;
+      }
+
+      // The route has already parsed this; parsing again here normalizes
+      // (trim, lowercase) for any other caller with the contract's own rules.
+      const parsed = SetEmailIntakeSchema.safeParse(input);
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues[0]?.message ?? "Invalid email intake.");
+      }
+      const alias = parsed.data.alias;
+      const allowedSenders = [...new Set(parsed.data.allowedSenders)];
+
+      // Checked in code so the caller gets the holder's name, not a constraint
+      // code; the UNIQUE on email_intakes.alias is the backstop.
+      const holder = this.sql
+        .exec<{ list_id: string; name: string | null }>(
+          `SELECT e.list_id AS list_id, l.name AS name
+           FROM email_intakes e LEFT JOIN lists l ON l.id = e.list_id
+           WHERE e.alias = ? AND e.list_id != ?`,
+          alias,
+          list.id
+        )
+        .toArray()[0];
+      if (holder) {
+        throw new Error(
+          `Email alias "${alias}" is already used by list ${holder.list_id}` +
+            `${holder.name === null ? "" : ` ("${holder.name}")`}. ` +
+            `Remove it from that list first, or pick another alias.`
+        );
+      }
+
+      const after: EmailIntake = {
+        listId: list.id,
+        alias,
+        allowedSenders,
+        createdAt: before?.createdAt ?? t.now,
+        updatedAt: t.now,
+      };
+      this.sql.exec(
+        `INSERT INTO email_intakes (list_id, alias, allowed_senders, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (list_id) DO UPDATE SET
+           alias = excluded.alias,
+           allowed_senders = excluded.allowed_senders,
+           updated_at = excluded.updated_at`,
+        after.listId,
+        after.alias,
+        JSON.stringify(after.allowedSenders),
+        after.createdAt,
+        after.updatedAt
+      );
+      t.audit("list.email_intake.set", list.id, { alias, allowedSenders });
+      return after;
+    });
+  }
+
+  /** Read-only and cheap: the Worker's pre-check before it parses or uploads. */
+  checkEmailIntake(input: { alias: string; sender: string; messageId: string }): EmailIntakeCheck {
+    return this.emailIntakeCheck(
+      input.alias.trim().toLowerCase(),
+      input.sender.trim().toLowerCase(),
+      normalizeMessageId(input.messageId) ?? "",
+      Date.now()
+    );
+  }
+
+  /**
+   * Route one parsed message in one turn: a comment on the ticket it replies
+   * to, or a new ticket in the intake's list, plus its attachments and the
+   * email_messages row that dedupes it. The Worker's pre-check ran before an
+   * await, so every refusal is re-derived here and returned the same way.
+   *
+   * Conditions a retry can never fix throw with EMAIL_INGEST_PERMANENT_ERROR
+   * as the message prefix, so the Worker rejects instead of asking for a retry.
+   */
+  ingestEmail(input: IngestEmailInput, actor: string | Actor): IngestEmailResult {
+    const result = this.runTurn(toActor(actor), (t): IngestEmailResult => {
+      const alias = input.alias.trim().toLowerCase();
+      const sender = input.sender.trim().toLowerCase();
+      // Only an explicit true vouches for the sender; a caller that leaves the
+      // flag out gets the unverified treatment, never the trusted one.
+      const authenticated = input.authenticated === true;
+      const messageId = normalizeMessageId(input.messageId);
+      if (messageId === null) {
+        throw permanentEmailError("no Message-ID, and it is the dedupe key.");
+      }
+      const check = this.emailIntakeCheck(alias, sender, messageId, t.now);
+      if (check.status !== "ok") return check;
+      const listId = check.listId;
+      const message = { messageId, listId, alias, sender, authenticated };
+
+      // Everything that can refuse is checked before the first write: a throw
+      // after it would leave a ticket with no dedupe row, and the redelivery
+      // would open a second one.
+      this.requireFreshAttachmentIds(input.attachments);
+      const thread = this.emailThreadTask(listId, input.referenceIds);
+      if (thread !== null) {
+        // An unauthenticated reply still threads: the Worker marks the comment
+        // text itself, and the ticket was opened by someone this list admits.
+        this.requireEmailWritable(t.actor, "task", thread.id);
+        // A reply is only ever a comment: it never reopens, moves or retags
+        // the ticket, even a closed one.
+        const comment = this.applyCommentCreate(t, { taskId: thread.id, body: input.commentBody });
+        for (const a of input.attachments) this.applyAttachmentCreate(t, { ...a, taskId: thread.id });
+        this.recordEmailMessage(t, { ...message, taskId: thread.id, commentId: comment.id });
+        return { status: "commented", taskId: thread.id, commentId: comment.id, listId: thread.list_id };
+      }
+
+      this.requireEmailWritable(t.actor, "list", listId);
+      const task = this.applyTaskCreate(t, {
+        listId,
+        title: input.task.title,
+        description: input.task.description,
+        tags: authenticated ? [EMAIL_INTAKE_TAG] : [EMAIL_INTAKE_TAG, EMAIL_INTAKE_UNVERIFIED_TAG],
+      });
+      for (const a of input.attachments) this.applyAttachmentCreate(t, { ...a, taskId: task.id });
+      this.recordEmailMessage(t, { ...message, taskId: task.id, commentId: null });
+      return { status: "created", taskId: task.id, listId: task.listId };
+    });
+    // As in runTaskTurn: an automation in the same turn may have moved the
+    // task, and the caller should hear where it actually landed.
+    if (result.status === "created" || result.status === "commented") {
+      const row = this.taskRow(result.taskId);
+      if (row !== null) return { ...result, listId: row.list_id };
+    }
+    return result;
+  }
+
+  /**
+   * The contract's refusals in its fixed order, then ok. Reads only.
+   *
+   * Dedupe is per (Message-ID, intake list), so one email addressed to two
+   * intakes files once in each. It runs before the rate limits so a
+   * redelivery is always recognized as one. Then two hourly budgets: the
+   * sender's own, and the list's across every sender, since an "@domain"
+   * entry admits any number of local parts each with a fresh sender budget.
+   */
+  private emailIntakeCheck(
+    alias: string,
+    sender: string,
+    messageId: string,
+    now: number
+  ): EmailIntakeCheck {
+    const intake = this.sql
+      .exec<EmailIntakeRow & { list_archived: number | null }>(
+        `SELECT e.list_id AS list_id, e.alias AS alias, e.allowed_senders AS allowed_senders,
+                e.created_at AS created_at, e.updated_at AS updated_at, l.archived AS list_archived
+         FROM email_intakes e LEFT JOIN lists l ON l.id = e.list_id
+         WHERE e.alias = ?`,
+        alias
+      )
+      .toArray()[0];
+    // `list_archived` is null when the list row is gone. Either way the
+    // sender hears the same thing as for an alias that never existed.
+    if (!intake || intake.list_archived !== 0) return { status: "unknown_alias" };
+    if (!senderAllowed(sender, toEmailIntake(intake).allowedSenders)) {
+      return { status: "sender_not_allowed" };
+    }
+    const listId = intake.list_id;
+    const prior = this.sql
+      .exec<{ task_id: string }>(
+        "SELECT task_id FROM email_messages WHERE message_id = ? AND list_id = ?",
+        messageId,
+        listId
+      )
+      .toArray()[0];
+    if (prior) return { status: "duplicate", taskId: prior.task_id };
+    const since = now - EMAIL_RATE_WINDOW_MS;
+    const fromSender = this.sql
+      .exec<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM email_messages WHERE sender = ? AND received_at > ?",
+        sender,
+        since
+      )
+      .one().n;
+    if (fromSender >= EMAIL_INTAKE_HOURLY_LIMIT) return { status: "rate_limited" };
+    const toList = this.sql
+      .exec<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM email_messages WHERE list_id = ? AND received_at > ?",
+        listId,
+        since
+      )
+      .one().n;
+    if (toList >= EMAIL_INTAKE_LIST_HOURLY_LIMIT) return { status: "rate_limited" };
+    return { status: "ok", listId };
+  }
+
+  /**
+   * The ticket a reply belongs to: the first of its first
+   * EMAIL_THREAD_REFERENCE_LIMIT referenced messages that this same list filed
+   * and whose task still exists. Matching on the list rather than the alias
+   * means one intake can't append to another's tickets, and an alias that is
+   * removed and later given to another list can't carry that list's mail onto
+   * the tickets the alias opened before.
+   */
+  private emailThreadTask(listId: string, referenceIds: readonly string[]): TaskRowSql | null {
+    for (const raw of referenceIds.slice(0, EMAIL_THREAD_REFERENCE_LIMIT)) {
+      const ref = normalizeMessageId(raw);
+      if (ref === null) continue;
+      const prior = this.sql
+        .exec<{ task_id: string }>(
+          "SELECT task_id FROM email_messages WHERE message_id = ? AND list_id = ?",
+          ref,
+          listId
+        )
+        .toArray()[0];
+      const row = prior ? this.taskRow(prior.task_id) : null;
+      if (row !== null) return row;
+    }
+    return null;
+  }
+
+  /** The space write guard for ingestEmail: a refusal there is permanent, so it says so. */
+  private requireEmailWritable(actor: Actor, kind: "list" | "task", targetId: string): void {
+    const spaceId = kind === "task" ? this.spaceIdForTask(targetId) : this.spaceIdForList(targetId);
+    const refusal = this.spaceWriteRefusal(actor, spaceId);
+    if (refusal !== null) {
+      throw permanentEmailError(`the inbound actor may not write to ${kind} ${targetId}. ${refusal}`);
+    }
+  }
+
+  /** The Worker mints attachment ids; a reused one would fail mid-turn, so refuse it up front. */
+  private requireFreshAttachmentIds(attachments: readonly EmailIngestAttachment[]): void {
+    const seen = new Set<string>();
+    for (const a of attachments) {
+      const taken =
+        seen.has(a.id) ||
+        this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM attachments WHERE id = ?", a.id).one()
+          .n > 0;
+      if (taken) throw permanentEmailError(`attachment id ${a.id} is already in use.`);
+      seen.add(a.id);
+    }
+  }
+
+  /** The dedupe row, written last in the turn that filed the message. */
+  private recordEmailMessage(
+    t: Turn,
+    m: {
+      messageId: string;
+      listId: string;
+      alias: string;
+      sender: string;
+      authenticated: boolean;
+      taskId: string;
+      commentId: string | null;
+    }
+  ): void {
+    this.sql.exec(
+      `INSERT INTO email_messages (message_id, list_id, alias, task_id, comment_id, sender, received_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      m.messageId,
+      m.listId,
+      m.alias,
+      m.taskId,
+      m.commentId,
+      m.sender,
+      t.now
+    );
+    // The task/comment audit rows name the actor the Worker passed; this one
+    // records who actually wrote in, and whether Cloudflare vouched for them.
+    t.audit("email.ingest", m.taskId, {
+      listId: m.listId,
+      alias: m.alias,
+      sender: m.sender,
+      authenticated: m.authenticated,
+      messageId: m.messageId,
+      commentId: m.commentId,
+    });
+  }
+
+  private emailIntakeForList(listId: string): EmailIntake | null {
+    const row = this.sql
+      .exec<EmailIntakeRow>(
+        `SELECT ${EMAIL_INTAKE_COLUMNS} FROM email_intakes WHERE list_id = ?`,
+        listId
+      )
+      .toArray()[0];
+    return row ? toEmailIntake(row) : null;
   }
 
   // =========================================================================
@@ -3465,6 +4209,9 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
             updatedAt: task.updatedAt ?? task.createdAt ?? now,
             closedAt,
             clickupId: task.clickupId ?? null,
+            // ClickUp has no handoffs; a re-import's UPDATE above leaves the
+            // handoff columns alone for the same reason.
+            handoff: null,
           });
           remember(task, taskId);
           bump("created", "tasks");
@@ -3544,8 +4291,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         } else {
           const commentId = c.id ?? id("cm_");
           this.sql.exec(
-            `INSERT INTO comments (id, task_id, author_id, body, created_at, clickup_id)
-             VALUES (?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO comments (id, task_id, author_id, body, created_at, clickup_id, via)
+             VALUES (?, ?, ?, ?, ?, ?, 'import')`,
             commentId,
             taskId,
             authorId,
@@ -4173,8 +4920,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     this.sql.exec(
       `INSERT INTO tasks (id, list_id, title, description, status_id, assignee_id, assigned_by, assigned_at, priority,
          due_date, start_date, snoozed_until, blocked_note, tags, tags_text, position,
-         created_by, created_at, updated_at, closed_at, clickup_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         created_by, created_at, updated_at, closed_at, clickup_id, ${HANDOFF_COLUMNS})
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       task.id,
       task.listId,
       task.title,
@@ -4195,7 +4942,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       task.createdAt,
       task.updatedAt,
       task.closedAt,
-      task.clickupId
+      task.clickupId,
+      ...handoffValues(task.handoff)
     );
   }
 
@@ -4236,13 +4984,10 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       .toArray();
     const row = rows[0];
     if (!row) {
-      const known = this.sql
-        .exec<{ id: string; name: string }>("SELECT id, name FROM lists ORDER BY name LIMIT 25")
-        .toArray();
+      // No list names here: this runs before any visibility check, so naming
+      // "known lists" handed members the names of lists in private spaces.
       throw new Error(
-        `List ${listId} not found. Known lists: ${
-          known.map((l) => `${l.id} ("${l.name}")`).join(", ") || "none yet"
-        }.`
+        `List ${listId} not found. Use flow_get_workspace_map (or GET /api/lists) for the lists you can use.`
       );
     }
     return row;
@@ -4298,6 +5043,35 @@ function prevOf(
 function hasRealEmail(email: string): boolean {
   const e = email.trim().toLowerCase();
   return e.length > 0 && !e.endsWith(`@${PLACEHOLDER_EMAIL_DOMAIN}`);
+}
+
+/** A handoff as the five HANDOFF_COLUMNS values, in that order; all null for none. */
+function handoffValues(
+  handoff: Handoff | null
+): [string | null, string | null, string | null, string | null, number | null] {
+  if (handoff === null) return [null, null, null, null, null];
+  return [
+    handoff.requestedBy,
+    handoff.state,
+    handoff.returnFormat,
+    JSON.stringify(handoff.contextTaskIds),
+    handoff.stateChangedAt,
+  ];
+}
+
+/**
+ * The DO re-validates handoff inputs with the contract's own schemas, as
+ * setEmailIntake does: the routes have already parsed them, but this is the
+ * only writer and the error should name the field for any other caller.
+ */
+function contractInput<T>(
+  result: { success: true; data: T } | { success: false; error: { issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> } },
+  what: string
+): T {
+  if (result.success) return result.data;
+  const issue = result.error.issues[0];
+  const field = issue === undefined || issue.path.length === 0 ? "" : `${issue.path.map(String).join(".")}: `;
+  throw new Error(`Invalid ${what}: ${field}${issue?.message ?? "rejected by the schema"}`);
 }
 
 /** Trim, drop empties, de-duplicate case-insensitively, keep first casing. */

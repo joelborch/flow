@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
-  Attachment, blockedNote, Comment, Id, LIMITS, List, Priority, Space, SpaceVisibility, Status,
-  Subtask, subtaskNote, Task, Ts, taskDescription, taskTags, taskTitle,
+  Attachment, blockedNote, Comment, HandoffState, Id, LIMITS, List, Priority, Space,
+  SpaceVisibility, Status, Subtask, subtaskNote, Task, Ts, taskDescription, taskTags, taskTitle,
 } from "./entities.js";
 import { AutomationRule } from "./automations.js";
 
@@ -150,6 +150,62 @@ export const CreateCommentInput = z.object({
 });
 export type CreateCommentInput = z.infer<typeof CreateCommentInput>;
 
+// ---------------------------------------------------------------------------
+// Agent handoffs (see Handoff in entities.ts). REST: POST /api/handoffs,
+// GET /api/handoffs, POST /api/tasks/:taskId/handoff. MCP: flow_request_handoff,
+// flow_list_handoffs, flow_reply_handoff.
+// ---------------------------------------------------------------------------
+
+/** File a request for a teammate's agent: it becomes a task assigned to them. */
+export const RequestHandoffInput = z.object({
+  listId: Id,
+  /** The teammate whose agent should handle it; becomes the task's assignee. */
+  toUserId: Id,
+  title: taskTitle(),
+  /** The ask, in markdown. Becomes the task's description. */
+  ask: taskDescription().min(1, "Describe what you need."),
+  /** What to send back, e.g. "a table of page, sessions and change date". */
+  returnFormat: z
+    .string()
+    .max(LIMITS.handoffReturnMax, `Return format must be ${LIMITS.handoffReturnMax} characters or fewer.`)
+    .optional(),
+  /** Tasks the recipient's agent should read for context. */
+  contextTaskIds: z.array(Id).max(LIMITS.handoffContextMax).optional(),
+  /** When the answer is needed, epoch ms. Becomes the task's due date. */
+  dueDate: Ts.nullable().optional(),
+});
+export type RequestHandoffInput = z.infer<typeof RequestHandoffInput>;
+
+/**
+ * Answer, ask back, or move a handoff along. A message is posted as a comment;
+ * `state` moves the handoff (done and declined also close the task). The
+ * recipient may set any state; the requester's message on a needs_input
+ * handoff hands it back as "working"; owners/admins may set any state.
+ */
+export const ReplyHandoffInput = z
+  .object({
+    taskId: Id,
+    message: z
+      .string()
+      .min(1)
+      .max(LIMITS.commentBodyMax, `Message must be ${LIMITS.commentBodyMax} characters or fewer.`)
+      .optional(),
+    state: HandoffState.optional(),
+  })
+  .refine((input) => input.message !== undefined || input.state !== undefined, {
+    message: "Send a message, a new state, or both.",
+  });
+export type ReplyHandoffInput = z.infer<typeof ReplyHandoffInput>;
+
+/** Handoffs addressed to me (incoming) or filed by me (outgoing). */
+export const ListHandoffsInput = z.object({
+  direction: z.enum(["incoming", "outgoing"]).default("incoming"),
+  /** Defaults to the open states: requested, working, needs_input. */
+  states: z.array(HandoffState).min(1).optional(),
+  limit: z.number().int().min(1).max(100).default(50),
+});
+export type ListHandoffsInput = z.infer<typeof ListHandoffsInput>;
+
 export const CreateListInput = z.object({
   spaceId: Id,
   name: z.string().min(1),
@@ -211,6 +267,51 @@ export const InboundTaskInput = z.object({
 });
 export type InboundTaskInput = z.infer<typeof InboundTaskInput>;
 
+// ---------------------------------------------------------------------------
+// Email intake: a per-list ticket inbox. Mail to <alias>@<EMAIL_INTAKE_DOMAIN>
+// from an allowed sender opens a task in that list; a reply to one of those
+// messages lands as a comment on the same task. Owner/admin configure it.
+// ---------------------------------------------------------------------------
+
+/** The address's local part: 1–40 lowercase letters, digits, dots or hyphens. */
+export const EmailIntakeAlias = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(
+    /^[a-z0-9](?:[a-z0-9.-]{0,38}[a-z0-9])?$/,
+    "Alias must be 1–40 lowercase letters, digits, dots or hyphens, starting and ending with a letter or digit."
+  );
+
+/** "@example.com" admits a whole domain (not its subdomains); "name@example.com" one address. */
+export const EmailIntakeSender = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(
+    /^(?:[^\s@]+)?@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/,
+    "Each allowed sender must be an address (name@example.com) or a whole domain (@example.com)."
+  );
+
+export const SetEmailIntakeInput = z.object({
+  alias: EmailIntakeAlias,
+  // At least one: an intake that accepts mail from anyone is a spam inlet.
+  allowedSenders: z
+    .array(EmailIntakeSender)
+    .min(1, "Add at least one allowed sender or domain.")
+    .max(50),
+});
+export type SetEmailIntakeInput = z.infer<typeof SetEmailIntakeInput>;
+
+export const EmailIntake = z.object({
+  listId: Id,
+  alias: z.string(),
+  allowedSenders: z.array(z.string()),
+  createdAt: Ts,
+  updatedAt: Ts,
+});
+export type EmailIntake = z.infer<typeof EmailIntake>;
+
 // --- MCP tool names (single source of truth) -------------------------------
 export const MCP_TOOLS = [
   "flow_get_workspace_map",
@@ -228,6 +329,9 @@ export const MCP_TOOLS = [
   "flow_list_automations",
   "flow_upsert_automation",
   "flow_get_audit_log",
+  "flow_request_handoff",
+  "flow_list_handoffs",
+  "flow_reply_handoff",
 ] as const;
 export type McpToolName = (typeof MCP_TOOLS)[number];
 

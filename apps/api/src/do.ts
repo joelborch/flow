@@ -1,6 +1,9 @@
 /// <reference types="@cloudflare/workers-types" />
 import type { z } from "zod";
-import type { BackupStatus, ImportBatch, ImportResult, Workspace } from "@flow/core";
+import type {
+  BackupStatus, EmailIntakeCheck, ImportBatch, ImportResult, IngestEmailInput, IngestEmailResult,
+  Workspace,
+} from "@flow/core";
 import {
   CreateListInput as CreateListSchema,
   CreateSpaceInput as CreateSpaceSchema,
@@ -20,11 +23,16 @@ import type {
   BulkUpdateInput,
   Comment,
   CreateTaskInput,
+  EmailIntake,
+  ListHandoffsInput,
   List,
   MoveTaskInput,
   NotificationPref,
+  ReplyHandoffInput,
+  RequestHandoffInput,
   SearchTasksInput,
   SearchTasksResult,
+  SetEmailIntakeInput,
   Space,
   SpaceVisibility,
   Subtask,
@@ -164,6 +172,42 @@ export interface WorkspaceApi extends WorkspaceRpc {
    * see the intake credential. Admin-gate every call site.
    */
   getListWithSecrets(listId: string): Promise<List | null>;
+
+  // --- agent handoffs -------------------------------------------------------
+  /**
+   * File a handoff: a task in `listId` assigned to `toUserId`, tagged
+   * "handoff", whose description is the ask. The recipient must be an active
+   * member who can see the list's space.
+   */
+  requestHandoff(input: RequestHandoffInput, actor: string | Actor): Promise<Task>;
+  /** Post a message (as a comment) and/or move the handoff's state. */
+  replyHandoff(
+    input: ReplyHandoffInput,
+    actor: string | Actor
+  ): Promise<{ task: Task; comment: Comment | null }>;
+  /** Handoffs assigned to the actor (incoming) or filed by them (outgoing), newest state change first. */
+  listHandoffs(input: ListHandoffsInput, actor: string | Actor): Promise<Task[]>;
+
+  // --- email intake ---------------------------------------------------------
+  /** Every list's email intake. Holds sender allowlists: admin-gate every call site. */
+  listEmailIntakes(): Promise<EmailIntake[]>;
+  /**
+   * Create or replace (`input`) or remove (`null`) one list's email intake.
+   * Owner/admin only, re-checked in the DO. Throws if the alias belongs to
+   * another list or the list doesn't exist.
+   */
+  setEmailIntake(
+    listId: string,
+    input: SetEmailIntakeInput | null,
+    actor: string | Actor
+  ): Promise<EmailIntake | null>;
+  /** Read-only pre-check the email() handler runs before parsing or uploading. */
+  checkEmailIntake(input: { alias: string; sender: string; messageId: string }): Promise<EmailIntakeCheck>;
+  /**
+   * Route one parsed message: a new ticket, or a comment on the ticket it
+   * replies to, written in the same turn as its dedupe record.
+   */
+  ingestEmail(input: IngestEmailInput, actor: string | Actor): Promise<IngestEmailResult>;
 
   // --- attachments ----------------------------------------------------------
   /**

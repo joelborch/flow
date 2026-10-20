@@ -66,6 +66,8 @@ export function actionChip(action: Action, names: Names): string {
       return action.userId ? `assign ${names.user(action.userId)}` : "unassign";
     case "set_priority":
       return action.priority ? `priority ${action.priority}` : "clear priority";
+    case "set_due_date":
+      return `due by ${action.cutoffHour}:00 cutoff`;
     case "add_tags":
       return `+${action.tags.join(" +")}`;
     case "remove_tags":
@@ -94,6 +96,10 @@ export function actionSummary(action: Action, names: Names): string {
       return action.userId ? `Assign to ${names.user(action.userId)}` : "Clear the assignee";
     case "set_priority":
       return action.priority ? `Set priority to ${action.priority}` : "Clear the priority";
+    case "set_due_date": {
+      const next = action.businessDays ? "the next business day" : "the next day";
+      return `Set the due date to the same day if it arrives before ${hourLabel(action.cutoffHour)} (${action.timeZone}), otherwise ${next}`;
+    }
     case "add_tags":
       return `Add tags ${quoteList(action.tags)}`;
     case "remove_tags":
@@ -142,4 +148,11 @@ export function scopeSummary(rule: AutomationRule, names: Names): string {
 export function actionKindLabel(kind: string): string {
   if (kind === "*") return "rule";
   return kind.replace(/_/g, " ");
+}
+
+/** 10 -> "10 a.m.", 0 -> "midnight", 12 -> "noon", 15 -> "3 p.m." */
+function hourLabel(hour: number): string {
+  if (hour === 0) return "midnight";
+  if (hour === 12) return "noon";
+  return hour < 12 ? `${hour} a.m.` : `${hour - 12} p.m.`;
 }

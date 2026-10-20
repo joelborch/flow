@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { Workspace } from "@flow/core";
 import { authMiddleware } from "./auth.js";
 import { cachedBackupHealth } from "./do.js";
+import { handleEmail } from "./email-intake.js";
 import { onError, notFoundHandler } from "./errors.js";
 import { mcpHandler } from "./mcp/index.js";
 import { handleDeadLetterBatch, handleSideEffectBatch } from "./side-effects/index.js";
@@ -10,6 +11,8 @@ import { apiKeyRoutes } from "./routes/api-keys.js";
 import { attachmentRoutes } from "./routes/attachments.js";
 import { auditRoutes } from "./routes/audit.js";
 import { automationRoutes } from "./routes/automations.js";
+import { emailIntakeRoutes } from "./routes/email-intake.js";
+import { handoffRoutes } from "./routes/handoffs.js";
 import { importRoutes } from "./routes/import.js";
 import { inboundRoutes } from "./routes/inbound.js";
 import { listRoutes } from "./routes/lists.js";
@@ -64,12 +67,14 @@ app.route("/api", meRoutes);
 app.route("/api", spaceRoutes);
 app.route("/api", listRoutes);
 app.route("/api", taskRoutes);
+app.route("/api", handoffRoutes);
 app.route("/api", attachmentRoutes);
 app.route("/api", automationRoutes);
 app.route("/api", notificationRoutes);
 app.route("/api", auditRoutes);
 app.route("/api", apiKeyRoutes);
 app.route("/api", inboundRoutes);
+app.route("/api", emailIntakeRoutes);
 app.route("/api", importRoutes);
 
 // --- MCP -------------------------------------------------------------------
@@ -96,4 +101,9 @@ export default {
     }
     await handleSideEffectBatch(batch, env);
   },
+  /**
+   * Email Routing's catch-all on EMAIL_INTAKE_DOMAIN delivers here: an allowed
+   * sender's mail opens a ticket, a reply comments on it (src/email-intake.ts).
+   */
+  email: handleEmail,
 } satisfies ExportedHandler<Env>;

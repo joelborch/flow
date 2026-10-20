@@ -14,6 +14,7 @@ import {
   SnoozePicker, StatusPicker, TagEditor,
 } from "./fields.js";
 import { Description } from "./Description.js";
+import { HandoffStrip } from "./HandoffStrip.js";
 import { Subtasks } from "./Subtasks.js";
 import { Comments, CommentComposer } from "./Comments.js";
 import { Attachments } from "./Attachments.js";
@@ -243,6 +244,8 @@ export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => 
                   class="-mx-2 block w-[calc(100%+1rem)] resize-none overflow-hidden rounded-lg bg-transparent px-2 py-0.5 text-[19px] font-semibold leading-[1.3] tracking-[-0.018em] text-text transition-colors hover:bg-raised focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/25 sm:text-[22px] sm:leading-[1.28] sm:tracking-[-0.021em]"
                 />
                 <TitleLinkRow title={task.title} />
+
+                <HandoffStrip task={task} />
 
                 <SnoozeBanner task={task} />
 

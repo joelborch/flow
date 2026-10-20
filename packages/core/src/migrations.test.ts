@@ -163,6 +163,107 @@ describe("applyMigrations: partial-failure rollback", () => {
   });
 });
 
+describe("core-0012-email-intake", () => {
+  it("creates both email tables and the sender and list rate-limit indexes", () => {
+    const { sql } = freshDb();
+    expect(migrationApplied(sql, "core-0012-email-intake")).toBe(true);
+    expect(tableExists(sql, "email_intakes")).toBe(true);
+    expect(tableExists(sql, "email_messages")).toBe(true);
+    const indexes = sql
+      .exec<{ name: string }>(
+        `SELECT name FROM sqlite_master WHERE type = 'index'
+         AND name IN ('idx_email_messages_sender', 'idx_email_messages_list') ORDER BY name`
+      )
+      .toArray()
+      .map((r) => r.name);
+    expect(indexes).toEqual(["idx_email_messages_list", "idx_email_messages_sender"]);
+  });
+
+  it("keys email_messages by (message_id, list_id): once per list, never twice in one", () => {
+    const { sql } = freshDb();
+    const insert = (listId: string) =>
+      sql.exec(
+        `INSERT INTO email_messages (message_id, list_id, alias, task_id, comment_id, sender, received_at)
+         VALUES ('m@x', ?, 'help', 'tk_1', NULL, 'pat@x', 0)`,
+        listId
+      );
+    insert("ls_a");
+    insert("ls_b");
+    expect(() => insert("ls_a")).toThrow();
+  });
+
+  it("enforces one list per alias at the storage level, as a backstop to the DO's check", () => {
+    const { sql } = freshDb();
+    sql.exec(
+      "INSERT INTO email_intakes (list_id, alias, allowed_senders, created_at, updated_at) VALUES ('ls_a', 'help', '[]', 0, 0)"
+    );
+    expect(() =>
+      sql.exec(
+        "INSERT INTO email_intakes (list_id, alias, allowed_senders, created_at, updated_at) VALUES ('ls_b', 'help', '[]', 0, 0)"
+      )
+    ).toThrow();
+  });
+});
+
+describe("core-0013-handoffs", () => {
+  const columns = (sql: SqlStorage, table: string): string[] =>
+    sql
+      .exec<{ name: string }>(`SELECT name FROM pragma_table_info('${table}') ORDER BY cid`)
+      .toArray()
+      .map((r) => r.name);
+
+  it("adds the five nullable handoff columns to tasks and via to comments", () => {
+    const { sql } = freshDb();
+    expect(migrationApplied(sql, "core-0013-handoffs")).toBe(true);
+    expect(columns(sql, "tasks")).toEqual(
+      expect.arrayContaining([
+        "handoff_requested_by",
+        "handoff_state",
+        "handoff_return",
+        "handoff_context",
+        "handoff_state_changed_at",
+      ])
+    );
+    expect(columns(sql, "comments")).toContain("via");
+  });
+
+  it("indexes the incoming and outgoing list reads, partially, on handoff rows only", () => {
+    const { sql } = freshDb();
+    const indexes = sql
+      .exec<{ name: string; sql: string }>(
+        `SELECT name, sql FROM sqlite_master WHERE type = 'index'
+         AND name IN ('idx_tasks_handoff_incoming', 'idx_tasks_handoff_outgoing') ORDER BY name`
+      )
+      .toArray();
+    expect(indexes.map((i) => i.name)).toEqual(["idx_tasks_handoff_incoming", "idx_tasks_handoff_outgoing"]);
+    for (const index of indexes) expect(index.sql).toMatch(/WHERE handoff_state IS NOT NULL/);
+    expect(indexes[0]?.sql).toMatch(/\(assignee_id, handoff_state, handoff_state_changed_at\)/);
+    expect(indexes[1]?.sql).toMatch(/\(handoff_requested_by, handoff_state, handoff_state_changed_at\)/);
+  });
+
+  it("leaves rows from before it as ordinary tasks and unrecorded comments", () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = sqliteStorage(db);
+    const txn = savepointTxn(db);
+    sql.exec("CREATE TABLE IF NOT EXISTS _migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)");
+    applyMigrations(sql, MIGRATIONS.filter((m) => m.id !== "core-0013-handoffs"), txn);
+    sql.exec(
+      `INSERT INTO tasks (id, list_id, title, status_id, position, created_by, created_at, updated_at)
+       VALUES ('tk_old', 'ls_1', 'Old', 'st_1', 1, 'us_1', 0, 0)`
+    );
+    sql.exec(
+      `INSERT INTO comments (id, task_id, author_id, body, created_at) VALUES ('cm_old', 'tk_old', 'us_1', 'hi', 0)`
+    );
+
+    expect(runMigrations(sql, txn)).toEqual(["core-0013-handoffs"]);
+    const task = sql
+      .exec<{ handoff_state: string | null; handoff_requested_by: string | null }>("SELECT handoff_state, handoff_requested_by FROM tasks WHERE id = 'tk_old'")
+      .one();
+    expect(task).toEqual({ handoff_state: null, handoff_requested_by: null });
+    expect(sql.exec<{ via: string | null }>("SELECT via FROM comments WHERE id = 'cm_old'").one().via).toBeNull();
+  });
+});
+
 describe("needsMigration", () => {
   it("false immediately after a fresh migration run", () => {
     const { sql } = freshDb();

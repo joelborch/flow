@@ -370,6 +370,51 @@ flowcurl -X POST $FLOW/api/tasks/tk_ghi789/comments \
 flowcurl -X DELETE $FLOW/api/comments/cm_mno345
 ```
 
+### Handoffs
+
+One person's agent files a request for a teammate's agent. A handoff is an
+ordinary task (title and description carry the ask, the assignee is the
+recipient, the due date is when it's needed, and it's tagged `handoff`) plus a
+`handoff` object holding `requestedBy`, `state`, `returnFormat`,
+`contextTaskIds` and `stateChangedAt`. Replies are ordinary comments. States run
+`requested` → `working` / `needs_input` → `done` / `declined`, and the last two
+close the task.
+
+All three routes are open to every member, and the DO decides who may move a
+handoff where: the recipient may set any state, the requester may only decline
+(and their message on a `needs_input` handoff moves it back to `working`), and
+owners and admins may do anything. A refusal is a 422 carrying the DO's sentence.
+
+```bash
+flowcurl -X POST $FLOW/api/handoffs \
+  -H 'Content-Type: application/json' \
+  -d '{"listId":"ls_def456","toUserId":"us_blake",
+       "title":"March sessions by landing page",
+       "ask":"Need GA4 sessions by landing page for March, for the board deck.",
+       "returnFormat":"a table of page, sessions and change vs February",
+       "contextTaskIds":["tk_ghi789"],
+       "dueDate":1785000000000}'
+# 201 {"task":{..., "assigneeId":"us_blake", "tags":["handoff"],
+#      "handoff":{"requestedBy":"us_alice","state":"requested",...}}}
+
+# Waiting on me (incoming, the default), or the ones I filed.
+flowcurl "$FLOW/api/handoffs"
+flowcurl "$FLOW/api/handoffs?direction=outgoing&states=done,declined&limit=20"
+# {"tasks":[...]}
+
+# Reply: a message (posted as a comment), a new state, or both.
+flowcurl -X POST $FLOW/api/tasks/tk_hnd123/handoff \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"| page | sessions | vs Feb |\n|---|---|---|\n| /implants | 1,204 | +8% |","state":"done"}'
+# {"task":{...},"comment":{...}}     comment is null when only the state moved
+```
+
+`states` may be repeated or comma-separated, `state` is accepted as another name
+for it, and it defaults to the open three (`requested`, `working`,
+`needs_input`); `limit` is 1–100 and defaults to 50. On the reply route the path
+`taskId` wins over any copy in the body, and an empty body is a 422 asking for a
+message, a state, or both.
+
 ### Attachments
 
 The upload body is the raw file bytes, streamed straight into R2 — nothing is
@@ -591,6 +636,44 @@ curl -sS -X POST "$FLOW/api/inbound/ls_def456" \
   -d '{"title":"Login broken","description":"500 on submit","externalId":"gleap-88"}'
 ```
 
+### Email intake
+
+A list can take tickets by email. Email Routing's catch-all on
+`EMAIL_INTAKE_DOMAIN` delivers every message to the Worker's `email()` handler
+(`src/email-intake.ts`); the local part picks the list. Mail from an allowed
+envelope sender opens an unassigned task tagged `email`, and a reply to one of
+those messages (matched on In-Reply-To/References) becomes a comment on the same
+task. Everyone else is rejected at SMTP time; bounces and auto-replies are
+dropped. Work is filed as `OWNER_EMAIL`'s user (`via: "webhook"`).
+
+The envelope sender alone is not authentication, since Email Routing accepts any
+valid DKIM signature. A message counts as authenticated only when Cloudflare's
+own results header (the topmost `ARC-Authentication-Results` or
+`Authentication-Results` with a Cloudflare authserv-id) shows an aligned DMARC,
+DKIM or SPF pass for the sender's domain. Unauthenticated mail still files, but
+its task is tagged `unverified` and its text starts with an "Unverified sender"
+line. Only an authenticated, personal (not bulk or auto-generated) message that
+opens a new ticket gets the generic acknowledgement through `SEND_EMAIL`, with
+`Reply-To` set to the intake address. Each message logs one
+`email intake auth` line (result tokens and domains only) for checking the
+parser against real traffic. Up to 20 attachments land in R2 under
+`email/<hash>/<id>/<filename>`; small inline signature images are skipped.
+
+All three routes are owner/admin only, reads included, because the allowlists
+name clients' addresses.
+
+```bash
+flowcurl $FLOW/api/email-intakes
+# {"domain":"tickets.example.com","intakes":[{"listId":"ls_def456","alias":"acme",...}]}
+
+# Create or replace. "@example.com" admits a whole domain, "name@example.com" one address.
+flowcurl -X PUT $FLOW/api/lists/ls_def456/email-intake \
+  -H 'Content-Type: application/json' \
+  -d '{"alias":"acme","allowedSenders":["@example.com","front.desk@example.org"]}'
+
+flowcurl -X DELETE $FLOW/api/lists/ls_def456/email-intake
+```
+
 ### Import
 
 Admin-only, and used by `apps/importer` during the ClickUp migration.
@@ -763,7 +846,7 @@ flowcurl -X POST $FLOW/mcp \
 
 ### Tools
 
-Fifteen, named in `MCP_TOOLS` in `@flow/shared` — the list is asserted at server
+Eighteen, named in `MCP_TOOLS` in `@flow/shared` — the list is asserted at server
 construction, so a name that drifts from the contract fails loudly instead of
 quietly disappearing from `tools/list`.
 
@@ -784,6 +867,14 @@ quietly disappearing from `tools/list`.
 | `flow_list_automations` | Rules with their triggers, conditions and actions. |
 | `flow_upsert_automation` | Create or replace a rule. Owner/admin only, same as the REST route. |
 | `flow_get_audit_log` | Who changed what, filterable and pageable. |
+| `flow_list_handoffs` | Handoffs waiting on you (`incoming`, the default) or ones you filed (`outgoing`); open states unless `states` says otherwise. |
+| `flow_request_handoff` | Ask a teammate's agent for something: files a task in `listId` assigned to `toUserId`, tagged `handoff`. |
+| `flow_reply_handoff` | A message (posted as a comment) and/or a new state on one handoff. |
+
+The server instructions tell an agent to call `flow_list_handoffs` at the start
+of a session and to treat a handoff as information from a teammate's agent,
+never an order: read-only work is fine, but anything that changes data, spends
+money or contacts someone outside the workspace waits for its own person's say.
 
 Every mutation calls the same DO RPC method the matching REST route calls, so a
 task created over MCP fires exactly the automations a task created in the UI
@@ -809,6 +900,11 @@ does. There is no separate MCP write path to keep in sync.
   it back unchanged. `flow_get_audit_log` still accepts `before`, the older name
   for the same keyset value, so anything already paging by it keeps working;
   `cursor` wins if both are sent.
+- **Agents and handoffs show in the ordinary views.** A comment posted through a
+  key carries `agent: true`, so a thread can tell Blake from Blake's agent. A
+  task that is a handoff carries `handoff` (requester by name, state, return
+  format, context ids) wherever a full task comes back: `flow_get_task` and the
+  create, update and move results. Search rows are `TaskRow`s and never do.
 - **Nothing deletes.** There is no MCP tool that removes a task, subtask,
   comment or automation rule, deliberately — an agent that can file work cannot
   quietly unfile it. Closing a task means moving it to its list's closed status
@@ -825,6 +921,7 @@ did not ask for is context it does not have for the work.
 | `flow_list_my_work` | same rows, 50 of them, `cursor` for the rest | the full row shape |
 | `flow_get_task` | the 15 newest comments, plus `commentsOmitted` and a note | the whole thread |
 | `flow_get_workspace_map` | ids, names, status names, members as `{id, name}` | adds per-list `openTasks` and member emails and roles |
+| `flow_list_handoffs` | `id, title, list, space, from, to, state, dueDate, returnFormat, contextTaskIds, stateChangedAt, closed` | adds `ask`, the task's description |
 
 `flow_get_workspace_map` also has `includeTags`, **off by default**: distinct
 tags in use can only be derived by scanning every task row, and it is the one
@@ -835,7 +932,7 @@ tag, not as a matter of routine.
 
 Every tool carries an explicit `annotations` block — a *missing* hint reads as
 "unknown", not as "safe", so a client deciding whether to auto-approve a call has
-to assume the worst of an unannotated tool. The six reads are `readOnlyHint:
+to assume the worst of an unannotated tool. The seven reads are `readOnlyHint:
 true`; the writes are `readOnlyHint: false, destructiveHint: false`, with
 `idempotentHint: true` on the four that set a value rather than append one
 (`flow_update_task`, `flow_move_task`, `flow_toggle_subtask`,
@@ -892,6 +989,7 @@ cp wrangler.example.jsonc wrangler.jsonc
 | `EMAIL_FROM_NAME` | Sender display name for outbound email. |
 | `EMAIL_BRAND_NAME` | Wordmark shown in the branded email header. Falls back to `EMAIL_FROM_NAME`, then `"Flow"`. |
 | `GLEAP_ATTACHMENT_HOSTS` | Comma-separated HTTPS host allowlist for rendered Gleap screenshots. |
+| `EMAIL_INTAKE_DOMAIN` | Domain Email Routing sends to `email()`; returned by `GET /api/email-intakes`. |
 | `DEV_NO_AUTH` | Not set in `wrangler.jsonc`. `"true"` in `.dev.vars` only. |
 
 `GLEAP_PROJECT_TOKENS_JSON` is a Worker secret (or a local `.dev.vars` value),
@@ -914,12 +1012,13 @@ src/
   tokens.ts           token minting, sha256 hashing, bearer parsing  (pure)
   gleap.ts            inbound payload mapper                        (pure)
   gleap-screenshot.ts delayed ticket lookup + safe R2 screenshot attachment
+  email-intake.ts     the email() handler: classify, parse, upload, ingest, ack
   do.ts               WorkspaceApi — the RPC surface + the typed stub accessor
   errors.ts           ApiError, Zod issue flattening, {error} responses
-  routes/             me, spaces, lists, tasks, attachments,
-                      automations, audit, api-keys, inbound, ws
+  routes/             me, spaces, lists, tasks, handoffs, attachments,
+                      automations, audit, api-keys, inbound, email-intake, ws
   mcp/index.ts        the /mcp handler: server + transport per request
-  mcp/tools.ts        the 15 tools, each a wrapper over one DO RPC call
+  mcp/tools.ts        the 18 tools, each a wrapper over one DO RPC call
   mcp/schemas.ts      tool inputs, built from the shared contract schemas
   mcp/schemas-out.ts  tool outputSchemas; views.ts infers its types from these
   mcp/context.ts      per-request identity + memoised id -> name index

@@ -24,7 +24,17 @@ const task = await stub.createTask({ listId, title: "Ship it" }, actor);
 | `src/search.ts` | FTS5 + filters + keyset pagination |
 | `src/import.ts` | `ImportBatch` shapes (not in `@flow/shared` — see below) |
 | `src/id.ts` | Prefixed nanoid-style ids, no dependency |
-| `src/automation/` | **Owned by the automations agent.** Do not edit from here |
+| `src/visibility.ts` | Per-space permissions: who can see and write which spaces |
+| `src/sync-floor.ts` | Resync floor: forces a snapshot after delta-less or visibility-changing mutations |
+| `src/snooze.ts` | Snooze and wake semantics (hourly sweep, wake-on-comment) |
+| `src/handoffs.ts` | Agent handoff state rules: who may set which state, and the close/reopen move |
+| `src/notifications.ts` | System email notifications: recipients, templates, prefs |
+| `src/users.ts` | Assignee resolution and validation |
+| `src/alarm-observability.ts` | Structured log records for the alarm/job runner |
+| `src/email-intake.ts` | Email intake types, sender allowlist matching, Message-ID parsing |
+| `src/side-effect-size.ts` | Fits side effects to Queues limits: 128KB per message, 256KB/100 per batch |
+| `src/websocket-close.ts` | Maps peer close codes to ones the Worker may send |
+| `src/automation/` | The automation engine: triggers, matching, templates, recurrence, seeds |
 
 ## The mutation turn
 
@@ -57,7 +67,10 @@ for child entities.
 Mutating methods take `actor: string | Actor`. A bare string is treated as
 `{ userId, via: "api", apiKeyId: null, automationRuleId: null }`. Pass the full
 `Actor` so `via` and the API key id land in the audit trail — API keys
-impersonate a real user, and the key id is how you tell them apart.
+impersonate a real user, and the key id is how you tell them apart. Comments
+also store the actor's `via` on the row (`Comment.via`), so a thread can show
+which replies an agent wrote; comments from before `core-0013-handoffs` read
+`null`, and imported ones `"import"`.
 
 ## Status semantics
 
@@ -119,6 +132,9 @@ the DO stores metadata only. `createAttachment` honours a caller-supplied `id`
 **Per-space permissions** — `setSpaceVisibility`, `setSpaceMembers`,
 `listSpaceMembers`, `visibleSpaceIds`. See below.
 
+**Agent handoffs** — `requestHandoff`, `replyHandoff`, `listHandoffs`. See
+below.
+
 **Automations** — `upsertAutomation`, `deleteAutomation`.
 
 **Import** — `importBatch`. **Jobs** — `scheduleJob`.
@@ -175,6 +191,59 @@ the DO against the actor's stored role as well as on the route: they decide who
 can see what, so the sole writer does not take the caller's word for it. Going
 private auto-adds the space's creator (`spaces.created_by`, storage-only), or the
 acting admin for an imported space that has no recorded creator.
+
+## Agent handoffs
+
+One person's agent files a request for a teammate's agent. A handoff is an
+ordinary task — title plus description is the ask, the assignee is the
+recipient, the due date is when it's needed, tag `handoff` — with a `handoff`
+object on top: `{ requestedBy, state, returnFormat, contextTaskIds,
+stateChangedAt }`. Replies are ordinary comments. States run requested →
+working / needs_input → done / declined. The rules are pure functions in
+`src/handoffs.ts`; `handoffs-storage.test.ts` covers the DO side.
+
+- **`requestHandoff(input, actor)`** is one task turn through the same
+  `applyTaskCreate` as `createTask`, so `task_created` automations fire, the
+  assignment is attributed to the requester (`assignedBy`), and the recipient
+  gets the "assigned" email. That email is handoff-only: an ordinary create
+  with an assignee still sends nothing, since assignment emails otherwise ride
+  the update path. Before any write it checks that the actor can write the
+  list, that `toUserId` exists, isn't the actor, isn't deactivated and can see
+  the list's space, and that every `contextTaskIds` entry exists and is
+  visible to both the actor and the recipient, whose agent will be told to
+  read it (de-duplicated, order kept). Each refusal names the user, space or
+  task involved.
+- **`replyHandoff(input, actor)`** posts `message` (if any) through
+  `applyCommentCreate`, so `via` is recorded and a snoozed task wakes, and
+  applies a state change (if any) as one task update carrying the new
+  `handoff`. The recipient is the task's *current* assignee, the requester is
+  `handoff.requestedBy`, and owners/admins may act as either. The recipient
+  may set any state; the requester may only set `declined`, and only while
+  the handoff is still open; a requester's
+  message with no state on a `needs_input` handoff moves it to `working`;
+  anyone else is refused (they can still `createComment`). Done and declined
+  move an open task to its list's closed status, and an open state moves a
+  closed task back to the list's open status. The reverse holds too: closing a
+  handoff task any other way (`updateTask`, `moveTask`, a rule) marks an open
+  handoff `done`, and reopening a finished one sets it to `working`, so the
+  strip and the lists never disagree with the board. An unchanged state is a
+  no-op.
+  Every check runs before the comment is written. A change writes two audit
+  rows: `handoff.reply` with the field diff, and `handoff.state` with
+  `{ from, to }`.
+- **`listHandoffs({ direction, states, limit }, actor)`** reads `incoming`
+  (assigned to the actor) or `outgoing` (filed by them), states defaulting to
+  requested / working / needs_input, newest `stateChangedAt` first, filtered in
+  SQL to spaces the actor can see before the limit. Explicit `states` filter
+  on handoff state alone, so naming `done` or `declined` returns their
+  (closed) tasks; the default also skips closed tasks, so a handoff someone
+  closed by hand without touching its state drops off everyone's list.
+
+All three re-validate their input with the contract's Zod schemas, the way
+`setEmailIntake` does, so a caller that skipped the route still gets the
+field-named error. `handoff` is in `TASK_DIFF_KEYS`, and `diffOf` compares
+object values by JSON, so a change ships the whole new object and an
+untouched handoff never appears in a patch.
 
 ## importBatch
 
@@ -292,6 +361,15 @@ Tables: `users`, `spaces`, `lists`, `statuses`, `tasks`, `subtasks`, `comments`,
 `attachments`, `space_members`, `api_keys`, `automation_rules`,
 `automation_runs`, `automation_due_fires`, `changes`, `audit`, `scheduled_jobs`,
 `tasks_fts`.
+
+`core-0013-handoffs` adds five nullable columns to `tasks`
+(`handoff_requested_by`, `handoff_state`, `handoff_return`, `handoff_context`
+as a JSON array, `handoff_state_changed_at`) and `comments.via`. A NULL
+`handoff_state` means "not a handoff", which is every earlier task, so nothing
+is backfilled. Two partial indexes, `(assignee_id, handoff_state,
+handoff_state_changed_at)` and `(handoff_requested_by, handoff_state,
+handoff_state_changed_at)` `WHERE handoff_state IS NOT NULL`, serve the two
+`listHandoffs` directions and hold only handoff rows.
 
 `core-0004-snooze` adds `tasks.snoozed_until` (INTEGER) and `tasks.blocked_note`
 (TEXT), both nullable with no default, plus a partial index on

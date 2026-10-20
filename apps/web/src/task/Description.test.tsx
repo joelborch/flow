@@ -35,6 +35,7 @@ const sampleTask: StoreTask = {
   updatedAt: 0,
   closedAt: null,
   clickupId: null,
+  handoff: null,
 };
 
 beforeEach(() => {

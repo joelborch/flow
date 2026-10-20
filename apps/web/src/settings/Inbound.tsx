@@ -1,4 +1,5 @@
-// Inbound webhooks tab.
+// Inbound tab: per-list email intake (owner/admin only, see EmailIntake.tsx)
+// above the inbound webhooks.
 //
 // Intake state is not in the board snapshot: the DO nulls `inboundToken` on
 // every list it hands out, so "is intake on?" comes from a per-list read of
@@ -12,6 +13,7 @@ import {
   Button, Confirm, CopyBlock, Empty, ErrorNote, Loading, Panel, Tag, errorMessage, useAsync,
 } from "./ui.js";
 import { isWorkspaceAdmin } from "./ApiKeys.js";
+import { EmailIntakePanel } from "./EmailIntake.js";
 
 type IntakeState = Map<string, boolean | null>;
 
@@ -153,48 +155,51 @@ export function InboundTab() {
   }
 
   return (
-    <Panel
-      title="Inbound webhooks"
-      description="This is how outside systems file work into Flow: bug trackers like Gleap can POST reports to a list's own intake URL, and the token in that URL is the only credential they need."
-      right={
-        <Button size="xs" onClick={reload}>
-          Refresh
-        </Button>
-      }
-    >
-      {status === "loading" && <Loading />}
-      {status === "error" && error && <ErrorNote message={error} onRetry={reload} />}
-      {!admin && (
-        <p class="border-b border-line px-4 py-2 text-[12px] text-muted">
-          Read-only: enabling, rotating and disabling intake is owner/admin work.
-        </p>
-      )}
-      {/* The list names come from the store, so they render even when the
-          intake read failed — those rows just show "unknown" instead. */}
-      {status !== "loading" && rows.length === 0 && <Empty>No lists yet.</Empty>}
-      {status !== "loading" &&
-        rows.length > 0 &&
-        orderedSpaces.map((space) => {
-          const inSpace = rows.filter((l) => l.spaceId === space.id);
-          if (inSpace.length === 0) return null;
-          return (
-            <div key={space.id}>
-              <p class="border-b border-line bg-raised/60 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-faint">
-                {spaceMap.get(space.id)?.name ?? space.name}
-              </p>
-              {inSpace.map((list) => (
-                <IntakeRow
-                  key={list.id}
-                  listId={list.id}
-                  name={list.name}
-                  enabled={data?.get(list.id) ?? null}
-                  admin={admin}
-                  onChanged={noteChange}
-                />
-              ))}
-            </div>
-          );
-        })}
-    </Panel>
+    <div class="space-y-4">
+      {admin && <EmailIntakePanel />}
+      <Panel
+        title="Inbound webhooks"
+        description="This is how outside systems file work into Flow: bug trackers like Gleap can POST reports to a list's own intake URL, and the token in that URL is the only credential they need."
+        right={
+          <Button size="xs" onClick={reload}>
+            Refresh
+          </Button>
+        }
+      >
+        {status === "loading" && <Loading />}
+        {status === "error" && error && <ErrorNote message={error} onRetry={reload} />}
+        {!admin && (
+          <p class="border-b border-line px-4 py-2 text-[12px] text-muted">
+            Read-only: enabling, rotating and disabling intake is owner/admin work.
+          </p>
+        )}
+        {/* The list names come from the store, so they render even when the
+            intake read failed — those rows just show "unknown" instead. */}
+        {status !== "loading" && rows.length === 0 && <Empty>No lists yet.</Empty>}
+        {status !== "loading" &&
+          rows.length > 0 &&
+          orderedSpaces.map((space) => {
+            const inSpace = rows.filter((l) => l.spaceId === space.id);
+            if (inSpace.length === 0) return null;
+            return (
+              <div key={space.id}>
+                <p class="border-b border-line bg-raised/60 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-faint">
+                  {spaceMap.get(space.id)?.name ?? space.name}
+                </p>
+                {inSpace.map((list) => (
+                  <IntakeRow
+                    key={list.id}
+                    listId={list.id}
+                    name={list.name}
+                    enabled={data?.get(list.id) ?? null}
+                    admin={admin}
+                    onChanged={noteChange}
+                  />
+                ))}
+              </div>
+            );
+          })}
+      </Panel>
+    </div>
   );
 }

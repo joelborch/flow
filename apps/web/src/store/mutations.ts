@@ -2,8 +2,8 @@
 // then lets the authoritative answer overwrite the guess. A failed call rolls
 // the entity back to its pre-mutation value and posts a toast.
 import type {
-  Comment, CreateListInput, CreateSpaceInput, List, MoveTaskInput, Space, Status, Subtask,
-  Task, TaskDetail, CreateTaskInput, UpdateTaskInput,
+  Comment, CreateListInput, CreateSpaceInput, HandoffState, List, MoveTaskInput, Space, Status,
+  Subtask, Task, TaskDetail, CreateTaskInput, UpdateTaskInput,
 } from "@flow/shared";
 import { api, ApiError } from "../lib/api.js";
 import { append } from "../lib/frac.js";
@@ -73,6 +73,7 @@ export async function createTask(input: CreateTaskInput): Promise<Task | null> {
     updatedAt: now,
     closedAt: null,
     clickupId: null,
+    handoff: null,
   };
 
   beginPending(tempId);
@@ -145,6 +146,28 @@ export async function updateTask(input: UpdateTaskInput): Promise<void> {
     settleTask(input.taskId, await api.updateTask(input));
   } catch (err) {
     settleTask(input.taskId, null, err);
+  }
+}
+
+/**
+ * Move an agent handoff along. The server decides who may set what, and closes
+ * the task on done/declined, so only the state is guessed here; the task it
+ * answers with (new status included) replaces the guess, and a refusal rolls
+ * back and toasts like any other task edit.
+ */
+export async function setHandoffState(taskId: string, state: HandoffState): Promise<void> {
+  const prev = taskIndex.get(taskId);
+  // A boot cache written before handoffs existed has no `handoff` at all.
+  if (!prev?.handoff || prev.handoff.state === state) return;
+  const now = Date.now();
+  beginPending(taskId);
+  putTask({ ...prev, handoff: { ...prev.handoff, state, stateChangedAt: now }, updatedAt: now });
+  flush();
+
+  try {
+    settleTask(taskId, (await api.replyHandoff(taskId, { state })).task);
+  } catch (err) {
+    settleTask(taskId, null, err);
   }
 }
 
@@ -261,6 +284,7 @@ export async function addComment(taskId: string, body: string): Promise<boolean>
     authorId: me.value?.id ?? "us_unknown",
     body,
     createdAt: Date.now(),
+    via: "ui",
   };
   const put = (list: Comment[]): void => {
     const next = new Map(comments.value);

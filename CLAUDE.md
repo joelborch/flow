@@ -24,11 +24,18 @@ Queues for outbound side effects. Full agent contract: `AGENTS.md`.
   NOT have statuses.
 - API keys (`flow_` bearer tokens) impersonate a real user; the audit trail
   records the key id.
-- TypeScript strict everywhere. pnpm workspaces. No new runtime deps without a
-  strong reason (allowed: hono, zod, preact, @preact/signals, the MCP SDK, or
-  similarly tiny libraries).
+- TypeScript strict everywhere. pnpm workspaces. No new runtime deps without
+  a strong reason. Current runtime deps: hono, zod, the MCP SDK and
+  postal-mime (email intake parsing) in the Worker; preact, @preact/signals,
+  chrono-node, and TipTap + tiptap-markdown (lazy-loaded in its own chunk) in
+  the web app.
 - UI: clean, minimal, Linear-ish. Tailwind v4. Fast: optimistic mutations,
   CSS transforms for drag, no full-board re-renders.
+- Email intake (`apps/api/src/email-intake.ts`, the Worker's `email()`
+  handler) turns mail to `<alias>@EMAIL_INTAKE_DOMAIN` into tasks. Authorize
+  only on the envelope sender against the list's allowlist, never the From
+  header, and keep dedupe plus threading inside the single `ingestEmail` DO
+  turn. Never log message bodies.
 - Never commit secrets or real config values; placeholders only
   (`flow.example.com`, `you@example.com`). Local values go in
   `apps/api/.dev.vars`.
@@ -37,7 +44,7 @@ Queues for outbound side effects. Full agent contract: `AGENTS.md`.
 
 - `packages/shared` — the Zod contract (depends only on zod)
 - `packages/core` — Workspace Durable Object + automation engine; most tests
-- `apps/api` — Hono Worker: auth, routes, MCP, WS, queue consumer, wrangler.jsonc
+- `apps/api` — Hono Worker: auth, routes, MCP, WS, queue consumer, email intake, wrangler.example.jsonc
 - `apps/web` — Preact + @preact/signals + Tailwind v4 SPA; store in `src/store`
 - `apps/importer` — local-only ClickUp ETL (tsx, never deployed)
 

@@ -127,3 +127,27 @@ export function nextRecurringDue(
   }
   return epochForLocal(next, timeZone);
 }
+
+/**
+ * The due date a set_due_date action stamps when it fires at `nowMs`: the same
+ * local day before `cutoffHour`, the next day from `cutoffHour` on, and with
+ * `businessDays` a Saturday or Sunday result rolls forward to Monday (so a
+ * weekend arrival is due Monday whatever the hour). Returned as local noon,
+ * the value the web date picker stores, so the day reads the same in any
+ * nearby timezone.
+ */
+export function dueDateWithCutoff(
+  nowMs: number,
+  cutoffHour: number,
+  timeZone: string,
+  businessDays: boolean
+): number {
+  formatter(timeZone).format(new Date(nowMs));
+  const now = localParts(nowMs, timeZone);
+  let due: LocalParts = { ...now, hour: 12, minute: 0, second: 0 };
+  if (now.hour >= cutoffHour) due = addDays(due, 1);
+  if (businessDays) {
+    while ([0, 6].includes(new Date(localAsUtc(due)).getUTCDay())) due = addDays(due, 1);
+  }
+  return epochForLocal(due, timeZone);
+}

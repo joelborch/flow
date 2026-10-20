@@ -128,6 +128,7 @@ export function Button({
   size = "sm",
   disabled,
   type = "button",
+  ariaLabel,
 }: {
   children: ComponentChildren;
   onClick?: () => void;
@@ -135,12 +136,16 @@ export function Button({
   size?: "sm" | "xs";
   disabled?: boolean;
   type?: "button" | "submit";
+  /** For a short label repeated down a list ("Edit", "Copy"), so each one still
+   *  names the row it acts on. */
+  ariaLabel?: string;
 }) {
   return (
     <button
       type={type}
       onClick={onClick}
       disabled={disabled}
+      aria-label={ariaLabel}
       class={cn(
         "inline-flex shrink-0 items-center gap-1.5 rounded-lg border font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
         size === "xs" ? "h-[24px] px-2 text-[11.5px]" : "h-[28px] px-2.5 text-[12.5px]",

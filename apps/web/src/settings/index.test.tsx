@@ -80,7 +80,7 @@ describe("Settings tabs", () => {
     expect(labels).not.toContain("Spaces");
     expect(labels).not.toContain("Automations");
     expect(labels).toContain("API keys");
-    expect(labels).toContain("Inbound webhooks");
+    expect(labels).toContain("Inbound");
   });
 
   it("shows the Spaces tab to an owner/admin", () => {

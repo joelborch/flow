@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   BulkCreateTasksArgs,
   CommentOnTaskArgs,
@@ -7,8 +8,11 @@ import {
   GetAuditLogArgs,
   GetTaskArgs,
   GetWorkspaceMapArgs,
+  ListHandoffsArgs,
   ListMyWorkArgs,
   MoveTaskArgs,
+  ReplyHandoffArgs,
+  RequestHandoffArgs,
   SearchTasksArgs,
   ToggleSubtaskArgs,
   UpdateTaskArgs,
@@ -235,5 +239,73 @@ describe("flow_get_audit_log input", () => {
   it("takes cursor, and still accepts the legacy before", () => {
     expect(GetAuditLogArgs.parse({ cursor: 41823 }).cursor).toBe(41823);
     expect(GetAuditLogArgs.parse({ before: 41823 }).before).toBe(41823);
+  });
+});
+
+describe("flow_request_handoff input", () => {
+  const base = { listId: "ls_bugs", toUserId: "us_sam", title: "Pull March sessions", ask: "By page." };
+
+  it("needs a list, a recipient, a title and a non-empty ask", () => {
+    expect(RequestHandoffArgs.safeParse(base).success).toBe(true);
+    for (const key of ["listId", "toUserId", "title", "ask"] as const) {
+      const { [key]: _dropped, ...rest } = base;
+      expect(RequestHandoffArgs.safeParse(rest).success, key).toBe(false);
+    }
+    const empty = RequestHandoffArgs.safeParse({ ...base, ask: "" });
+    expect(empty.success).toBe(false);
+    expect(empty.error?.issues[0]?.message).toBe("Describe what you need.");
+  });
+
+  it("takes an epoch-ms dueDate, a return format and context task ids", () => {
+    const parsed = RequestHandoffArgs.parse({
+      ...base,
+      dueDate: 1_780_000_000_000,
+      returnFormat: "a table",
+      contextTaskIds: ["tk_1"],
+    });
+    expect(parsed).toMatchObject({ dueDate: 1_780_000_000_000, contextTaskIds: ["tk_1"] });
+    expect(RequestHandoffArgs.safeParse({ ...base, dueDate: 1.5 }).success).toBe(false);
+  });
+});
+
+describe("flow_list_handoffs input", () => {
+  it("defaults to incoming, 50 rows, concise, and leaves states to the DO", () => {
+    expect(ListHandoffsArgs.parse({})).toEqual({
+      direction: "incoming",
+      limit: 50,
+      format: "concise",
+    });
+  });
+
+  it("accepts only the five handoff states and caps limit at 100", () => {
+    expect(ListHandoffsArgs.parse({ states: ["needs_input"] }).states).toEqual(["needs_input"]);
+    expect(ListHandoffsArgs.safeParse({ states: ["blocked"] }).success).toBe(false);
+    expect(ListHandoffsArgs.safeParse({ states: [] }).success).toBe(false);
+    expect(ListHandoffsArgs.safeParse({ limit: 101 }).success).toBe(false);
+    expect(ListHandoffsArgs.safeParse({ direction: "sideways" }).success).toBe(false);
+  });
+});
+
+describe("flow_reply_handoff input", () => {
+  it("takes a message, a state, or both", () => {
+    expect(ReplyHandoffArgs.safeParse({ taskId: "tk_1", message: "On it" }).success).toBe(true);
+    expect(ReplyHandoffArgs.safeParse({ taskId: "tk_1", state: "working" }).success).toBe(true);
+    expect(
+      ReplyHandoffArgs.safeParse({ taskId: "tk_1", message: "Done", state: "done" }).success
+    ).toBe(true);
+  });
+
+  it("refuses neither, which only the whole schema can say — the registered shape cannot", () => {
+    const bare = ReplyHandoffArgs.safeParse({ taskId: "tk_1" });
+    expect(bare.success).toBe(false);
+    expect(bare.error?.issues[0]?.message).toBe("Send a message, a new state, or both.");
+    // What registerTool sees: the shape alone lets it through, hence the
+    // re-parse inside the tool.
+    expect(z.object(ReplyHandoffArgs.shape).safeParse({ taskId: "tk_1" }).success).toBe(true);
+  });
+
+  it("rejects an empty message and an unknown state", () => {
+    expect(ReplyHandoffArgs.safeParse({ taskId: "tk_1", message: "" }).success).toBe(false);
+    expect(ReplyHandoffArgs.safeParse({ taskId: "tk_1", state: "blocked" }).success).toBe(false);
   });
 });

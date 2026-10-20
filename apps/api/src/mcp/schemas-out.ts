@@ -21,7 +21,7 @@
  *    value is opaque: hand it straight back as the next call's `cursor`.
  */
 import { z } from "zod";
-import { AutomationRule } from "@flow/shared";
+import { AutomationRule, HandoffState } from "@flow/shared";
 
 // ---------------------------------------------------------------------------
 // Rows
@@ -39,6 +39,19 @@ export const ConciseTaskView = z.object({
 });
 export type ConciseTaskView = z.infer<typeof ConciseTaskView>;
 
+/**
+ * A task's `handoff`, with the requester as a name. The recipient needs no
+ * field of its own: it is the task's assignee.
+ */
+export const TaskHandoffView = z.object({
+  from: z.string(),
+  state: HandoffState,
+  returnFormat: z.string().nullable(),
+  contextTaskIds: z.array(z.string()),
+  stateChangedAt: z.number(),
+});
+export type TaskHandoffView = z.infer<typeof TaskHandoffView>;
+
 /** Everything a search row can carry — what `format: "detailed"` returns. */
 export const TaskView = ConciseTaskView.extend({
   listId: z.string(),
@@ -46,6 +59,11 @@ export const TaskView = ConciseTaskView.extend({
   assigneeId: z.string().nullable(),
   tags: z.array(z.string()),
   updatedAt: z.number(),
+  /**
+   * Present only on a handoff, and only where the DO returned a full task:
+   * search rows are `TaskRow`s, which do not carry it.
+   */
+  handoff: TaskHandoffView.optional(),
 });
 export type TaskView = z.infer<typeof TaskView>;
 
@@ -86,8 +104,36 @@ export const CommentView = z.object({
   author: z.string().nullable(),
   body: z.string(),
   createdAt: z.number(),
+  /** True when the author's agent wrote it (posted with a key); absent otherwise. */
+  agent: z.boolean().optional(),
 });
 export type CommentView = z.infer<typeof CommentView>;
+
+/**
+ * One handoff, as the handoff tools return it: who asked whom for what, where
+ * it stands, and what the requester wants back. The id is the task's, which is
+ * what `flow_reply_handoff` and `flow_get_task` take.
+ */
+export const HandoffView = z.object({
+  id: z.string(),
+  title: z.string(),
+  list: z.string(),
+  space: z.string(),
+  /** The requester. */
+  from: z.string(),
+  /** The recipient, i.e. the task's assignee. */
+  to: z.string().nullable(),
+  state: HandoffState,
+  dueDate: z.number().nullable(),
+  returnFormat: z.string().nullable(),
+  contextTaskIds: z.array(z.string()),
+  stateChangedAt: z.number(),
+  /** Done and declined close the task. */
+  closed: z.boolean(),
+  /** Detailed only: the task's description, which is the ask itself. */
+  ask: z.string().optional(),
+});
+export type HandoffView = z.infer<typeof HandoffView>;
 
 export const AttachmentView = z.object({
   id: z.string(),
@@ -207,6 +253,12 @@ export const GetAuditLogOut = z.object({
   entries: z.array(AuditEntryView),
 });
 
+export const ListHandoffsOut = z.object({
+  direction: z.enum(["incoming", "outgoing"]),
+  returned: z.number(),
+  handoffs: z.array(HandoffView),
+});
+
 // ---------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------
@@ -252,3 +304,11 @@ export const ToggleSubtaskOut = z.object({ subtask: SubtaskView });
 export const CommentOnTaskOut = z.object({ comment: CommentView });
 
 export const UpsertAutomationOut = z.object({ automation: AutomationRule });
+
+export const RequestHandoffOut = z.object({ handoff: HandoffView });
+
+/** `comment` is null when the reply only moved the state. */
+export const ReplyHandoffOut = z.object({
+  handoff: HandoffView,
+  comment: CommentView.nullable(),
+});

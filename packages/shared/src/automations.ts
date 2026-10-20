@@ -51,6 +51,15 @@ export const Action = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("set_status"), statusName: z.string() }),
   z.object({ kind: z.literal("set_assignee"), userId: Id.nullable() }),
   z.object({ kind: z.literal("set_priority"), priority: Priority.nullable() }),
+  // Due date from when the rule fires: the same day before cutoffHour (local to
+  // timeZone), the next day from cutoffHour on; with businessDays, a Saturday or
+  // Sunday result rolls to Monday. Stored at local noon, like the date picker.
+  z.object({
+    kind: z.literal("set_due_date"),
+    cutoffHour: z.number().int().min(0).max(23),
+    timeZone: z.string().min(1),
+    businessDays: z.boolean().default(true),
+  }),
   z.object({ kind: z.literal("add_tags"), tags: z.array(z.string()).min(1) }),
   z.object({ kind: z.literal("remove_tags"), tags: z.array(z.string()).min(1) }),
   z.object({
