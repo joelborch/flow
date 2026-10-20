@@ -83,7 +83,12 @@
     // Acknowledge new tickets (only to senders Cloudflare authenticated). Leave
     // "false" until a real routed message shows Cloudflare's
     // Authentication-Results header in the intake logs.
-    "EMAIL_INTAKE_ACK": "false"
+    "EMAIL_INTAKE_ACK": "false",
+    // Let an api key an owner or admin allowed (PATCH /api/api-keys/:id with
+    // {"canEmailRequesters": true}) email a comment back to the sender who
+    // opened a ticket: POST /api/tasks/:id/comments with
+    // {"emailToRequester": true}. Never over MCP. Off until you set "true".
+    "EMAIL_INTAKE_REPLY": "false"
     // GLEAP_PROJECT_TOKENS_JSON (JSON object mapping Gleap project ids to
     // their screenshot API tokens) is a Worker secret, never a var. Local
     // development may put it in the gitignored .dev.vars file when

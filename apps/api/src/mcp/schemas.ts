@@ -46,7 +46,8 @@ export const UpdateTaskArgs = UpdateTaskInput;
 export const MoveTaskArgs = MoveTaskInput;
 export const BulkUpdateTasksArgs = BulkUpdateInput;
 export const ToggleSubtaskArgs = ToggleSubtaskInput;
-export const CommentOnTaskArgs = CreateCommentInput;
+/** No emailToRequester: emailing a client is for a person in the app, never an agent. */
+export const CommentOnTaskArgs = CreateCommentInput.omit({ emailToRequester: true });
 export const UpsertAutomationArgs = UpsertAutomationInput;
 export const RequestHandoffArgs = RequestHandoffInput;
 export const ListHandoffsArgs = ListHandoffsInput.extend({ format: Format });

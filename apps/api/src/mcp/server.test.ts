@@ -122,6 +122,7 @@ const auth: AuthContext = {
     createdAt: 0,
     lastUsedAt: null,
     revokedAt: null,
+    canEmailRequesters: false,
   },
   actor: { userId: "us_alice", via: "api", apiKeyId: "ak_1", automationRuleId: null },
 };

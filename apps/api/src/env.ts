@@ -40,7 +40,14 @@ export type Env = CoreEnv & {
    * writes, because an ack only goes to senders that header vouches for.
    */
   EMAIL_INTAKE_ACK?: string;
-  /** Email Service binding (`send_email` in wrangler.jsonc): notifications, automations, intake acks. */
+  /**
+   * "true" lets a person in the web app (or an api key allowed to) email a
+   * comment back to the requester of a ticket that came in by email. Read by
+   * the DO, which refuses replies while it's off; the panel then hides the
+   * option.
+   */
+  EMAIL_INTAKE_REPLY?: string;
+  /** Email Service binding (`send_email` in wrangler.jsonc): notifications, automations, intake acks and replies. */
   SEND_EMAIL?: SendEmail;
   /**
    * Local-dev escape hatch. Auth resolves to the owner user when this is

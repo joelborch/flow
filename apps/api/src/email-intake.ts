@@ -10,12 +10,14 @@ import {
   type IngestEmailResult,
 } from "@flow/core";
 import { id, ID_PREFIX } from "@flow/core/id";
+import { SYNTHETIC_ID_PREFIX } from "@flow/core/email-intake";
 import { LIMITS, type Actor } from "@flow/shared";
 import { findOwnerActor } from "./auth.js";
 import { workspace } from "./do.js";
 import type { Env } from "./env.js";
 import { contentDisposition, mimeEssence, sanitizeFilename } from "./routes/attachments.js";
 import { emailBrandName, emailFrom, renderEmailHtml } from "./side-effects/index.js";
+import { HEADER_VALUE_MAX_BYTES, errorCode, sendWithHeaders, threadingHeaders } from "./email-thread.js";
 
 /**
  * Email intake: the Worker half.
@@ -55,14 +57,13 @@ export const PERMANENT_REJECT = "This message could not be filed. Please contact
 const UNREADABLE_REJECT = "This message could not be read. Please send it again as a regular email.";
 
 /** Prefix of the dedupe key minted for a message that arrives without a Message-ID. */
-export const SYNTHETIC_ID_PREFIX = "sha256:";
+export { SYNTHETIC_ID_PREFIX };
 
 
 /** Fixed, so nothing the sender wrote is ever reflected back out in our name. */
 export const ACK_SUBJECT = "We received your request";
 
-/** Email Service caps each custom header value at 2,048 bytes. */
-export const HEADER_VALUE_MAX_BYTES = 2048;
+export { HEADER_VALUE_MAX_BYTES, threadingHeaders };
 
 /** Text and HTML parts are cut to this many characters before any regex or normalization runs. */
 export const BODY_SOURCE_MAX = 2 * LIMITS.descriptionMax;
@@ -899,28 +900,6 @@ export function acknowledgementMarkdown(): string {
   ].join("\n");
 }
 
-function utf8Length(text: string): number {
-  return new TextEncoder().encode(text).byteLength;
-}
-
-/**
- * In-Reply-To and References for the acknowledgement, so the client's reply
- * carries the original Message-ID in its References and threads back onto the
- * ticket. When the chain outgrows the header value cap, ids are dropped from
- * the middle: RFC 5322 §3.6.4 keeps the thread's first id and its newest ones.
- * Null when the message had no real Message-ID to point at.
- */
-export function threadingHeaders(messageId: string, parentIds: readonly string[]): Record<string, string> | null {
-  if (messageId.startsWith(SYNTHETIC_ID_PREFIX) || /[\r\n]/.test(messageId)) return null;
-  const inReplyTo = `<${messageId}>`;
-  if (utf8Length(inReplyTo) > HEADER_VALUE_MAX_BYTES) return null;
-  const ids = [...new Set([...parentIds, messageId])];
-  const format = () => ids.map((value) => `<${value}>`).join(" ");
-  while (ids.length > 2 && utf8Length(format()) > HEADER_VALUE_MAX_BYTES) ids.splice(1, 1);
-  const references = utf8Length(format()) > HEADER_VALUE_MAX_BYTES ? inReplyTo : format();
-  return { "In-Reply-To": inReplyTo, References: references };
-}
-
 export interface Acknowledgement {
   /** The send without custom headers; the fallback when they are refused. */
   base: EmailMessageBuilder;
@@ -964,12 +943,6 @@ export function buildAcknowledgement(input: {
   };
 }
 
-function errorCode(err: unknown): string {
-  const code = (err as { code?: unknown } | null)?.code;
-  if (typeof code === "string") return code;
-  return /\bE_HEADER\w*/.exec(errorMessage(err))?.[0] ?? "";
-}
-
 /** "Name <address>" for the dry-run log, whichever form the builder holds. */
 function senderLabel(from: EmailMessageBuilder["from"]): string {
   return typeof from === "string" ? from : `${from.name ?? ""} <${from.email}>`.trim();
@@ -995,20 +968,16 @@ export async function sendAcknowledgement(env: Env, ack: Acknowledgement, taskId
   if (!binding) {
     throw new Error('EMAIL_DRY_RUN is off but the SEND_EMAIL binding is missing from wrangler.jsonc');
   }
-  try {
-    await binding.send({ ...ack.base, headers: ack.headers });
-  } catch (err) {
-    if (!errorCode(err).startsWith("E_HEADER")) throw err;
+  await sendWithHeaders(binding, ack.base, ack.headers, (code) => {
     console.warn(
       JSON.stringify({
         level: "warn",
         msg: "email intake ack: threading headers were refused; resending without them",
         taskId,
-        code: errorCode(err),
+        code,
       })
     );
-    await binding.send(ack.base);
-  }
+  });
 }
 
 // --- the handler --------------------------------------------------------------

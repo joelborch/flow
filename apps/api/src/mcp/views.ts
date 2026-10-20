@@ -154,6 +154,9 @@ export function commentView(comment: Comment, names: NameIndex): CommentView {
     // So an agent reading a handoff thread can tell the teammate from the
     // teammate's agent. Older comments have no `via` and read as human.
     ...(comment.via != null && AGENT_VIA.has(comment.via) ? { agent: true } : {}),
+    // So an agent can tell what the client was actually sent from internal notes.
+    ...(comment.emailTo != null ? { emailedTo: comment.emailTo } : {}),
+    ...(comment.emailStatus != null ? { emailStatus: comment.emailStatus } : {}),
   };
 }
 

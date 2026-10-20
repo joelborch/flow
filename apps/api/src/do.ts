@@ -111,6 +111,8 @@ export interface WorkspaceApi extends WorkspaceRpc {
     actor: string | Actor
   ): Promise<ApiKey>;
   revokeApiKey(keyId: string, actor: string | Actor): Promise<Ok>;
+  /** Owner/admin, from the web app only: allow or stop a key emailing ticket requesters. */
+  setApiKeyEmailRequesters(keyId: string, allowed: boolean, actor: string | Actor): Promise<ApiKey>;
 
   // --- tasks ----------------------------------------------------------------
   createTask(input: CreateTaskInput, actor: string | Actor): Promise<Task>;
@@ -287,6 +289,12 @@ export interface WorkspaceApi extends WorkspaceRpc {
     kind: "webhook" | "email";
     detail: string;
   }): Promise<Ok>;
+  /**
+   * The side-effects consumer's report on an emailed comment: "sent" once the
+   * mail service accepted it, "failed" once delivery gave up. Moves only a
+   * comment still "sending"; `ok` is false when there was nothing to move.
+   */
+  markEmailReply(commentId: string, status: "sent" | "failed"): Promise<{ ok: boolean }>;
 
   // --- audit ----------------------------------------------------------------
   /**
