@@ -91,7 +91,7 @@ Every mutation runs as one synchronous turn inside the DO: write rows, append on
 
 ## Quickstart
 
-**One click.** The [Deploy to Cloudflare](https://deploy.workers.cloudflare.com/?url=https://github.com/joelborch/flow) button copies the repo into your GitHub account, creates the Durable Object, R2 bucket and queues, and deploys to a `*.workers.dev` address. Until sign-in is set up, Flow shows the remaining steps: create two Cloudflare Access applications, then set `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `OWNER_EMAIL` under the Worker's Settings → Variables ([details](docs/SELF_HOSTING.md#5-cloudflare-access)). The button deploys from the root `wrangler.jsonc`; for a custom domain and email, use the manual setup below.
+**One click.** The [Deploy to Cloudflare](https://deploy.workers.cloudflare.com/?url=https://github.com/joelborch/flow) button copies the repo into your GitHub account, creates the Durable Object, R2 bucket and queues, and deploys to a `*.workers.dev` address. Until sign-in is set up, Flow shows the remaining steps: create two Cloudflare Access applications, then set `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `OWNER_EMAIL` under the Worker's Settings → Variables ([details](docs/SELF_HOSTING.md#5-cloudflare-access)). The button deploys from the root `wrangler.jsonc`; for a custom domain and email, use the manual setup below. If the Cloudflare account already runs a Flow, rename the bucket and both queues on the button's setup page, because it preselects existing resources with the default names.
 
 **By hand.** Prerequisites: Node 20+, [pnpm](https://pnpm.io), a Cloudflare account, `wrangler` (installed as a dev dependency).
 
