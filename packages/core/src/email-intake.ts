@@ -83,7 +83,15 @@ export function senderAllowed(sender: string, allowedSenders: readonly string[])
 /** "<abc@x>" → "abc@x"; blank or missing → null. */
 export function normalizeMessageId(raw: string | null | undefined): string | null {
   if (!raw) return null;
-  const id = raw.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
+  // Index scans rather than /^<+/ and />+$/: the trailing-anchored regex is
+  // quadratic on a long run of ">" that isn't at the end, and a sender writes
+  // this header.
+  const value = raw.trim();
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === "<") start++;
+  while (end > start && value[end - 1] === ">") end--;
+  const id = value.slice(start, end).trim();
   return id === "" ? null : id;
 }
 

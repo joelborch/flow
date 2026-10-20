@@ -48,6 +48,14 @@ describe("normalizeMessageId", () => {
     expect(normalizeMessageId("   ")).toBeNull();
     expect(normalizeMessageId("<>")).toBeNull();
   });
+
+  it("keeps brackets that aren't at the ends, and stays linear on a long run of them", () => {
+    expect(normalizeMessageId("<a>b@x.com>")).toBe("a>b@x.com");
+    const hostile = `<${">".repeat(100_000)}x@y>`;
+    const started = performance.now();
+    expect(normalizeMessageId(hostile)).toBe(`${">".repeat(100_000)}x@y`);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
 });
 
 describe("messageIdsIn", () => {
