@@ -211,6 +211,51 @@ export const InboundTaskInput = z.object({
 });
 export type InboundTaskInput = z.infer<typeof InboundTaskInput>;
 
+// ---------------------------------------------------------------------------
+// Email intake: a per-list ticket inbox. Mail to <alias>@<EMAIL_INTAKE_DOMAIN>
+// from an allowed sender opens a task in that list; a reply to one of those
+// messages lands as a comment on the same task. Owner/admin configure it.
+// ---------------------------------------------------------------------------
+
+/** The address's local part: 1–40 lowercase letters, digits, dots or hyphens. */
+export const EmailIntakeAlias = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(
+    /^[a-z0-9](?:[a-z0-9.-]{0,38}[a-z0-9])?$/,
+    "Alias must be 1–40 lowercase letters, digits, dots or hyphens, starting and ending with a letter or digit."
+  );
+
+/** "@example.com" admits a whole domain (not its subdomains); "name@example.com" one address. */
+export const EmailIntakeSender = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(
+    /^(?:[^\s@]+)?@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/,
+    "Each allowed sender must be an address (name@example.com) or a whole domain (@example.com)."
+  );
+
+export const SetEmailIntakeInput = z.object({
+  alias: EmailIntakeAlias,
+  // At least one: an intake that accepts mail from anyone is a spam inlet.
+  allowedSenders: z
+    .array(EmailIntakeSender)
+    .min(1, "Add at least one allowed sender or domain.")
+    .max(50),
+});
+export type SetEmailIntakeInput = z.infer<typeof SetEmailIntakeInput>;
+
+export const EmailIntake = z.object({
+  listId: Id,
+  alias: z.string(),
+  allowedSenders: z.array(z.string()),
+  createdAt: Ts,
+  updatedAt: Ts,
+});
+export type EmailIntake = z.infer<typeof EmailIntake>;
+
 // --- MCP tool names (single source of truth) -------------------------------
 export const MCP_TOOLS = [
   "flow_get_workspace_map",

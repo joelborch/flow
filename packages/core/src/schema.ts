@@ -459,6 +459,41 @@ const JOB_STATUS: string[] = [
    )`,
 ];
 
+// Email intake (see ./email-intake.ts). `email_intakes` is one row per list
+// that accepts mail; the alias is unique across lists, and the sender
+// allowlist is a JSON array of addresses and "@domain" entries.
+// `email_messages` is the dedupe record, written in the same turn as the task
+// or comment a message produced. Its key is (Message-ID, list), not the alias:
+// one email sent to two intakes files once in each, a redelivery to the same
+// list finds the row and stops, and an alias that is removed and handed to
+// another list never inherits the first list's history. The same rows drive
+// threading (a reply's References name an earlier message this list filed,
+// which names its task) and both hourly rate limits, which the
+// (sender, received_at) and (list_id, received_at) indexes serve. `alias` is
+// kept for audit only; nothing matches on it.
+// Neither table is in the snapshot, so nothing needs backfilling.
+const EMAIL_INTAKE: string[] = [
+  `CREATE TABLE email_intakes (
+     list_id TEXT PRIMARY KEY,
+     alias TEXT NOT NULL UNIQUE,
+     allowed_senders TEXT NOT NULL,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`,
+  `CREATE TABLE email_messages (
+     message_id TEXT NOT NULL,
+     list_id TEXT NOT NULL,
+     alias TEXT NOT NULL,
+     task_id TEXT NOT NULL,
+     comment_id TEXT,
+     sender TEXT NOT NULL,
+     received_at INTEGER NOT NULL,
+     PRIMARY KEY (message_id, list_id)
+   )`,
+  `CREATE INDEX idx_email_messages_sender ON email_messages (sender, received_at)`,
+  `CREATE INDEX idx_email_messages_list ON email_messages (list_id, received_at)`,
+];
+
 /**
  * Base schema first, then the automation engine's tables, then notifications.
  *
@@ -496,6 +531,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { id: "core-0009-subtask-note", statements: SUBTASK_NOTE },
   { id: ASSIGNMENT_ATTRIBUTION_MIGRATION_ID, statements: ASSIGNMENT_ATTRIBUTION },
   { id: "core-0011-job-status", statements: JOB_STATUS },
+  { id: "core-0012-email-intake", statements: EMAIL_INTAKE },
 ];
 
 /**

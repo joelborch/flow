@@ -1,6 +1,9 @@
 /// <reference types="@cloudflare/workers-types" />
 import { DurableObject } from "cloudflare:workers";
-import { ClientMsg as ClientMsgSchema } from "@flow/shared";
+import {
+  ClientMsg as ClientMsgSchema,
+  SetEmailIntakeInput as SetEmailIntakeSchema,
+} from "@flow/shared";
 import type {
   Action,
   Actor,
@@ -19,6 +22,7 @@ import type {
   CreateSubtaskInput,
   CreateTaskInput,
   Delta,
+  EmailIntake,
   List,
   MoveTaskInput,
   NotificationPref,
@@ -26,6 +30,7 @@ import type {
   SearchTasksInput,
   SearchTasksResult,
   ServerMsg,
+  SetEmailIntakeInput,
   Space,
   SpaceVisibility,
   Status,
@@ -50,6 +55,18 @@ import type {
   SideEffectPayload,
   TaskFacts,
 } from "./automation/types.js";
+import {
+  EMAIL_INTAKE_HOURLY_LIMIT,
+  EMAIL_INTAKE_LIST_HOURLY_LIMIT,
+  EMAIL_INTAKE_TAG,
+  EMAIL_INTAKE_UNVERIFIED_TAG,
+  type EmailIngestAttachment,
+  type EmailIntakeCheck,
+  type IngestEmailInput,
+  type IngestEmailResult,
+  normalizeMessageId,
+  senderAllowed,
+} from "./email-intake.js";
 import { id, token } from "./id.js";
 import {
   type ImportBatch,
@@ -73,6 +90,7 @@ import {
   type AuditRow,
   type ChangeRow,
   type CommentRow,
+  type EmailIntakeRow,
   type JobRow,
   type ListRow,
   type RuleRow,
@@ -86,6 +104,7 @@ import {
   toAttachment,
   toAuditEntry,
   toComment,
+  toEmailIntake,
   toList,
   toListWithSecrets,
   toRule,
@@ -148,6 +167,13 @@ import {
 } from "./visibility.js";
 
 export type { ImportBatch, ImportResult, ImportCounts } from "./import.js";
+export type {
+  EmailIngestAttachment, EmailIntakeCheck, IngestEmailInput, IngestEmailResult,
+} from "./email-intake.js";
+export {
+  EMAIL_INTAKE_HOURLY_LIMIT, EMAIL_INTAKE_LIST_HOURLY_LIMIT, EMAIL_INTAKE_TAG, EMAIL_INTAKE_UNVERIFIED_TAG,
+  messageIdsIn, normalizeMessageId, senderAllowed,
+} from "./email-intake.js";
 export { ID_PREFIX, INBOUND_TOKEN_PREFIX, id, token } from "./id.js";
 
 export interface Env {
@@ -292,6 +318,30 @@ const SNAPSHOT_TASK_COLUMNS = `id, list_id, title, status_id, assignee_id, assig
 const SPACE_COLUMNS = `id, name, color, position, archived, visibility, created_at, clickup_id`;
 
 const LIST_COLUMNS = `id, space_id, name, position, archived, inbound_token, created_at, clickup_id`;
+
+const EMAIL_INTAKE_COLUMNS = `list_id, alias, allowed_senders, created_at, updated_at`;
+
+/** The window both email rate limits count over. */
+const EMAIL_RATE_WINDOW_MS = 3_600_000;
+
+/**
+ * How many of a message's In-Reply-To/References ids threading looks up. The
+ * Worker caps the list too, but one turn must never run an unbounded number of
+ * queries on what a sender put in a header.
+ */
+const EMAIL_THREAD_REFERENCE_LIMIT = 20;
+
+/**
+ * Prefix of every error ingestEmail throws for a condition no retry can fix:
+ * no Message-ID, an attachment id already in use, or an inbound actor that may
+ * not write to the target list or task. The Worker matches it to reject the
+ * message outright instead of asking the sending server to try again; any
+ * other throw is treated as transient.
+ */
+export const EMAIL_INGEST_PERMANENT_ERROR = "Email intake permanent failure";
+
+const permanentEmailError = (detail: string): Error =>
+  new Error(`${EMAIL_INGEST_PERMANENT_ERROR}: ${detail}`);
 
 const TASK_DIFF_KEYS = [
   "listId",
@@ -1316,18 +1366,24 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * import) are exempt by design.
    */
   private assertSpaceWritable(actor: Actor, spaceId: string | null): void {
-    if (spaceId === null || isSystemActor(actor)) return;
+    const refusal = this.spaceWriteRefusal(actor, spaceId);
+    if (refusal !== null) throw new Error(refusal);
+  }
+
+  /** The write guard's verdict without the throw: the error message, or null when allowed. */
+  private spaceWriteRefusal(actor: Actor, spaceId: string | null): string | null {
+    if (spaceId === null || isSystemActor(actor)) return null;
     const row = this.sql
       .exec<SpaceRow>(`SELECT ${SPACE_COLUMNS} FROM spaces WHERE id = ?`, spaceId)
       .toArray()[0];
-    if (!row) return;
+    if (!row) return null;
     const space = toSpace(row);
-    if (space.visibility !== "private") return;
+    if (space.visibility !== "private") return null;
     const allowed = canSeeSpace(roleOf(this.sql, actor.userId), {
       visibility: space.visibility,
       isMember: isSpaceMember(this.sql, spaceId, actor.userId),
     });
-    if (!allowed) throw new Error(privateSpaceError(spaceId));
+    return allowed ? null : privateSpaceError(spaceId);
   }
 
   private assertTaskWritable(actor: Actor, taskId: string): void {
@@ -2340,35 +2396,42 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
   createComment(input: ParsedCommentInput, actor: string | Actor): Comment {
     return this.runTurn(toActor(actor), (t) => {
-      const taskRow = this.requireTaskRow(input.taskId);
+      // A missing task resolves to no space, so this passes and the not-found
+      // error comes from applyCommentCreate's requireTaskRow instead.
       this.assertTaskWritable(t.actor, input.taskId);
-      const comment: Comment = {
-        id: id("cm_"),
-        taskId: input.taskId,
-        authorId: t.actor.userId,
-        body: input.body,
-        createdAt: t.now,
-      };
-      this.sql.exec(
-        "INSERT INTO comments (id, task_id, author_id, body, created_at) VALUES (?, ?, ?, ?, ?)",
-        comment.id,
-        comment.taskId,
-        comment.authorId,
-        comment.body,
-        comment.createdAt
-      );
-      t.emit("create", "comment", comment.id, comment as unknown as Record<string, unknown>, {
-        taskId: comment.taskId,
-      });
-      t.audit("comment.create", comment.id, { taskId: comment.taskId });
-      // Activity wakes a snoozed task, in this same turn: the comment delta and
-      // the task's snoozedUntil -> null delta commit and broadcast together, so
-      // nobody ever sees the comment land on a card that is still asleep.
-      if (wakesOnComment(taskRow.snoozed_until ?? null)) {
-        this.applyTaskUpdate(t, { taskId: comment.taskId, snoozedUntil: null }, "task.wake");
-      }
-      return comment;
+      return this.applyCommentCreate(t, input);
     });
+  }
+
+  /** The comment write itself, shared with ingestEmail. Callers check access. */
+  private applyCommentCreate(t: Turn, input: ParsedCommentInput): Comment {
+    const taskRow = this.requireTaskRow(input.taskId);
+    const comment: Comment = {
+      id: id("cm_"),
+      taskId: input.taskId,
+      authorId: t.actor.userId,
+      body: input.body,
+      createdAt: t.now,
+    };
+    this.sql.exec(
+      "INSERT INTO comments (id, task_id, author_id, body, created_at) VALUES (?, ?, ?, ?, ?)",
+      comment.id,
+      comment.taskId,
+      comment.authorId,
+      comment.body,
+      comment.createdAt
+    );
+    t.emit("create", "comment", comment.id, comment as unknown as Record<string, unknown>, {
+      taskId: comment.taskId,
+    });
+    t.audit("comment.create", comment.id, { taskId: comment.taskId });
+    // Activity wakes a snoozed task, in this same turn: the comment delta and
+    // the task's snoozedUntil -> null delta commit and broadcast together, so
+    // nobody ever sees the comment land on a card that is still asleep.
+    if (wakesOnComment(taskRow.snoozed_until ?? null)) {
+      this.applyTaskUpdate(t, { taskId: comment.taskId, snoozedUntil: null }, "task.wake");
+    }
+    return comment;
   }
 
   deleteComment(commentId: string, actor: string | Actor): { ok: true } {
@@ -2398,42 +2461,50 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     return this.runTurn(toActor(actor), (t) => {
       this.requireTaskRow(input.taskId);
       this.assertTaskWritable(t.actor, input.taskId);
-      const attachment: Attachment = {
-        id: input.id ?? id("at_"),
-        taskId: input.taskId,
-        filename: input.filename,
-        r2Key: input.r2Key,
-        storageProvider: "r2",
-        driveFileId: null,
-        driveWebViewLink: null,
-        driveDestination: null,
-        migrationState: "r2",
-        size: input.size,
-        mimeType: input.mimeType,
-        uploadedBy: t.actor.userId,
-        createdAt: t.now,
-      };
-      this.sql.exec(
-        `INSERT INTO attachments (id, task_id, filename, r2_key, size, mime_type, uploaded_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        attachment.id,
-        attachment.taskId,
-        attachment.filename,
-        attachment.r2Key,
-        attachment.size,
-        attachment.mimeType,
-        attachment.uploadedBy,
-        attachment.createdAt
-      );
-      t.emit("create", "attachment", attachment.id, attachment as unknown as Record<string, unknown>, {
-        taskId: attachment.taskId,
-      });
-      t.audit("attachment.create", attachment.id, {
-        taskId: attachment.taskId,
-        filename: attachment.filename,
-      });
-      return attachment;
+      return this.applyAttachmentCreate(t, input);
     });
+  }
+
+  /**
+   * The metadata write, shared with ingestEmail. Honours a caller-supplied id
+   * (the R2 key embeds it); callers check the task exists and is writable.
+   */
+  private applyAttachmentCreate(t: Turn, input: CreateAttachmentInput): Attachment {
+    const attachment: Attachment = {
+      id: input.id ?? id("at_"),
+      taskId: input.taskId,
+      filename: input.filename,
+      r2Key: input.r2Key,
+      storageProvider: "r2",
+      driveFileId: null,
+      driveWebViewLink: null,
+      driveDestination: null,
+      migrationState: "r2",
+      size: input.size,
+      mimeType: input.mimeType,
+      uploadedBy: t.actor.userId,
+      createdAt: t.now,
+    };
+    this.sql.exec(
+      `INSERT INTO attachments (id, task_id, filename, r2_key, size, mime_type, uploaded_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      attachment.id,
+      attachment.taskId,
+      attachment.filename,
+      attachment.r2Key,
+      attachment.size,
+      attachment.mimeType,
+      attachment.uploadedBy,
+      attachment.createdAt
+    );
+    t.emit("create", "attachment", attachment.id, attachment as unknown as Record<string, unknown>, {
+      taskId: attachment.taskId,
+    });
+    t.audit("attachment.create", attachment.id, {
+      taskId: attachment.taskId,
+      filename: attachment.filename,
+    });
+    return attachment;
   }
 
   /**
@@ -2974,12 +3045,338 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
             `or archive the list instead (updateList with archived: true).`
         );
       }
+      // An alias outliving its list would keep accepting mail for nowhere, and
+      // keep the alias from being reused, so the intake goes in the same turn.
+      const intake = this.emailIntakeForList(listId);
+      this.sql.exec("DELETE FROM email_intakes WHERE list_id = ?", listId);
       this.sql.exec("DELETE FROM statuses WHERE list_id = ?", listId);
       this.sql.exec("DELETE FROM lists WHERE id = ?", listId);
       t.emit("delete", "list", listId, null, { spaceId: row.space_id });
-      t.audit("list.delete", listId, { name: row.name });
+      t.audit("list.delete", listId, {
+        name: row.name,
+        ...(intake === null ? {} : { emailIntakeAlias: intake.alias }),
+      });
       return { ok: true } as const;
     });
+  }
+
+  // =========================================================================
+  // Email intake (see ./email-intake.ts)
+  //
+  // The api Worker's email() handler runs checkEmailIntake before it parses or
+  // uploads anything, then hands the formatted message to ingestEmail. The
+  // pre-check is advisory: ingestEmail repeats every check inside its own turn
+  // and writes the task or comment together with the email_messages row that
+  // turns a redelivery into a no-op.
+  // =========================================================================
+
+  /** Every list's intake, by alias. Holds sender allowlists: the Worker admin-gates it. */
+  listEmailIntakes(): EmailIntake[] {
+    return this.sql
+      .exec<EmailIntakeRow>(`SELECT ${EMAIL_INTAKE_COLUMNS} FROM email_intakes ORDER BY alias`)
+      .toArray()
+      .map(toEmailIntake);
+  }
+
+  /**
+   * Create or replace (`input`) or remove (`null`) one list's intake.
+   *
+   * Owner/admin only, checked here as well as on the route: an intake lets
+   * people outside the workspace write into it, so the sole writer does not
+   * take the caller's word for it. Intakes are not in the snapshot, so this
+   * writes an audit row and no delta.
+   */
+  setEmailIntake(
+    listId: string,
+    input: SetEmailIntakeInput | null,
+    actor: string | Actor
+  ): EmailIntake | null {
+    return this.runTurn(toActor(actor), (t) => {
+      this.requirePrivileged(t.actor, "Configuring a list's email intake");
+      const list = this.requireListRow(listId);
+      const before = this.emailIntakeForList(list.id);
+      if (input === null) {
+        if (before === null) return null;
+        this.sql.exec("DELETE FROM email_intakes WHERE list_id = ?", list.id);
+        t.audit("list.email_intake.remove", list.id, { alias: before.alias });
+        return null;
+      }
+
+      // The route has already parsed this; parsing again here normalizes
+      // (trim, lowercase) for any other caller with the contract's own rules.
+      const parsed = SetEmailIntakeSchema.safeParse(input);
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues[0]?.message ?? "Invalid email intake.");
+      }
+      const alias = parsed.data.alias;
+      const allowedSenders = [...new Set(parsed.data.allowedSenders)];
+
+      // Checked in code so the caller gets the holder's name, not a constraint
+      // code; the UNIQUE on email_intakes.alias is the backstop.
+      const holder = this.sql
+        .exec<{ list_id: string; name: string | null }>(
+          `SELECT e.list_id AS list_id, l.name AS name
+           FROM email_intakes e LEFT JOIN lists l ON l.id = e.list_id
+           WHERE e.alias = ? AND e.list_id != ?`,
+          alias,
+          list.id
+        )
+        .toArray()[0];
+      if (holder) {
+        throw new Error(
+          `Email alias "${alias}" is already used by list ${holder.list_id}` +
+            `${holder.name === null ? "" : ` ("${holder.name}")`}. ` +
+            `Remove it from that list first, or pick another alias.`
+        );
+      }
+
+      const after: EmailIntake = {
+        listId: list.id,
+        alias,
+        allowedSenders,
+        createdAt: before?.createdAt ?? t.now,
+        updatedAt: t.now,
+      };
+      this.sql.exec(
+        `INSERT INTO email_intakes (list_id, alias, allowed_senders, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (list_id) DO UPDATE SET
+           alias = excluded.alias,
+           allowed_senders = excluded.allowed_senders,
+           updated_at = excluded.updated_at`,
+        after.listId,
+        after.alias,
+        JSON.stringify(after.allowedSenders),
+        after.createdAt,
+        after.updatedAt
+      );
+      t.audit("list.email_intake.set", list.id, { alias, allowedSenders });
+      return after;
+    });
+  }
+
+  /** Read-only and cheap: the Worker's pre-check before it parses or uploads. */
+  checkEmailIntake(input: { alias: string; sender: string; messageId: string }): EmailIntakeCheck {
+    return this.emailIntakeCheck(
+      input.alias.trim().toLowerCase(),
+      input.sender.trim().toLowerCase(),
+      normalizeMessageId(input.messageId) ?? "",
+      Date.now()
+    );
+  }
+
+  /**
+   * Route one parsed message in one turn: a comment on the ticket it replies
+   * to, or a new ticket in the intake's list, plus its attachments and the
+   * email_messages row that dedupes it. The Worker's pre-check ran before an
+   * await, so every refusal is re-derived here and returned the same way.
+   *
+   * Conditions a retry can never fix throw with EMAIL_INGEST_PERMANENT_ERROR
+   * as the message prefix, so the Worker rejects instead of asking for a retry.
+   */
+  ingestEmail(input: IngestEmailInput, actor: string | Actor): IngestEmailResult {
+    const result = this.runTurn(toActor(actor), (t): IngestEmailResult => {
+      const alias = input.alias.trim().toLowerCase();
+      const sender = input.sender.trim().toLowerCase();
+      // Only an explicit true vouches for the sender; a caller that leaves the
+      // flag out gets the unverified treatment, never the trusted one.
+      const authenticated = input.authenticated === true;
+      const messageId = normalizeMessageId(input.messageId);
+      if (messageId === null) {
+        throw permanentEmailError("no Message-ID, and it is the dedupe key.");
+      }
+      const check = this.emailIntakeCheck(alias, sender, messageId, t.now);
+      if (check.status !== "ok") return check;
+      const listId = check.listId;
+      const message = { messageId, listId, alias, sender, authenticated };
+
+      // Everything that can refuse is checked before the first write: a throw
+      // after it would leave a ticket with no dedupe row, and the redelivery
+      // would open a second one.
+      this.requireFreshAttachmentIds(input.attachments);
+      const thread = this.emailThreadTask(listId, input.referenceIds);
+      if (thread !== null) {
+        // An unauthenticated reply still threads: the Worker marks the comment
+        // text itself, and the ticket was opened by someone this list admits.
+        this.requireEmailWritable(t.actor, "task", thread.id);
+        // A reply is only ever a comment: it never reopens, moves or retags
+        // the ticket, even a closed one.
+        const comment = this.applyCommentCreate(t, { taskId: thread.id, body: input.commentBody });
+        for (const a of input.attachments) this.applyAttachmentCreate(t, { ...a, taskId: thread.id });
+        this.recordEmailMessage(t, { ...message, taskId: thread.id, commentId: comment.id });
+        return { status: "commented", taskId: thread.id, commentId: comment.id, listId: thread.list_id };
+      }
+
+      this.requireEmailWritable(t.actor, "list", listId);
+      const task = this.applyTaskCreate(t, {
+        listId,
+        title: input.task.title,
+        description: input.task.description,
+        tags: authenticated ? [EMAIL_INTAKE_TAG] : [EMAIL_INTAKE_TAG, EMAIL_INTAKE_UNVERIFIED_TAG],
+      });
+      for (const a of input.attachments) this.applyAttachmentCreate(t, { ...a, taskId: task.id });
+      this.recordEmailMessage(t, { ...message, taskId: task.id, commentId: null });
+      return { status: "created", taskId: task.id, listId: task.listId };
+    });
+    // As in runTaskTurn: an automation in the same turn may have moved the
+    // task, and the caller should hear where it actually landed.
+    if (result.status === "created" || result.status === "commented") {
+      const row = this.taskRow(result.taskId);
+      if (row !== null) return { ...result, listId: row.list_id };
+    }
+    return result;
+  }
+
+  /**
+   * The contract's refusals in its fixed order, then ok. Reads only.
+   *
+   * Dedupe is per (Message-ID, intake list), so one email addressed to two
+   * intakes files once in each. It runs before the rate limits so a
+   * redelivery is always recognized as one. Then two hourly budgets: the
+   * sender's own, and the list's across every sender, since an "@domain"
+   * entry admits any number of local parts each with a fresh sender budget.
+   */
+  private emailIntakeCheck(
+    alias: string,
+    sender: string,
+    messageId: string,
+    now: number
+  ): EmailIntakeCheck {
+    const intake = this.sql
+      .exec<EmailIntakeRow & { list_archived: number | null }>(
+        `SELECT e.list_id AS list_id, e.alias AS alias, e.allowed_senders AS allowed_senders,
+                e.created_at AS created_at, e.updated_at AS updated_at, l.archived AS list_archived
+         FROM email_intakes e LEFT JOIN lists l ON l.id = e.list_id
+         WHERE e.alias = ?`,
+        alias
+      )
+      .toArray()[0];
+    // `list_archived` is null when the list row is gone. Either way the
+    // sender hears the same thing as for an alias that never existed.
+    if (!intake || intake.list_archived !== 0) return { status: "unknown_alias" };
+    if (!senderAllowed(sender, toEmailIntake(intake).allowedSenders)) {
+      return { status: "sender_not_allowed" };
+    }
+    const listId = intake.list_id;
+    const prior = this.sql
+      .exec<{ task_id: string }>(
+        "SELECT task_id FROM email_messages WHERE message_id = ? AND list_id = ?",
+        messageId,
+        listId
+      )
+      .toArray()[0];
+    if (prior) return { status: "duplicate", taskId: prior.task_id };
+    const since = now - EMAIL_RATE_WINDOW_MS;
+    const fromSender = this.sql
+      .exec<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM email_messages WHERE sender = ? AND received_at > ?",
+        sender,
+        since
+      )
+      .one().n;
+    if (fromSender >= EMAIL_INTAKE_HOURLY_LIMIT) return { status: "rate_limited" };
+    const toList = this.sql
+      .exec<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM email_messages WHERE list_id = ? AND received_at > ?",
+        listId,
+        since
+      )
+      .one().n;
+    if (toList >= EMAIL_INTAKE_LIST_HOURLY_LIMIT) return { status: "rate_limited" };
+    return { status: "ok", listId };
+  }
+
+  /**
+   * The ticket a reply belongs to: the first of its first
+   * EMAIL_THREAD_REFERENCE_LIMIT referenced messages that this same list filed
+   * and whose task still exists. Matching on the list rather than the alias
+   * means one intake can't append to another's tickets, and an alias that is
+   * removed and later given to another list can't carry that list's mail onto
+   * the tickets the alias opened before.
+   */
+  private emailThreadTask(listId: string, referenceIds: readonly string[]): TaskRowSql | null {
+    for (const raw of referenceIds.slice(0, EMAIL_THREAD_REFERENCE_LIMIT)) {
+      const ref = normalizeMessageId(raw);
+      if (ref === null) continue;
+      const prior = this.sql
+        .exec<{ task_id: string }>(
+          "SELECT task_id FROM email_messages WHERE message_id = ? AND list_id = ?",
+          ref,
+          listId
+        )
+        .toArray()[0];
+      const row = prior ? this.taskRow(prior.task_id) : null;
+      if (row !== null) return row;
+    }
+    return null;
+  }
+
+  /** The space write guard for ingestEmail: a refusal there is permanent, so it says so. */
+  private requireEmailWritable(actor: Actor, kind: "list" | "task", targetId: string): void {
+    const spaceId = kind === "task" ? this.spaceIdForTask(targetId) : this.spaceIdForList(targetId);
+    const refusal = this.spaceWriteRefusal(actor, spaceId);
+    if (refusal !== null) {
+      throw permanentEmailError(`the inbound actor may not write to ${kind} ${targetId}. ${refusal}`);
+    }
+  }
+
+  /** The Worker mints attachment ids; a reused one would fail mid-turn, so refuse it up front. */
+  private requireFreshAttachmentIds(attachments: readonly EmailIngestAttachment[]): void {
+    const seen = new Set<string>();
+    for (const a of attachments) {
+      const taken =
+        seen.has(a.id) ||
+        this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM attachments WHERE id = ?", a.id).one()
+          .n > 0;
+      if (taken) throw permanentEmailError(`attachment id ${a.id} is already in use.`);
+      seen.add(a.id);
+    }
+  }
+
+  /** The dedupe row, written last in the turn that filed the message. */
+  private recordEmailMessage(
+    t: Turn,
+    m: {
+      messageId: string;
+      listId: string;
+      alias: string;
+      sender: string;
+      authenticated: boolean;
+      taskId: string;
+      commentId: string | null;
+    }
+  ): void {
+    this.sql.exec(
+      `INSERT INTO email_messages (message_id, list_id, alias, task_id, comment_id, sender, received_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      m.messageId,
+      m.listId,
+      m.alias,
+      m.taskId,
+      m.commentId,
+      m.sender,
+      t.now
+    );
+    // The task/comment audit rows name the actor the Worker passed; this one
+    // records who actually wrote in, and whether Cloudflare vouched for them.
+    t.audit("email.ingest", m.taskId, {
+      listId: m.listId,
+      alias: m.alias,
+      sender: m.sender,
+      authenticated: m.authenticated,
+      messageId: m.messageId,
+      commentId: m.commentId,
+    });
+  }
+
+  private emailIntakeForList(listId: string): EmailIntake | null {
+    const row = this.sql
+      .exec<EmailIntakeRow>(
+        `SELECT ${EMAIL_INTAKE_COLUMNS} FROM email_intakes WHERE list_id = ?`,
+        listId
+      )
+      .toArray()[0];
+    return row ? toEmailIntake(row) : null;
   }
 
   // =========================================================================

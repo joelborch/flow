@@ -24,7 +24,16 @@ const task = await stub.createTask({ listId, title: "Ship it" }, actor);
 | `src/search.ts` | FTS5 + filters + keyset pagination |
 | `src/import.ts` | `ImportBatch` shapes (not in `@flow/shared` — see below) |
 | `src/id.ts` | Prefixed nanoid-style ids, no dependency |
-| `src/automation/` | **Owned by the automations agent.** Do not edit from here |
+| `src/visibility.ts` | Per-space permissions: who can see and write which spaces |
+| `src/sync-floor.ts` | Resync floor: forces a snapshot after delta-less or visibility-changing mutations |
+| `src/snooze.ts` | Snooze and wake semantics (hourly sweep, wake-on-comment) |
+| `src/notifications.ts` | System email notifications: recipients, templates, prefs |
+| `src/users.ts` | Assignee resolution and validation |
+| `src/alarm-observability.ts` | Structured log records for the alarm/job runner |
+| `src/email-intake.ts` | Email intake types, sender allowlist matching, Message-ID parsing |
+| `src/side-effect-size.ts` | Fits side effects to Queues limits: 128KB per message, 256KB/100 per batch |
+| `src/websocket-close.ts` | Maps peer close codes to ones the Worker may send |
+| `src/automation/` | The automation engine: triggers, matching, templates, recurrence, seeds |
 
 ## The mutation turn
 

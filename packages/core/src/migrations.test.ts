@@ -163,6 +163,48 @@ describe("applyMigrations: partial-failure rollback", () => {
   });
 });
 
+describe("core-0012-email-intake", () => {
+  it("creates both email tables and the sender and list rate-limit indexes", () => {
+    const { sql } = freshDb();
+    expect(migrationApplied(sql, "core-0012-email-intake")).toBe(true);
+    expect(tableExists(sql, "email_intakes")).toBe(true);
+    expect(tableExists(sql, "email_messages")).toBe(true);
+    const indexes = sql
+      .exec<{ name: string }>(
+        `SELECT name FROM sqlite_master WHERE type = 'index'
+         AND name IN ('idx_email_messages_sender', 'idx_email_messages_list') ORDER BY name`
+      )
+      .toArray()
+      .map((r) => r.name);
+    expect(indexes).toEqual(["idx_email_messages_list", "idx_email_messages_sender"]);
+  });
+
+  it("keys email_messages by (message_id, list_id): once per list, never twice in one", () => {
+    const { sql } = freshDb();
+    const insert = (listId: string) =>
+      sql.exec(
+        `INSERT INTO email_messages (message_id, list_id, alias, task_id, comment_id, sender, received_at)
+         VALUES ('m@x', ?, 'help', 'tk_1', NULL, 'pat@x', 0)`,
+        listId
+      );
+    insert("ls_a");
+    insert("ls_b");
+    expect(() => insert("ls_a")).toThrow();
+  });
+
+  it("enforces one list per alias at the storage level, as a backstop to the DO's check", () => {
+    const { sql } = freshDb();
+    sql.exec(
+      "INSERT INTO email_intakes (list_id, alias, allowed_senders, created_at, updated_at) VALUES ('ls_a', 'help', '[]', 0, 0)"
+    );
+    expect(() =>
+      sql.exec(
+        "INSERT INTO email_intakes (list_id, alias, allowed_senders, created_at, updated_at) VALUES ('ls_b', 'help', '[]', 0, 0)"
+      )
+    ).toThrow();
+  });
+});
+
 describe("needsMigration", () => {
   it("false immediately after a fresh migration run", () => {
     const { sql } = freshDb();

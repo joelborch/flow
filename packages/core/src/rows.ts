@@ -5,6 +5,7 @@ import type {
   Actor,
   AutomationRule,
   Comment,
+  EmailIntake,
   List,
   SnapshotTask,
   Space,
@@ -221,6 +222,16 @@ export interface JobRow {
   every_ms: number | null;
 }
 
+export interface EmailIntakeRow {
+  [key: string]: SqlStorageValue;
+  list_id: string;
+  alias: string;
+  /** JSON array of addresses and "@domain" entries. */
+  allowed_senders: string;
+  created_at: number;
+  updated_at: number;
+}
+
 // --- mappers ---------------------------------------------------------------
 
 const parseJson = <T>(text: string, fallback: T): T => {
@@ -417,6 +428,14 @@ export const toRule = (r: RuleRow): AutomationRule => ({
   trigger: parseJson<AutomationRule["trigger"]>(r.trigger, { kind: "task_created" }),
   conditions: parseJson<AutomationRule["conditions"]>(r.conditions, []),
   actions: parseJson<AutomationRule["actions"]>(r.actions, []),
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+export const toEmailIntake = (r: EmailIntakeRow): EmailIntake => ({
+  listId: r.list_id,
+  alias: r.alias,
+  allowedSenders: parseJson<string[]>(r.allowed_senders, []),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
