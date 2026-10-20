@@ -68,11 +68,15 @@ import {
   EMAIL_INTAKE_LIST_HOURLY_LIMIT,
   EMAIL_INTAKE_TAG,
   EMAIL_INTAKE_UNVERIFIED_TAG,
+  EMAIL_REPLY_REFERENCE_LIMIT,
+  SYNTHETIC_ID_PREFIX,
   type EmailIngestAttachment,
   type EmailIntakeCheck,
+  type EmailReplyTarget,
   type IngestEmailInput,
   type IngestEmailResult,
   normalizeMessageId,
+  replySubject,
   senderAllowed,
 } from "./email-intake.js";
 import {
@@ -188,7 +192,8 @@ export type {
 } from "./email-intake.js";
 export {
   EMAIL_INTAKE_HOURLY_LIMIT, EMAIL_INTAKE_LIST_HOURLY_LIMIT, EMAIL_INTAKE_TAG, EMAIL_INTAKE_UNVERIFIED_TAG,
-  messageIdsIn, normalizeMessageId, senderAllowed,
+  EMAIL_REPLY_REFERENCE_LIMIT, SYNTHETIC_ID_PREFIX, messageIdsIn, normalizeMessageId, replySubject,
+  senderAllowed, type EmailReplyTarget,
 } from "./email-intake.js";
 export { ID_PREFIX, INBOUND_TOKEN_PREFIX, id, token } from "./id.js";
 export { HANDOFF_TAG, OPEN_HANDOFF_STATES } from "./handoffs.js";
@@ -205,6 +210,8 @@ export interface Env {
    */
   APP_HOSTNAME?: string;
   EMAIL_DRY_RUN?: string;
+  /** "true" lets a person email a comment back to a ticket's requester. Off when unset. */
+  EMAIL_INTAKE_REPLY?: string;
 }
 
 // Queues' per-message (128KB) and per-sendBatch (100 msgs / 256KB) limits:
@@ -342,6 +349,12 @@ const SPACE_COLUMNS = `id, name, color, position, archived, visibility, created_
 const LIST_COLUMNS = `id, space_id, name, position, archived, inbound_token, created_at, clickup_id`;
 
 const EMAIL_INTAKE_COLUMNS = `list_id, alias, allowed_senders, created_at, updated_at`;
+
+/** Every api key read goes through this; can_email_requesters is core-0014-email-replies. */
+const API_KEY_COLUMNS = `id, user_id, name, token_hash, created_at, last_used_at, revoked_at, can_email_requesters`;
+
+/** Every comment read goes through this; `email_*` is core-0014-email-replies. */
+const COMMENT_COLUMNS = `id, task_id, author_id, body, created_at, via, email_to, email_status`;
 
 /** The window both email rate limits count over. */
 const EMAIL_RATE_WINDOW_MS = 3_600_000;
@@ -1047,11 +1060,18 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * Same ok:false row the queue consumer writes for a failed delivery, for
    * side effects that never made it onto the queue at all. Only automation
    * payloads have a rule to log against; notification emails (ruleId
-   * "notify:*") get the console line alone.
+   * "notify:*") get the console line alone. An emailed comment that never
+   * reached the queue is marked failed on its card, in a turn of its own
+   * because this can run while the turn that wrote it is still flushing.
    */
   private recordEnqueueFailures(payloads: readonly unknown[], detail: string): void {
     for (const payload of payloads) {
-      const p = payload as { kind?: unknown; ruleId?: unknown; taskId?: unknown; url?: unknown };
+      const p = payload as { kind?: unknown; ruleId?: unknown; taskId?: unknown; url?: unknown; commentId?: unknown };
+      if (p.kind === "email-reply" && typeof p.commentId === "string") {
+        const commentId = p.commentId;
+        this.ctx.waitUntil(Promise.resolve().then(() => this.markEmailReply(commentId, "failed")));
+        continue;
+      }
       if (p.kind !== "webhook" && p.kind !== "email") continue;
       if (typeof p.ruleId !== "string" || typeof p.taskId !== "string") continue;
       if (p.ruleId.startsWith("notify:")) continue;
@@ -1633,11 +1653,15 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     if (forUserId !== undefined) {
       this.assertSpaceWritable(toActor(forUserId), this.spaceIdForTask(taskId));
     }
+    const task = toTask(row);
+    const replyTo = this.emailReplyTarget(task)?.to ?? null;
     return {
-      task: toTask(row),
+      task,
       subtasks: this.listSubtasks(taskId),
       comments: this.listComments(taskId),
       attachments: this.listAttachments(taskId),
+      emailReplyTo: replyTo,
+      emailReplySubject: replyTo === null ? null : replySubject(task.title),
     };
   }
 
@@ -1714,7 +1738,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   listComments(taskId: string): Comment[] {
     return this.sql
       .exec<CommentRow>(
-        "SELECT id, task_id, author_id, body, created_at, via FROM comments WHERE task_id = ? ORDER BY created_at",
+        `SELECT ${COMMENT_COLUMNS} FROM comments WHERE task_id = ? ORDER BY created_at`,
         taskId
       )
       .toArray()
@@ -1907,8 +1931,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   resolveApiKey(tokenHash: string): { key: ApiKey; user: User } | null {
     const rows = this.sql
       .exec<ApiKeyRow>(
-        `SELECT id, user_id, name, token_hash, created_at, last_used_at, revoked_at
-         FROM api_keys WHERE token_hash = ?`,
+        `SELECT ${API_KEY_COLUMNS} FROM api_keys WHERE token_hash = ?`,
         tokenHash
       )
       .toArray();
@@ -1931,8 +1954,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   listApiKeys(): ApiKey[] {
     return this.sql
       .exec<ApiKeyRow>(
-        `SELECT id, user_id, name, token_hash, created_at, last_used_at, revoked_at
-         FROM api_keys ORDER BY created_at`
+        `SELECT ${API_KEY_COLUMNS} FROM api_keys ORDER BY created_at`
       )
       .toArray()
       .map(toApiKey);
@@ -2476,12 +2498,123 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       // A missing task resolves to no space, so this passes and the not-found
       // error comes from applyCommentCreate's requireTaskRow instead.
       this.assertTaskWritable(t.actor, input.taskId);
-      return this.applyCommentCreate(t, input);
+      // Every reply check runs before the comment is written, since a throw
+      // does not roll back what the turn already wrote.
+      const reply = input.emailToRequester === true ? this.requireEmailReply(t.actor, input.taskId) : null;
+      const comment = this.applyCommentCreate(t, input, reply?.target.to ?? null);
+      if (reply !== null) {
+        const payload: SideEffectPayload = {
+          kind: "email-reply",
+          to: reply.target.to,
+          alias: reply.target.alias,
+          subject: replySubject(reply.title),
+          body: comment.body,
+          inReplyTo: reply.target.inReplyTo,
+          references: reply.target.references,
+          taskId: comment.taskId,
+          commentId: comment.id,
+        };
+        t.enqueue(payload);
+        t.audit("comment.email_reply", comment.id, { taskId: comment.taskId, to: reply.target.to });
+      }
+      return comment;
+    });
+  }
+
+  /**
+   * The checks for emailing a comment back: a person in the web app, or an api
+   * key an owner or admin allowed to (never MCP, and never a key nobody
+   * allowed, so no agent writes to a client on its own), replies turned on,
+   * and a requester to write to.
+   */
+  private requireEmailReply(actor: Actor, taskId: string): { target: EmailReplyTarget; title: string } {
+    if (!this.mayEmailRequesters(actor)) {
+      throw new Error(
+        "Email replies need an API key allowed to email requesters (PATCH /api/api-keys/:id), and never go over MCP."
+      );
+    }
+    if (this.env.EMAIL_INTAKE_REPLY !== "true") throw new Error("Email replies are turned off.");
+    const task = toTask(this.requireTaskRow(taskId));
+    const target = this.emailReplyTarget(task);
+    if (target === null) {
+      throw new Error(`Task ${taskId} has no email sender to reply to.`);
+    }
+    return { target, title: task.title };
+  }
+
+  private mayEmailRequesters(actor: Actor): boolean {
+    if (actor.via === "ui") return actor.apiKeyId === null;
+    if (actor.via !== "api" || actor.apiKeyId === null) return false;
+    const row = this.sql
+      .exec<{ can_email_requesters: number; revoked_at: number | null }>(
+        "SELECT can_email_requesters, revoked_at FROM api_keys WHERE id = ?",
+        actor.apiKeyId
+      )
+      .toArray()[0];
+    return row !== undefined && row.revoked_at === null && row.can_email_requesters === 1;
+  }
+
+  /**
+   * Where an emailed comment on this task would go, or null when it can't
+   * have one: replies are off, the task wasn't opened by email, or the alias it
+   * came in on no longer exists to take the requester's answer. An unverified
+   * sender is answered too: intake only files mail whose envelope sender is on
+   * the list's allowlist, and the reply goes to that address, so someone
+   * forging it never sees the reply; its real owner does.
+   */
+  private emailReplyTarget(task: Task): EmailReplyTarget | null {
+    if (this.env.EMAIL_INTAKE_REPLY !== "true") return null;
+    const rows = this.sql
+      .exec<{ message_id: string; alias: string; sender: string; comment_id: string | null }>(
+        `SELECT message_id, alias, sender, comment_id FROM email_messages
+          WHERE task_id = ? ORDER BY received_at, rowid`,
+        task.id
+      )
+      .toArray();
+    const opener = rows.find((r) => r.comment_id === null);
+    if (!opener) return null;
+    const live = this.sql
+      .exec("SELECT 1 AS ok FROM email_intakes WHERE alias = ?", opener.alias)
+      .toArray().length > 0;
+    if (!live) return null;
+    const real = rows.map((r) => r.message_id).filter((m) => !m.startsWith(SYNTHETIC_ID_PREFIX));
+    // Like the Worker's header cap: the thread's first id and its newest ones.
+    const references =
+      real.length > EMAIL_REPLY_REFERENCE_LIMIT
+        ? [real[0]!, ...real.slice(real.length - (EMAIL_REPLY_REFERENCE_LIMIT - 1))]
+        : real;
+    return {
+      to: opener.sender,
+      alias: opener.alias,
+      inReplyTo: real[real.length - 1] ?? null,
+      references,
+    };
+  }
+
+  /**
+   * The queue consumer's report on an emailed comment: "sent" once the mail
+   * service accepted it, "failed" once delivery gave up. Only a comment still
+   * "sending" moves, so a late or repeated report can't flip a settled one.
+   */
+  markEmailReply(commentId: string, status: "sent" | "failed"): { ok: boolean } {
+    const actor: Actor = { userId: this.systemUserId(), via: "webhook", apiKeyId: null, automationRuleId: null };
+    return this.runTurn(actor, (t) => {
+      const row = this.sql
+        .exec<CommentRow>(`SELECT ${COMMENT_COLUMNS} FROM comments WHERE id = ?`, commentId)
+        .toArray()[0];
+      if (!row || row.email_status !== "sending") return { ok: false };
+      this.sql.exec("UPDATE comments SET email_status = ? WHERE id = ?", status, commentId);
+      const comment = toComment({ ...row, email_status: status });
+      t.emit("update", "comment", comment.id, comment as unknown as Record<string, unknown>, {
+        taskId: comment.taskId,
+      });
+      t.audit("comment.email_status", comment.id, { taskId: comment.taskId, status });
+      return { ok: true };
     });
   }
 
   /** The comment write itself, shared with ingestEmail. Callers check access. */
-  private applyCommentCreate(t: Turn, input: ParsedCommentInput): Comment {
+  private applyCommentCreate(t: Turn, input: ParsedCommentInput, emailTo: string | null = null): Comment {
     const taskRow = this.requireTaskRow(input.taskId);
     const comment: Comment = {
       id: id("cm_"),
@@ -2492,15 +2625,20 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       // How it arrived: "api"/"mcp" is the author's agent, "ui" the person,
       // "webhook" an inbound email. Recorded on the row, not inferred later.
       via: t.actor.via,
+      emailTo,
+      emailStatus: emailTo === null ? null : "sending",
     };
     this.sql.exec(
-      "INSERT INTO comments (id, task_id, author_id, body, created_at, via) VALUES (?, ?, ?, ?, ?, ?)",
+      `INSERT INTO comments (id, task_id, author_id, body, created_at, via, email_to, email_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       comment.id,
       comment.taskId,
       comment.authorId,
       comment.body,
       comment.createdAt,
-      comment.via
+      comment.via,
+      comment.emailTo,
+      comment.emailStatus
     );
     t.emit("create", "comment", comment.id, comment as unknown as Record<string, unknown>, {
       taskId: comment.taskId,
@@ -2519,7 +2657,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     return this.runTurn(toActor(actor), (t) => {
       const rows = this.sql
         .exec<CommentRow>(
-          "SELECT id, task_id, author_id, body, created_at, via FROM comments WHERE id = ?",
+          `SELECT ${COMMENT_COLUMNS} FROM comments WHERE id = ?`,
           commentId
         )
         .toArray();
@@ -3694,15 +3832,16 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     }
   ): void {
     this.sql.exec(
-      `INSERT INTO email_messages (message_id, list_id, alias, task_id, comment_id, sender, received_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO email_messages (message_id, list_id, alias, task_id, comment_id, sender, received_at, authenticated)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       m.messageId,
       m.listId,
       m.alias,
       m.taskId,
       m.commentId,
       m.sender,
-      t.now
+      t.now,
+      m.authenticated ? 1 : 0
     );
     // The task/comment audit rows name the actor the Worker passed; this one
     // records who actually wrote in, and whether Cloudflare vouched for them.
@@ -3850,6 +3989,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         createdAt: t.now,
         lastUsedAt: null,
         revokedAt: null,
+        canEmailRequesters: false,
       };
       this.sql.exec(
         `INSERT INTO api_keys (id, user_id, name, token_hash, created_at, last_used_at, revoked_at)
@@ -3875,6 +4015,31 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       this.sql.exec("UPDATE api_keys SET revoked_at = ? WHERE id = ?", t.now, keyId);
       t.audit("api_key.revoke", keyId, null);
       return { ok: true } as const;
+    });
+  }
+
+  /**
+   * Allow or stop one key emailing a ticket's requester (see requireEmailReply).
+   * Owner or admin, from the app or an api key (there is no switch in the web
+   * app); never over MCP. Audited either way.
+   */
+  setApiKeyEmailRequesters(keyId: string, allowed: boolean, actor: string | Actor): ApiKey {
+    return this.runTurn(toActor(actor), (t) => {
+      if (t.actor.via !== "ui" && t.actor.via !== "api") {
+        throw new Error("Whether a key may email requesters can't be changed over MCP.");
+      }
+      if (!isPrivilegedRole(roleOf(this.sql, t.actor.userId))) {
+        throw new Error("Only a workspace owner or admin can change whether a key may email requesters.");
+      }
+      const row = this.sql
+        .exec<ApiKeyRow>(`SELECT ${API_KEY_COLUMNS} FROM api_keys WHERE id = ?`, keyId)
+        .toArray()[0];
+      if (!row) throw new Error(`API key ${keyId} not found.`);
+      if (row.revoked_at !== null) throw new Error(`API key ${keyId} is revoked.`);
+      this.sql.exec("UPDATE api_keys SET can_email_requesters = ? WHERE id = ?", allowed ? 1 : 0, keyId);
+      // Like create and revoke: audited, not board state, so no delta.
+      t.audit("api_key.email_requesters", keyId, { allowed });
+      return toApiKey({ ...row, can_email_requesters: allowed ? 1 : 0 });
     });
   }
 
@@ -5104,7 +5269,7 @@ function backupTableNames(sql: SqlStorage): string[] {
     .toArray();
   // Leading-underscore names cover our _migrations bookkeeping AND the
   // runtime's internal _cf_KV table, which sqlite_master exposes in prod but
-  // SELECTing from is prohibited (this killed every backup until 2026-08-17).
+  // SELECTing from is prohibited (this used to kill every backup).
   return rows.map((r) => r.name).filter((name) => !name.startsWith("_") && !name.startsWith("tasks_fts"));
 }
 

@@ -620,6 +620,8 @@ export function buildComments(
         body,
         createdAt: parseTs(c.date) ?? opts.idMap.importedAt,
         via: "import",
+        emailTo: null,
+        emailStatus: null,
       });
     }
   }

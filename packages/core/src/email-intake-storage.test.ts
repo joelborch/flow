@@ -108,8 +108,8 @@ async function seeded() {
   const support = ws.createList(CreateListInput.parse({ spaceId: space.id, name: "Support" }), OWNER);
   const billing = ws.createList(CreateListInput.parse({ spaceId: space.id, name: "Billing" }), OWNER);
   const plain = ws.createList(CreateListInput.parse({ spaceId: space.id, name: "Plain" }), OWNER);
-  ws.setEmailIntake(support.id, { alias: "support", allowedSenders: ["@clinic.com"] }, OWNER);
-  ws.setEmailIntake(billing.id, { alias: "billing", allowedSenders: ["@clinic.com"] }, OWNER);
+  ws.setEmailIntake(support.id, { alias: "support", allowedSenders: ["@clinic.example"] }, OWNER);
+  ws.setEmailIntake(billing.id, { alias: "billing", allowedSenders: ["@clinic.example"] }, OWNER);
 
   /** A live owner socket, so tests can see what ingestEmail broadcast. */
   const frames: ServerMsg[] = [];
@@ -120,14 +120,14 @@ async function seeded() {
   } as unknown as WebSocket);
 
   let n = 0;
-  /** A well-formed, authenticated message to "support" from pat@clinic.com, with overrides. */
+  /** A well-formed, authenticated message to "support" from pat@clinic.example, with overrides. */
   const mail = (over: Partial<IngestEmailInput> = {}): IngestEmailInput => {
     n += 1;
     return {
       alias: "support",
-      sender: "pat@clinic.com",
+      sender: "pat@clinic.example",
       authenticated: true,
-      messageId: `m${n}@clinic.com`,
+      messageId: `m${n}@clinic.example`,
       referenceIds: [],
       task: { title: `Ticket ${n}`, description: `Body ${n}` },
       commentBody: `Reply ${n}`,
@@ -151,13 +151,13 @@ describe("setEmailIntake", () => {
     const { ws, plain, auditActions } = await seeded();
     const intake = ws.setEmailIntake(
       plain.id,
-      { alias: "  Front-Desk ", allowedSenders: ["Pat@Clinic.com", "pat@clinic.com", "@Clinic.com"] },
+      { alias: "  Front-Desk ", allowedSenders: ["Pat@Clinic.example", "pat@clinic.example", "@Clinic.example"] },
       ADMIN
     );
     expect(intake).toMatchObject({
       listId: plain.id,
       alias: "front-desk",
-      allowedSenders: ["pat@clinic.com", "@clinic.com"],
+      allowedSenders: ["pat@clinic.example", "@clinic.example"],
     });
     expect(ws.listEmailIntakes().find((i) => i.listId === plain.id)).toEqual(intake);
     expect(auditActions()).toContain("list.email_intake.set");
@@ -173,14 +173,14 @@ describe("setEmailIntake", () => {
     const before = ws.listEmailIntakes().find((i) => i.listId === support.id);
     const after = ws.setEmailIntake(
       support.id,
-      { alias: "help", allowedSenders: ["sam@clinic.com"] },
+      { alias: "help", allowedSenders: ["sam@clinic.example"] },
       OWNER
     );
-    expect(after).toMatchObject({ alias: "help", allowedSenders: ["sam@clinic.com"] });
+    expect(after).toMatchObject({ alias: "help", allowedSenders: ["sam@clinic.example"] });
     expect(after?.createdAt).toBe(before?.createdAt);
     expect(ws.listEmailIntakes().filter((i) => i.listId === support.id)).toHaveLength(1);
     expect(
-      ws.checkEmailIntake({ alias: "support", sender: "sam@clinic.com", messageId: "x@y" })
+      ws.checkEmailIntake({ alias: "support", sender: "sam@clinic.example", messageId: "x@y" })
     ).toEqual({ status: "unknown_alias" });
   });
 
@@ -198,7 +198,7 @@ describe("setEmailIntake", () => {
   it("is refused for a member, even though the route also gates it", async () => {
     const { ws, plain } = await seeded();
     expect(() =>
-      ws.setEmailIntake(plain.id, { alias: "front", allowedSenders: ["@clinic.com"] }, MEMBER)
+      ws.setEmailIntake(plain.id, { alias: "front", allowedSenders: ["@clinic.example"] }, MEMBER)
     ).toThrow(/requires the owner or admin role/);
     expect(() => ws.setEmailIntake(plain.id, null, MEMBER)).toThrow(/owner or admin/);
     expect(ws.listEmailIntakes()).toHaveLength(2);
@@ -208,7 +208,7 @@ describe("setEmailIntake", () => {
     const { ws, plain, support } = await seeded();
     let message = "";
     try {
-      ws.setEmailIntake(plain.id, { alias: "Support", allowedSenders: ["@clinic.com"] }, OWNER);
+      ws.setEmailIntake(plain.id, { alias: "Support", allowedSenders: ["@clinic.example"] }, OWNER);
     } catch (err) {
       message = (err as Error).message;
     }
@@ -220,14 +220,14 @@ describe("setEmailIntake", () => {
   it("throws the list not-found error for an unknown list", async () => {
     const { ws } = await seeded();
     expect(() =>
-      ws.setEmailIntake("ls_missing", { alias: "x", allowedSenders: ["@clinic.com"] }, OWNER)
+      ws.setEmailIntake("ls_missing", { alias: "x", allowedSenders: ["@clinic.example"] }, OWNER)
     ).toThrow(/List ls_missing not found/);
   });
 
   it("re-validates input the route would have rejected", async () => {
     const { ws, plain } = await seeded();
     expect(() =>
-      ws.setEmailIntake(plain.id, { alias: "-bad-", allowedSenders: ["@clinic.com"] }, OWNER)
+      ws.setEmailIntake(plain.id, { alias: "-bad-", allowedSenders: ["@clinic.example"] }, OWNER)
     ).toThrow(/Alias must be/);
     expect(() => ws.setEmailIntake(plain.id, { alias: "ok", allowedSenders: [] }, OWNER)).toThrow(
       /at least one allowed sender/
@@ -239,20 +239,20 @@ describe("checkEmailIntake", () => {
   it("ok carries the intake's list, matching case- and bracket-insensitively", async () => {
     const { ws, support } = await seeded();
     expect(
-      ws.checkEmailIntake({ alias: "SUPPORT", sender: "Pat@Clinic.com", messageId: "<a@b>" })
+      ws.checkEmailIntake({ alias: "SUPPORT", sender: "Pat@Clinic.example", messageId: "<a@b>" })
     ).toEqual({ status: "ok", listId: support.id });
   });
 
   it("unknown_alias for an alias no list has", async () => {
     const { ws } = await seeded();
-    expect(ws.checkEmailIntake({ alias: "nobody", sender: "pat@clinic.com", messageId: "a@b" }))
+    expect(ws.checkEmailIntake({ alias: "nobody", sender: "pat@clinic.example", messageId: "a@b" }))
       .toEqual({ status: "unknown_alias" });
   });
 
   it("unknown_alias when the intake's list is archived", async () => {
     const { ws, support } = await seeded();
     ws.updateList({ listId: support.id, archived: true }, OWNER);
-    expect(ws.checkEmailIntake({ alias: "support", sender: "pat@clinic.com", messageId: "a@b" }))
+    expect(ws.checkEmailIntake({ alias: "support", sender: "pat@clinic.example", messageId: "a@b" }))
       .toEqual({ status: "unknown_alias" });
   });
 
@@ -264,36 +264,36 @@ describe("checkEmailIntake", () => {
 
   it("duplicate names the task an already-ingested message produced", async () => {
     const { ws, mail } = await seeded();
-    const first = ws.ingestEmail(mail({ messageId: "dup@clinic.com" }), MAIL);
+    const first = ws.ingestEmail(mail({ messageId: "dup@clinic.example" }), MAIL);
     if (first.status !== "created") throw new Error(`expected created, got ${first.status}`);
     expect(
-      ws.checkEmailIntake({ alias: "support", sender: "pat@clinic.com", messageId: "<dup@clinic.com>" })
+      ws.checkEmailIntake({ alias: "support", sender: "pat@clinic.example", messageId: "<dup@clinic.example>" })
     ).toEqual({ status: "duplicate", taskId: first.taskId });
   });
 
   it("rate_limited once the sender has filed the hourly limit", async () => {
     const { ws, mail } = await seeded();
     for (let i = 0; i < EMAIL_INTAKE_HOURLY_LIMIT; i++) ws.ingestEmail(mail(), MAIL);
-    expect(ws.checkEmailIntake({ alias: "support", sender: "pat@clinic.com", messageId: "new@x" }))
+    expect(ws.checkEmailIntake({ alias: "support", sender: "pat@clinic.example", messageId: "new@x" }))
       .toEqual({ status: "rate_limited" });
   });
 
   it("duplicate is per list: the same Message-ID is new to another intake", async () => {
     const { ws, billing, mail } = await seeded();
-    ws.ingestEmail(mail({ messageId: "both@clinic.com" }), MAIL);
+    ws.ingestEmail(mail({ messageId: "both@clinic.example" }), MAIL);
     expect(
-      ws.checkEmailIntake({ alias: "billing", sender: "pat@clinic.com", messageId: "both@clinic.com" })
+      ws.checkEmailIntake({ alias: "billing", sender: "pat@clinic.example", messageId: "both@clinic.example" })
     ).toEqual({ status: "ok", listId: billing.id });
   });
 
   it("rate_limited once the list has received its hourly limit from any mix of senders", async () => {
     const { ws, billing, mail } = await seeded();
     for (let i = 0; i < EMAIL_INTAKE_LIST_HOURLY_LIMIT; i++) {
-      ws.ingestEmail(mail({ sender: `s${i}@clinic.com` }), MAIL);
+      ws.ingestEmail(mail({ sender: `s${i}@clinic.example` }), MAIL);
     }
-    expect(ws.checkEmailIntake({ alias: "support", sender: "fresh@clinic.com", messageId: "new@x" }))
+    expect(ws.checkEmailIntake({ alias: "support", sender: "fresh@clinic.example", messageId: "new@x" }))
       .toEqual({ status: "rate_limited" });
-    expect(ws.checkEmailIntake({ alias: "billing", sender: "fresh@clinic.com", messageId: "new@x" }))
+    expect(ws.checkEmailIntake({ alias: "billing", sender: "fresh@clinic.example", messageId: "new@x" }))
       .toEqual({ status: "ok", listId: billing.id });
   });
 
@@ -301,7 +301,7 @@ describe("checkEmailIntake", () => {
     const { ws, count, auditActions } = await seeded();
     const audits = auditActions().length;
     const changes = count("changes");
-    ws.checkEmailIntake({ alias: "support", sender: "pat@clinic.com", messageId: "a@b" });
+    ws.checkEmailIntake({ alias: "support", sender: "pat@clinic.example", messageId: "a@b" });
     expect(auditActions()).toHaveLength(audits);
     expect(count("changes")).toBe(changes);
   });
@@ -312,8 +312,8 @@ describe("ingestEmail", () => {
     const { ws, db, frames, support, mail, auditActions } = await seeded();
     const result = ws.ingestEmail(
       mail({
-        messageId: "<first@clinic.com>",
-        task: { title: "Printer jammed", description: "From: pat@clinic.com\n\nHelp" },
+        messageId: "<first@clinic.example>",
+        task: { title: "Printer jammed", description: "From: pat@clinic.example\n\nHelp" },
         attachments: [
           { id: "at_email_1", r2Key: "attachments/at_email_1/photo.png", filename: "photo.png", size: 10, mimeType: "image/png" },
         ],
@@ -327,7 +327,7 @@ describe("ingestEmail", () => {
     expect(detail.task).toMatchObject({
       listId: support.id,
       title: "Printer jammed",
-      description: "From: pat@clinic.com\n\nHelp",
+      description: "From: pat@clinic.example\n\nHelp",
       tags: ["email"],
       assigneeId: null,
       closedAt: null,
@@ -340,12 +340,12 @@ describe("ingestEmail", () => {
 
     expect(db.prepare("SELECT * FROM email_messages").all()).toEqual([
       expect.objectContaining({
-        message_id: "first@clinic.com",
+        message_id: "first@clinic.example",
         list_id: support.id,
         alias: "support",
         task_id: result.taskId,
         comment_id: null,
-        sender: "pat@clinic.com",
+        sender: "pat@clinic.example",
       }),
     ]);
     expect(auditActions()).toEqual(
@@ -385,7 +385,7 @@ describe("ingestEmail", () => {
 
   it("threads a reply into a comment on the earlier ticket without reopening it", async () => {
     const { ws, db, mail } = await seeded();
-    const first = ws.ingestEmail(mail({ messageId: "orig@clinic.com" }), MAIL);
+    const first = ws.ingestEmail(mail({ messageId: "orig@clinic.example" }), MAIL);
     if (first.status !== "created") throw new Error(`expected created, got ${first.status}`);
     ws.updateTask({ taskId: first.taskId, status: "Done" }, OWNER);
     const closed = ws.getTaskDetail(first.taskId).task;
@@ -393,9 +393,9 @@ describe("ingestEmail", () => {
 
     const reply = ws.ingestEmail(
       mail({
-        messageId: "reply@clinic.com",
+        messageId: "reply@clinic.example",
         // In-Reply-To/References order: an unknown id first, then the original.
-        referenceIds: ["someone-else@gmail.com", "<orig@clinic.com>"],
+        referenceIds: ["someone-else@gmail.com", "<orig@clinic.example>"],
         commentBody: "Still broken",
         attachments: [{ id: "at_reply", r2Key: "k/at_reply", filename: "b.txt", size: 2, mimeType: "text/plain" }],
       }),
@@ -412,20 +412,20 @@ describe("ingestEmail", () => {
     ]);
     expect(ws.listAttachments(first.taskId).map((a) => a.id)).toEqual(["at_reply"]);
     expect(
-      db.prepare("SELECT comment_id FROM email_messages WHERE message_id = 'reply@clinic.com'").all()
+      db.prepare("SELECT comment_id FROM email_messages WHERE message_id = 'reply@clinic.example'").all()
     ).toEqual([{ comment_id: reply.commentId }]);
     // The reply itself can be replied to: threading follows the reply's own id too.
-    const third = ws.ingestEmail(mail({ referenceIds: ["reply@clinic.com"] }), MAIL);
+    const third = ws.ingestEmail(mail({ referenceIds: ["reply@clinic.example"] }), MAIL);
     expect(third).toMatchObject({ status: "commented", taskId: first.taskId });
   });
 
   it("never threads across aliases: a reply sent to another intake opens a ticket there", async () => {
     const { ws, billing, mail } = await seeded();
-    const first = ws.ingestEmail(mail({ messageId: "orig@clinic.com" }), MAIL);
+    const first = ws.ingestEmail(mail({ messageId: "orig@clinic.example" }), MAIL);
     if (first.status !== "created") throw new Error(`expected created, got ${first.status}`);
 
     const crossed = ws.ingestEmail(
-      mail({ alias: "billing", referenceIds: ["orig@clinic.com"] }),
+      mail({ alias: "billing", referenceIds: ["orig@clinic.example"] }),
       MAIL
     );
     expect(crossed).toMatchObject({ status: "created", listId: billing.id });
@@ -436,11 +436,11 @@ describe("ingestEmail", () => {
 
   it("falls back to a new ticket when the referenced task was deleted", async () => {
     const { ws, support, mail } = await seeded();
-    const first = ws.ingestEmail(mail({ messageId: "orig@clinic.com" }), MAIL);
+    const first = ws.ingestEmail(mail({ messageId: "orig@clinic.example" }), MAIL);
     if (first.status !== "created") throw new Error(`expected created, got ${first.status}`);
     ws.deleteTask(first.taskId, OWNER);
 
-    const reply = ws.ingestEmail(mail({ referenceIds: ["orig@clinic.com"] }), MAIL);
+    const reply = ws.ingestEmail(mail({ referenceIds: ["orig@clinic.example"] }), MAIL);
     expect(reply).toMatchObject({ status: "created", listId: support.id });
     if (reply.status !== "created") throw new Error("unreachable");
     expect(reply.taskId).not.toBe(first.taskId);
@@ -455,7 +455,7 @@ describe("ingestEmail", () => {
     expect(ws.ingestEmail(mail(), MAIL)).toEqual({ status: "rate_limited" });
     expect(count("tasks")).toBe(tasks);
     // Another sender on the same domain has their own budget.
-    expect(ws.ingestEmail(mail({ sender: "sam@clinic.com" }), MAIL).status).toBe("created");
+    expect(ws.ingestEmail(mail({ sender: "sam@clinic.example" }), MAIL).status).toBe("created");
 
     // Once the earlier messages age out of the window, pat may write again.
     db.prepare("UPDATE email_messages SET received_at = received_at - 3600001").run();
@@ -481,78 +481,78 @@ describe("ingestEmail", () => {
 
   it("one Message-ID sent to two intakes files once in each, and redelivery to either is a duplicate", async () => {
     const { ws, db, support, billing, mail, count } = await seeded();
-    const toSupport = ws.ingestEmail(mail({ messageId: "<both@clinic.com>" }), MAIL);
-    const toBilling = ws.ingestEmail(mail({ alias: "billing", messageId: "both@clinic.com" }), MAIL);
+    const toSupport = ws.ingestEmail(mail({ messageId: "<both@clinic.example>" }), MAIL);
+    const toBilling = ws.ingestEmail(mail({ alias: "billing", messageId: "both@clinic.example" }), MAIL);
     expect(toSupport).toMatchObject({ status: "created", listId: support.id });
     expect(toBilling).toMatchObject({ status: "created", listId: billing.id });
     if (toSupport.status !== "created" || toBilling.status !== "created") throw new Error("unreachable");
     expect(toBilling.taskId).not.toBe(toSupport.taskId);
 
-    expect(ws.ingestEmail(mail({ messageId: "both@clinic.com" }), MAIL)).toEqual({
+    expect(ws.ingestEmail(mail({ messageId: "both@clinic.example" }), MAIL)).toEqual({
       status: "duplicate",
       taskId: toSupport.taskId,
     });
-    expect(ws.ingestEmail(mail({ alias: "billing", messageId: "both@clinic.com" }), MAIL)).toEqual({
+    expect(ws.ingestEmail(mail({ alias: "billing", messageId: "both@clinic.example" }), MAIL)).toEqual({
       status: "duplicate",
       taskId: toBilling.taskId,
     });
     expect(count("tasks")).toBe(2);
     const rows = db
-      .prepare("SELECT list_id FROM email_messages WHERE message_id = 'both@clinic.com'")
+      .prepare("SELECT list_id FROM email_messages WHERE message_id = 'both@clinic.example'")
       .all() as Array<{ list_id: string }>;
     expect(rows.map((r) => r.list_id).sort()).toEqual([support.id, billing.id].sort());
   });
 
   it("threads by list, not alias: a reassigned alias never reaches the old list's tickets", async () => {
     const { ws, support, plain, mail } = await seeded();
-    const first = ws.ingestEmail(mail({ messageId: "orig@clinic.com" }), MAIL);
+    const first = ws.ingestEmail(mail({ messageId: "orig@clinic.example" }), MAIL);
     if (first.status !== "created") throw new Error(`expected created, got ${first.status}`);
 
     // The alias moves to another client's list.
     ws.setEmailIntake(support.id, null, OWNER);
-    ws.setEmailIntake(plain.id, { alias: "support", allowedSenders: ["@clinic.com"] }, OWNER);
-    const reassigned = ws.ingestEmail(mail({ referenceIds: ["orig@clinic.com"] }), MAIL);
+    ws.setEmailIntake(plain.id, { alias: "support", allowedSenders: ["@clinic.example"] }, OWNER);
+    const reassigned = ws.ingestEmail(mail({ referenceIds: ["orig@clinic.example"] }), MAIL);
     expect(reassigned).toMatchObject({ status: "created", listId: plain.id });
     expect(ws.listComments(first.taskId)).toEqual([]);
 
     // The original list, under a new alias, still threads its own tickets.
-    ws.setEmailIntake(support.id, { alias: "help", allowedSenders: ["@clinic.com"] }, OWNER);
-    const renamed = ws.ingestEmail(mail({ alias: "help", referenceIds: ["orig@clinic.com"] }), MAIL);
+    ws.setEmailIntake(support.id, { alias: "help", allowedSenders: ["@clinic.example"] }, OWNER);
+    const renamed = ws.ingestEmail(mail({ alias: "help", referenceIds: ["orig@clinic.example"] }), MAIL);
     expect(renamed).toMatchObject({ status: "commented", taskId: first.taskId, listId: support.id });
   });
 
   it("caps a list at its hourly limit across senders, independently of other lists", async () => {
     const { ws, db, mail, count } = await seeded();
     for (let i = 0; i < EMAIL_INTAKE_LIST_HOURLY_LIMIT; i++) {
-      expect(ws.ingestEmail(mail({ sender: `s${i}@clinic.com` }), MAIL).status).toBe("created");
+      expect(ws.ingestEmail(mail({ sender: `s${i}@clinic.example` }), MAIL).status).toBe("created");
     }
     const tasks = count("tasks");
-    expect(ws.ingestEmail(mail({ sender: "s-new@clinic.com" }), MAIL)).toEqual({ status: "rate_limited" });
+    expect(ws.ingestEmail(mail({ sender: "s-new@clinic.example" }), MAIL)).toEqual({ status: "rate_limited" });
     expect(count("tasks")).toBe(tasks);
-    expect(ws.ingestEmail(mail({ alias: "billing", sender: "s-new@clinic.com" }), MAIL).status).toBe("created");
+    expect(ws.ingestEmail(mail({ alias: "billing", sender: "s-new@clinic.example" }), MAIL).status).toBe("created");
 
     db.prepare("UPDATE email_messages SET received_at = received_at - 3600001").run();
-    expect(ws.ingestEmail(mail({ sender: "s-new@clinic.com" }), MAIL).status).toBe("created");
+    expect(ws.ingestEmail(mail({ sender: "s-new@clinic.example" }), MAIL).status).toBe("created");
   });
 
   it("tags a new task from an unauthenticated sender 'unverified', and still threads its replies", async () => {
     const { ws, db, mail } = await seeded();
-    const opened = ws.ingestEmail(mail({ messageId: "spoof@clinic.com", authenticated: false }), MAIL);
+    const opened = ws.ingestEmail(mail({ messageId: "spoof@clinic.example", authenticated: false }), MAIL);
     if (opened.status !== "created") throw new Error(`expected created, got ${opened.status}`);
     expect(ws.getTaskDetail(opened.taskId).task.tags).toEqual(["email", "unverified"]);
 
-    const verified = ws.ingestEmail(mail({ messageId: "real@clinic.com" }), MAIL);
+    const verified = ws.ingestEmail(mail({ messageId: "real@clinic.example" }), MAIL);
     if (verified.status !== "created") throw new Error(`expected created, got ${verified.status}`);
     expect(ws.getTaskDetail(verified.taskId).task.tags).toEqual(["email"]);
 
     // An unauthenticated reply lands as a comment and leaves the tags alone.
     const reply = ws.ingestEmail(
-      mail({ authenticated: false, referenceIds: ["spoof@clinic.com"] }),
+      mail({ authenticated: false, referenceIds: ["spoof@clinic.example"] }),
       MAIL
     );
     expect(reply).toMatchObject({ status: "commented", taskId: opened.taskId });
     const replyToVerified = ws.ingestEmail(
-      mail({ authenticated: false, referenceIds: ["real@clinic.com"] }),
+      mail({ authenticated: false, referenceIds: ["real@clinic.example"] }),
       MAIL
     );
     expect(replyToVerified).toMatchObject({ status: "commented", taskId: verified.taskId });
@@ -566,14 +566,14 @@ describe("ingestEmail", () => {
 
   it("looks at only the first 20 reference ids", async () => {
     const { ws, support, mail } = await seeded();
-    const first = ws.ingestEmail(mail({ messageId: "orig@clinic.com" }), MAIL);
+    const first = ws.ingestEmail(mail({ messageId: "orig@clinic.example" }), MAIL);
     if (first.status !== "created") throw new Error(`expected created, got ${first.status}`);
     const noise = (k: number) => Array.from({ length: k }, (_, i) => `noise${i}@elsewhere.com`);
 
-    const twentyFirst = ws.ingestEmail(mail({ referenceIds: [...noise(20), "orig@clinic.com"] }), MAIL);
+    const twentyFirst = ws.ingestEmail(mail({ referenceIds: [...noise(20), "orig@clinic.example"] }), MAIL);
     expect(twentyFirst).toMatchObject({ status: "created", listId: support.id });
 
-    const twentieth = ws.ingestEmail(mail({ referenceIds: [...noise(19), "orig@clinic.com"] }), MAIL);
+    const twentieth = ws.ingestEmail(mail({ referenceIds: [...noise(19), "orig@clinic.example"] }), MAIL);
     expect(twentieth).toMatchObject({ status: "commented", taskId: first.taskId });
   });
 
@@ -591,11 +591,11 @@ describe("ingestEmail", () => {
 
   it("throws a permanent error when the inbound actor can't write to the threaded task", async () => {
     const { ws, space, mail, count } = await seeded();
-    const first = ws.ingestEmail(mail({ messageId: "orig@clinic.com" }), MAIL);
+    const first = ws.ingestEmail(mail({ messageId: "orig@clinic.example" }), MAIL);
     if (first.status !== "created") throw new Error(`expected created, got ${first.status}`);
     ws.setSpaceVisibility({ spaceId: space.id, visibility: "private" }, OWNER);
     const changes = count("changes");
-    expect(() => ws.ingestEmail(mail({ referenceIds: ["orig@clinic.com"] }), MEMBER_MAIL)).toThrow(
+    expect(() => ws.ingestEmail(mail({ referenceIds: ["orig@clinic.example"] }), MEMBER_MAIL)).toThrow(
       new RegExp(`^Email intake permanent failure: the inbound actor may not write to task ${first.taskId}\\.`)
     );
     expect(count("comments")).toBe(0);
@@ -629,11 +629,11 @@ describe("ingestEmail", () => {
 describe("deleteList", () => {
   it("removes the list's intake in the same turn, freeing the alias", async () => {
     const { ws, plain } = await seeded();
-    ws.setEmailIntake(plain.id, { alias: "front", allowedSenders: ["@clinic.com"] }, OWNER);
+    ws.setEmailIntake(plain.id, { alias: "front", allowedSenders: ["@clinic.example"] }, OWNER);
     ws.deleteList(plain.id, OWNER);
 
     expect(ws.listEmailIntakes().map((i) => i.alias)).toEqual(["billing", "support"]);
-    expect(ws.checkEmailIntake({ alias: "front", sender: "pat@clinic.com", messageId: "a@b" }))
+    expect(ws.checkEmailIntake({ alias: "front", sender: "pat@clinic.example", messageId: "a@b" }))
       .toEqual({ status: "unknown_alias" });
   });
 });

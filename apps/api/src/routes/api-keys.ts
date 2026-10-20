@@ -100,6 +100,29 @@ apiKeyRoutes.post("/api-keys", async (c) => {
   );
 });
 
+const UpdateApiKeyBody = z.object({ canEmailRequesters: z.boolean() });
+
+/**
+ * Allow or stop a key emailing a ticket's requester (POST
+ * /api/tasks/:id/comments with emailToRequester). Owner/admin only, from the
+ * app or an api key; MCP is refused in the DO. There is no switch in the web
+ * app, so this route is how it's set.
+ */
+apiKeyRoutes.patch("/api-keys/:apiKeyId", async (c) => {
+  const auth = requireAuth(c);
+  const apiKeyId = parseOrThrow(Id, c.req.param("apiKeyId"), "apiKeyId");
+  const input = parseOrThrow(UpdateApiKeyBody, await readJson(c));
+  if (!managesAllKeys(auth.user.role)) {
+    throw forbidden("only a workspace owner or admin can change whether a key may email requesters");
+  }
+  const { tokenHash, ...safe } = await workspace(c.env).setApiKeyEmailRequesters(
+    apiKeyId,
+    input.canEmailRequesters,
+    auth.actor
+  );
+  return c.json({ apiKey: { ...safe, tokenFingerprint: tokenHash.slice(0, 8) } });
+});
+
 /** Revoke. Idempotent from the caller's point of view. */
 apiKeyRoutes.delete("/api-keys/:apiKeyId", async (c) => {
   const auth = requireAuth(c);

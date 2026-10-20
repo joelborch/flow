@@ -285,6 +285,8 @@ export async function addComment(taskId: string, body: string): Promise<boolean>
     body,
     createdAt: Date.now(),
     via: "ui",
+    emailTo: null,
+    emailStatus: null,
   };
   const put = (list: Comment[]): void => {
     const next = new Map(comments.value);
@@ -494,6 +496,9 @@ async function loadTaskDetail(taskId: string): Promise<TaskDetail | null> {
       subtasks: subtasks.value.get(taskId) ?? [],
       comments: comments.value.get(taskId) ?? [],
       attachments: [],
+      // Unknown offline; only API clients read these anyway.
+      emailReplyTo: null,
+      emailReplySubject: null,
     };
   }
 }

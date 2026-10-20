@@ -1,4 +1,4 @@
-import { ActorVia, HandoffState } from "@flow/shared";
+import { ActorVia, CommentEmailStatus, HandoffState } from "@flow/shared";
 import type {
   ApiKey,
   Attachment,
@@ -160,6 +160,9 @@ export interface CommentRow {
   created_at: number;
   /** An ActorVia, or NULL for comments written before core-0013-handoffs. */
   via: string | null;
+  /** core-0014-email-replies. Both NULL on an ordinary internal comment. */
+  email_to: string | null;
+  email_status: string | null;
 }
 
 export interface AttachmentRow {
@@ -188,6 +191,8 @@ export interface ApiKeyRow {
   created_at: number;
   last_used_at: number | null;
   revoked_at: number | null;
+  /** core-0014-email-replies: 1 when the key may email a ticket's requester. */
+  can_email_requesters: number;
 }
 
 /**
@@ -439,6 +444,12 @@ const toActorVia = (raw: string | null): Comment["via"] => {
   return parsed.success ? parsed.data : null;
 };
 
+const toEmailStatus = (raw: string | null): Comment["emailStatus"] => {
+  if (raw === null) return null;
+  const parsed = CommentEmailStatus.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+};
+
 export const toComment = (r: CommentRow): Comment => ({
   id: r.id,
   taskId: r.task_id,
@@ -448,6 +459,8 @@ export const toComment = (r: CommentRow): Comment => ({
   // Null for comments from before via was recorded, and for anything that is
   // not an ActorVia (a hand-edited row): "unknown" beats a wrong answer.
   via: toActorVia(r.via ?? null),
+  emailTo: r.email_to ?? null,
+  emailStatus: toEmailStatus(r.email_status ?? null),
 });
 
 export const toAttachment = (r: AttachmentRow): Attachment => ({
@@ -480,6 +493,7 @@ export const toApiKey = (r: ApiKeyRow): ApiKey => ({
   createdAt: r.created_at,
   lastUsedAt: r.last_used_at,
   revokedAt: r.revoked_at,
+  canEmailRequesters: r.can_email_requesters === 1,
 });
 
 export const toRule = (r: RuleRow): AutomationRule => ({

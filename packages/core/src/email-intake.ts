@@ -21,6 +21,45 @@ export const EMAIL_INTAKE_TAG = "email";
  */
 export const EMAIL_INTAKE_UNVERIFIED_TAG = "unverified";
 
+/**
+ * Prefix of the dedupe key the Worker mints for a message that arrived without
+ * a Message-ID. Such a key names no real message, so nothing threads onto it.
+ */
+export const SYNTHETIC_ID_PREFIX = "sha256:";
+
+/** Where a comment emailed back to a ticket's requester goes, and what it threads onto. */
+export interface EmailReplyTarget {
+  /** The authenticated sender whose email opened the ticket. */
+  to: string;
+  /** The intake alias it arrived on; the Worker adds EMAIL_INTAKE_DOMAIN for Reply-To. */
+  alias: string;
+  /** The ticket's newest real Message-ID, for In-Reply-To. Null when none was real. */
+  inReplyTo: string | null;
+  /** Every real Message-ID filed on the ticket, oldest first, for References. */
+  references: string[];
+}
+
+/** Most messages a reply's References carries, oldest kept first like the Worker's header cap. */
+export const EMAIL_REPLY_REFERENCE_LIMIT = 20;
+
+/**
+ * "Re: <title>" for a reply, so the requester's mail client files it under
+ * their original message. Earlier "Re:"/"Fwd:" prefixes come off first, and so
+ * do line breaks, which a header can't carry.
+ */
+export function replySubject(title: string): string {
+  let base = title.replace(/[\r\n]+/g, " ").trim();
+  // One prefix at a time: a single /^(\s*(re|fwd?|aw)\s*:\s*)+/ is
+  // polynomial on long runs of spaces, and the title came from a sender.
+  for (let m = REPLY_PREFIX.exec(base); m !== null; m = REPLY_PREFIX.exec(base)) {
+    base = base.slice(m[0].length).trimStart();
+  }
+  base = base.trim().slice(0, 200);
+  return base === "" ? "Re: your request" : `Re: ${base}`;
+}
+
+const REPLY_PREFIX = /^(?:re|fwd?|aw)[ \t]*:/i;
+
 /** An attachment the Worker has already written to R2. */
 export interface EmailIngestAttachment {
   id: string;

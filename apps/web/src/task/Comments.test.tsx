@@ -95,3 +95,33 @@ describe("Comments", () => {
     users.value = [];
   });
 });
+
+describe("EmailedNote", () => {
+  const emailed = (emailStatus: Comment["emailStatus"]): Comment => ({
+    id: "cm_9",
+    taskId: "tk_1",
+    authorId: "us_blake",
+    body: "Done",
+    createdAt: 9,
+    via: "ui",
+    emailTo: "pat@clinic.example",
+    emailStatus,
+  });
+
+  it("says who got the comment and where delivery stands", () => {
+    const cases: Array<[Comment["emailStatus"], string]> = [
+      ["sending", "Sending to pat@clinic.example…"],
+      ["sent", "Emailed to pat@clinic.example"],
+      ["failed", "Email to pat@clinic.example failed"],
+    ];
+    for (const [status, text] of cases) {
+      act(() => render(<Comments comments={[emailed(status)]} />, root));
+      expect(root.textContent).toContain(text);
+    }
+  });
+
+  it("shows nothing on an internal comment", () => {
+    act(() => render(<Comments comments={[{ ...emailed(null), emailTo: null }]} />, root));
+    expect(root.textContent).not.toMatch(/Emailed|Sending to|failed/);
+  });
+});

@@ -106,6 +106,9 @@ export const CommentView = z.object({
   createdAt: z.number(),
   /** True when the author's agent wrote it (posted with a key); absent otherwise. */
   agent: z.boolean().optional(),
+  /** Set when this comment was also emailed to the ticket's requester: who, and where delivery stands. */
+  emailedTo: z.string().optional(),
+  emailStatus: z.enum(["sending", "sent", "failed"]).optional(),
 });
 export type CommentView = z.infer<typeof CommentView>;
 

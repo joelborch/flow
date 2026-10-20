@@ -48,6 +48,7 @@ const key: ApiKey = {
   createdAt: 1_700_000_000_000,
   lastUsedAt: null,
   revokedAt: null,
+  canEmailRequesters: false,
 };
 
 const env = {

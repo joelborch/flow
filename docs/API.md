@@ -20,7 +20,7 @@ alias flowcurl='curl -sS -H "Authorization: Bearer $TOKEN"'
 
 | Method + path | Auth | What |
 |---|---|---|
-| `GET /api/health` | none | Liveness: `{"ok":true,"service":"flow","ts":...}` |
+| `GET /api/health` | none | Liveness plus backup freshness: `{"ok":true,"service":"flow","ts":...,"backup":{"lastSuccessAt","lastFailureAt","stale"}}`. `stale` is true after 36 hours without a successful backup; 503 when the workspace is unreachable |
 | `GET /api/me` | any | The caller: `{user, via, apiKey}` — `apiKey` present on the bearer path |
 | `GET /api/snapshot` | any | The whole board: spaces, lists, tasks (slimmed), subtasks, users, automation rules, and the current `seq` |
 | `GET /api/users` | any | Members, for assignee pickers |
@@ -178,7 +178,7 @@ Asana-style: done/not-done, optional assignee and due date, **no status pipeline
 | Method + path | Auth | What |
 |---|---|---|
 | `POST /api/tasks/:taskId/subtasks` | any | One (`{title, assigneeId?, dueDate?}`) or a batch (`{subtasks: [...]}`, up to 100) → 201 |
-| `PATCH /api/subtasks/:subtaskId` | any | `{done?, title?, assigneeId?, dueDate?}` |
+| `PATCH /api/subtasks/:subtaskId` | any | `{done?, title?, assigneeId?, dueDate?, note?}` — `note` is plain text (≤2,000 chars, `null` clears it). An empty body is a 400 |
 | `DELETE /api/subtasks/:subtaskId` | any | Delete |
 
 ```bash
@@ -194,8 +194,17 @@ flowcurl -X PATCH $FLOW/api/subtasks/sb_jkl012 \
 | Method + path | Auth | What |
 |---|---|---|
 | `GET /api/tasks/:taskId/comments` | any | The thread |
-| `POST /api/tasks/:taskId/comments` | any | `{body}` (markdown, ≤20,000 chars) → 201 |
+| `POST /api/tasks/:taskId/comments` | any | `{body, emailToRequester?}` (markdown, ≤20,000 chars) → 201 |
 | `DELETE /api/comments/:commentId` | any | Delete |
+
+A comment records how it arrived in `via` (`"ui"`, `"api"`, `"mcp"`, …), so a thread can tell a person from their agent.
+
+**Emailing a reply.** On a task opened by [email intake](#email-intake), `emailToRequester: true` also emails the comment to the sender whose email opened the ticket: from `EMAIL_FROM`, in their original thread (`Re: <title>`), with Reply-To on the intake address so their answer lands back on the task. The comment records `emailTo` and `emailStatus` (`sending`, then `sent` or `failed`). It needs `EMAIL_INTAKE_REPLY="true"`, and a person signed in to the app or an API key an admin allowed (`canEmailRequesters`, below); MCP never can. `GET /api/tasks/:taskId` returns `emailReplyTo` and `emailReplySubject`, so a client can show exactly what would be sent before sending it.
+
+```bash
+flowcurl -X POST $FLOW/api/tasks/tk_ghi789/comments -H 'Content-Type: application/json' \
+  -d '{"body":"Done, here it is: https://example.com/page","emailToRequester":true}'
+```
 
 ## Attachments
 
@@ -274,6 +283,7 @@ Self-serve for your own identity; impersonating another user is admin-only.
 |---|---|---|
 | `POST /api/api-keys` | `userId` absent or own id | any `userId` |
 | `GET /api/api-keys` | own keys only | every key |
+| `PATCH /api/api-keys/:apiKeyId` | — | `{canEmailRequesters}`: allow or stop the key emailing ticket requesters |
 | `DELETE /api/api-keys/:apiKeyId` | own keys only | any key |
 
 ```bash
@@ -283,6 +293,33 @@ flowcurl -X POST $FLOW/api/api-keys -H 'Content-Type: application/json' \
 # {"apiKey":{"id":"ak_...","name":"my-agent","userId":"us_..."},
 #  "token":"flow_...","warning":"This token is shown only once and cannot be recovered."}
 ```
+
+## Agent handoffs
+
+A handoff is a task one person's agent files for a teammate's agent: the title and `ask` (the description) carry the request, the assignee is the recipient, and the task carries `handoff: {requestedBy, state, returnFormat, contextTaskIds, stateChangedAt}`. Replies are ordinary comments. See [AGENTS_AND_MCP.md](AGENTS_AND_MCP.md#agent-handoffs).
+
+| Method + path | Auth | What |
+|---|---|---|
+| `POST /api/handoffs` | any | `{listId, toUserId, title, ask, returnFormat?, contextTaskIds?, dueDate?}` → 201, the new task |
+| `GET /api/handoffs` | any | `?direction=incoming\|outgoing&states=requested,working&limit=50` — incoming (assigned to you) by default, open states by default |
+| `POST /api/tasks/:taskId/handoff` | any | `{message?, state?}` — reply and/or move it: `working`, `needs_input`, `done`, `declined` (done and declined close the task) |
+
+## Email intake
+
+A list can take tickets by email at `<alias>@EMAIL_INTAKE_DOMAIN`. Mail from senders on its allowlist (addresses or whole `@domains`) becomes a task tagged `email`; a reply in the same thread becomes a comment. Mail Cloudflare couldn't authenticate is also tagged `unverified`. Setup is in [SELF_HOSTING.md](SELF_HOSTING.md#email-intake).
+
+| Method + path | Auth | What |
+|---|---|---|
+| `GET /api/email-intakes` | admin | `{domain, intakes: [{listId, alias, allowedSenders, ...}]}` |
+| `PUT /api/lists/:listId/email-intake` | admin | `{alias, allowedSenders}` — create or replace the list's intake |
+| `DELETE /api/lists/:listId/email-intake` | admin | Remove it; the alias is free again |
+
+## Backups
+
+| Method + path | Auth | What |
+|---|---|---|
+| `GET /api/admin/backup` | admin | Full backup status, including the last error and object key that `/api/health` leaves out |
+| `POST /api/admin/backup` | admin | Run a backup now (gzipped NDJSON to R2 `backups/YYYY-MM-DD.ndjson.gz`) |
 
 ## Import
 

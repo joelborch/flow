@@ -197,6 +197,9 @@ export const Subtask = z.object({
 });
 export type Subtask = z.infer<typeof Subtask>;
 
+export const CommentEmailStatus = z.enum(["sending", "sent", "failed"]);
+export type CommentEmailStatus = z.infer<typeof CommentEmailStatus>;
+
 export const Comment = z.object({
   id: Id,
   taskId: Id,
@@ -208,6 +211,14 @@ export const Comment = z.object({
   createdAt: Ts,
   /** How it was posted; "api"/"mcp" mean the author's agent wrote it. Null before this was recorded. */
   via: ActorVia.nullable().default(null),
+  /**
+   * The person who emailed the ticket in, when this comment was also sent to
+   * them as the reply (see CreateCommentInput.emailToRequester). Null for an
+   * ordinary internal comment, which is every comment unless someone opts in.
+   */
+  emailTo: z.string().nullable().default(null),
+  /** Where that email stands: queued, handed to the mail service, or given up on. */
+  emailStatus: CommentEmailStatus.nullable().default(null),
 });
 export type Comment = z.infer<typeof Comment>;
 
@@ -238,6 +249,12 @@ export const ApiKey = z.object({
   createdAt: Ts,
   lastUsedAt: Ts.nullable().default(null),
   revokedAt: Ts.nullable().default(null),
+  /**
+   * May post a comment with emailToRequester (POST /api/tasks/:id/comments).
+   * Off for every key until an owner or admin turns it on with PATCH
+   * /api/api-keys/:id; there is no switch in the app. MCP never gets it.
+   */
+  canEmailRequesters: z.boolean().default(false),
 });
 export type ApiKey = z.infer<typeof ApiKey>;
 

@@ -4,8 +4,7 @@ import { CreateListInput, CreateSpaceInput, CreateTaskInput } from "@flow/shared
 
 // ---------------------------------------------------------------------------
 // set_due_date: a ticket that arrives before the cutoff is due that day, one
-// that arrives later is due the next business day — the rule the Acme email
-// intake runs alongside its assign-to-Avery action. Same real-Workspace-over-
+// that arrives later is due the next business day. Same real-Workspace-over-
 // node:sqlite harness as visibility-storage.test.ts.
 // ---------------------------------------------------------------------------
 

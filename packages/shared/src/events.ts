@@ -147,5 +147,16 @@ export const TaskDetail = z.object({
   subtasks: z.array(Subtask),
   comments: z.array(Comment),
   attachments: z.array(Attachment),
+  /**
+   * Who a comment posted with emailToRequester would go to: the sender whose
+   * email opened this ticket, verified or not (the sender is always on the
+   * intake's allowlist, and a reply only reaches that address's real owner).
+   * Null when the task didn't come in by email, its intake alias is gone, or
+   * email replies are off. The task's "unverified" tag says whether
+   * Cloudflare vouched for the sender.
+   */
+  emailReplyTo: z.string().nullable().default(null),
+  /** The subject that reply would carry ("Re: <title>"); null whenever emailReplyTo is. */
+  emailReplySubject: z.string().nullable().default(null),
 });
 export type TaskDetail = z.infer<typeof TaskDetail>;

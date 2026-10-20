@@ -16,7 +16,7 @@ import {
 import { requireAuth } from "../auth.js";
 import { workspace } from "../do.js";
 import type { AppEnv } from "../env.js";
-import { badRequest, notFound, parseOrThrow, readJson } from "../errors.js";
+import { badRequest, forbidden, notFound, parseOrThrow, readJson } from "../errors.js";
 
 export const taskRoutes = new Hono<AppEnv>();
 
@@ -293,6 +293,14 @@ taskRoutes.post("/tasks/:taskId/comments", async (c) => {
     ...(typeof body === "object" && body !== null ? body : {}),
     taskId,
   });
+  // The DO refuses this too; saying it here makes the status a plain 403.
+  const mayEmail =
+    auth.actor.via === "ui" || (auth.actor.via === "api" && auth.apiKey?.canEmailRequesters === true);
+  if (input.emailToRequester === true && !mayEmail) {
+    throw forbidden(
+      "Email replies need an API key allowed to email requesters (PATCH /api/api-keys/:id), and never go over MCP."
+    );
+  }
   return c.json(await workspace(c.env).createComment(input, auth.actor), 201);
 });
 

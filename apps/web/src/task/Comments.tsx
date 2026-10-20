@@ -6,7 +6,7 @@ import type { Comment } from "@flow/shared";
 import { me } from "../store/index.js";
 import { userById } from "../shell/data.js";
 import { formatDateTime, relativeTime } from "../shell/format.js";
-import { Avatar, SectionLabel } from "../shell/ui.js";
+import { Avatar, MailIcon, SectionLabel } from "../shell/ui.js";
 import { Markdown } from "./markdown.js";
 import { isSubmitChord, useAutogrow } from "./autogrow.js";
 
@@ -14,6 +14,27 @@ import { isSubmitChord, useAutogrow } from "./autogrow.js";
  *  Comments from before `via` was recorded (null, or absent) read as human. */
 export function isAgentComment(comment: Comment): boolean {
   return comment.via === "api" || comment.via === "mcp";
+}
+
+/** The line under an emailed comment: who got it and where delivery stands. */
+export function EmailedNote({ comment }: { comment: Comment }) {
+  if (comment.emailTo === null || comment.emailTo === undefined) return null;
+  const failed = comment.emailStatus === "failed";
+  const label =
+    comment.emailStatus === "sent"
+      ? `Emailed to ${comment.emailTo}`
+      : failed
+        ? `Email to ${comment.emailTo} failed`
+        : `Sending to ${comment.emailTo}…`;
+  return (
+    <div
+      class={`mt-1 flex items-center gap-1 text-[11.5px] ${failed ? "text-danger" : "text-faint"}`}
+      title={failed ? "Delivery gave up. Send the reply again to retry." : undefined}
+    >
+      <MailIcon class="h-3.5 w-3.5" />
+      <span class="truncate">{label}</span>
+    </div>
+  );
 }
 
 export function Comments({ comments }: { comments: Comment[] }) {
@@ -60,6 +81,7 @@ export function Comments({ comments }: { comments: Comment[] }) {
                     </span>
                   </div>
                   <Markdown source={c.body} class="mt-0.5 [&>p]:mt-2 [&>p]:text-[14px]" />
+                  <EmailedNote comment={c} />
                 </div>
               </li>
             );

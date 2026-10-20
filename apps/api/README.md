@@ -405,7 +405,7 @@ flowcurl "$FLOW/api/handoffs?direction=outgoing&states=done,declined&limit=20"
 # Reply: a message (posted as a comment), a new state, or both.
 flowcurl -X POST $FLOW/api/tasks/tk_hnd123/handoff \
   -H 'Content-Type: application/json' \
-  -d '{"message":"| page | sessions | vs Feb |\n|---|---|---|\n| /implants | 1,204 | +8% |","state":"done"}'
+  -d '{"message":"| page | sessions | vs Feb |\n|---|---|---|\n| /pricing | 1,204 | +8% |","state":"done"}'
 # {"task":{...},"comment":{...}}     comment is null when only the state moved
 ```
 
@@ -672,6 +672,26 @@ flowcurl -X PUT $FLOW/api/lists/ls_def456/email-intake \
   -d '{"alias":"acme","allowedSenders":["@example.com","front.desk@example.org"]}'
 
 flowcurl -X DELETE $FLOW/api/lists/ls_def456/email-intake
+```
+
+**Replying by email.** With `EMAIL_INTAKE_REPLY="true"`, a comment posted with
+`"emailToRequester": true` also goes to the sender whose email opened the
+ticket, verified or not (the address is always on the allowlist, so a forger
+never receives the reply): from `EMAIL_FROM`, as `Re: <title>`, threaded on
+their messages, with Reply-To on the intake address. The queue consumer sends
+it, then marks the comment `sent`; a dead-lettered send marks it `failed`, and
+a failed report never retries into a second email. A person in the app can
+send one; an api key needs `canEmailRequesters`, which an owner or admin sets
+with `PATCH /api/api-keys/:id`; MCP never can.
+
+```bash
+flowcurl -X PATCH $FLOW/api/api-keys/ak_abc123 \
+  -H 'Content-Type: application/json' -d '{"canEmailRequesters":true}'
+
+flowcurl -X POST $FLOW/api/tasks/tk_ghi789/comments \
+  -H 'Content-Type: application/json' \
+  -d '{"body":"Done, here it is: https://example.com/page","emailToRequester":true}'
+# {"id":"cm_...","emailTo":"front.desk@example.org","emailStatus":"sending",...}
 ```
 
 ### Import
@@ -1024,7 +1044,7 @@ src/
   mcp/context.ts      per-request identity + memoised id -> name index
   mcp/views.ts        result shaping — ids to names                   (pure)
   mcp/work.ts         due-date bucketing for flow_list_my_work        (pure)
-  side-effects/       owned by the automations agent
+  side-effects/       queue consumer: webhook + email delivery, retries, DLQ
 ```
 
 `src/do.ts` is worth reading first if you are touching the DO: it is the full

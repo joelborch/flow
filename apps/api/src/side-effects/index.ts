@@ -34,6 +34,7 @@ import {
   type GleapScreenshotJob,
 } from "../gleap-screenshot.js";
 import { workspace } from "../do.js";
+import { sendWithHeaders, threadingHeaders } from "../email-thread.js";
 import type { Env } from "../env.js";
 
 export const DEFAULT_EMAIL_FROM = { email: "flow@mail.example.com", name: "Flow" };
@@ -50,6 +51,8 @@ export interface SideEffectEnv {
   EMAIL_FROM?: string;
   EMAIL_FROM_NAME?: string;
   EMAIL_BRAND_NAME?: string;
+  /** Reply-To for an emailed comment: `<alias>@EMAIL_INTAKE_DOMAIN`, back onto the ticket. */
+  EMAIL_INTAKE_DOMAIN?: string;
   SEND_EMAIL?: SendEmail;
 }
 
@@ -93,12 +96,21 @@ export async function handleSideEffectBatch(batch: MessageBatch, env: Env): Prom
           );
         }
       } else if (payload.kind === "webhook") await deliverWebhook(payload);
-      else await deliverEmail(payload, env);
+      else if (payload.kind === "email-reply") {
+        await deliverEmailReply(payload, env);
+        // After the send, guarded: a retry from here would email them twice.
+        await reportEmailReply(env, payload.commentId, "sent");
+      } else await deliverEmail(payload, env);
       msg.ack();
     } catch (err) {
       // Per-message retry rather than throwing the whole batch, so one dead
       // endpoint doesn't re-deliver its neighbours. max_retries 5 -> flow-dlq.
-      const rule = payload.kind === "gleap-screenshot" ? "" : ` rule=${payload.ruleId}`;
+      const rule =
+        payload.kind === "gleap-screenshot"
+          ? ""
+          : payload.kind === "email-reply"
+            ? ` comment=${payload.commentId}`
+            : ` rule=${payload.ruleId}`;
       console.error(
         `side-effects: ${payload.kind} failed (attempt ${msg.attempts})${rule} task=${payload.taskId}`,
         err instanceof Error ? err.message : err
@@ -142,16 +154,19 @@ export async function handleDeadLetterBatch(batch: MessageBatch, env: Env): Prom
       payload !== null && (payload.kind === "webhook" || payload.kind === "email")
         ? payload
         : null;
+    const reply = payload !== null && payload.kind === "email-reply" ? payload : null;
     console.error(
       JSON.stringify({
         level: "error",
         msg: "flow.dlq",
         kind: payload?.kind ?? "unknown",
         ruleId: deliverable?.ruleId,
+        commentId: reply?.commentId,
         taskId: payload?.taskId,
         attempts: msg.attempts,
       })
     );
+    if (reply !== null) await reportEmailReply(env, reply.commentId, "failed");
     if (deliverable !== null) {
       await recordPermanentFailure(
         env,
@@ -180,6 +195,23 @@ async function recordPermanentFailure(
     console.error(
       "side-effects: recordDeliveryFailure failed",
       writeErr instanceof Error ? writeErr.message : writeErr
+    );
+  }
+}
+
+/** Guarded like recordPermanentFailure: the card's email status is a report, never a reason to retry. */
+async function reportEmailReply(env: Env, commentId: string, status: "sent" | "failed"): Promise<void> {
+  try {
+    await workspace(env).markEmailReply(commentId, status);
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        msg: "side-effects: markEmailReply failed",
+        commentId,
+        status,
+        error: err instanceof Error ? err.message : String(err),
+      })
     );
   }
 }
@@ -213,6 +245,26 @@ export function parsePayload(body: unknown): SideEffectPayload | GleapScreenshot
     if (typeof envelope !== "object" || envelope === null) return null;
     const secret = typeof b["secret"] === "string" && b["secret"].length > 0 ? b["secret"] : null;
     return { kind: "webhook", url, secret, body: envelope as WebhookPayload, ruleId, taskId };
+  }
+
+  if (b["kind"] === "email-reply") {
+    const to = b["to"];
+    const alias = b["alias"];
+    const commentId = b["commentId"];
+    if (typeof to !== "string" || to === "" || typeof alias !== "string" || alias === "") return null;
+    if (typeof commentId !== "string" || commentId === "" || taskId === "") return null;
+    const rawRefs = b["references"];
+    return {
+      kind: "email-reply",
+      to,
+      alias,
+      subject: typeof b["subject"] === "string" ? b["subject"] : "",
+      body: typeof b["body"] === "string" ? b["body"] : "",
+      inReplyTo: typeof b["inReplyTo"] === "string" ? b["inReplyTo"] : null,
+      references: Array.isArray(rawRefs) ? rawRefs.filter((r): r is string => typeof r === "string") : [],
+      taskId,
+      commentId,
+    };
   }
 
   if (b["kind"] === "email") {
@@ -372,6 +424,81 @@ export async function deliverEmail(
     subject: payload.subject,
     text: payload.body,
     html,
+  });
+}
+
+// --- emailed comments -------------------------------------------------------
+
+/**
+ * A comment a person chose to email back to the ticket's requester. It goes
+ * out like the intake acknowledgement (same sender, Reply-To the intake
+ * address so their answer lands back on the ticket, in their thread), with
+ * the comment's own words as the body, so the card shows exactly what they got.
+ */
+export async function deliverEmailReply(
+  payload: Extract<SideEffectPayload, { kind: "email-reply" }>,
+  env: SideEffectEnv
+): Promise<void> {
+  const domain = env.EMAIL_INTAKE_DOMAIN;
+  if (!domain) throw new Error("EMAIL_INTAKE_DOMAIN is not set, so a reply would have no address to come back to");
+  const replyTo = `${payload.alias}@${domain}`;
+  // Same sender as the intake acknowledgement: EMAIL_FROM / EMAIL_FROM_NAME.
+  const from = emailFrom(env);
+  const html = renderEmailHtml(payload.body, {
+    // External shell: clients can't sign in to Flow, so nothing links to it.
+    audience: "external",
+    appHostname: env.APP_HOSTNAME ?? "flow.example.com",
+    brandName: emailBrandName(env),
+  });
+  const headers =
+    payload.inReplyTo === null
+      ? null
+      : threadingHeaders(
+          payload.inReplyTo,
+          payload.references.filter((id) => id !== payload.inReplyTo)
+        );
+
+  // Fail closed like every other send: only an exact "false" sends.
+  if (env.EMAIL_DRY_RUN !== "false") {
+    console.log(
+      "[EMAIL_DRY_RUN] would send email reply:\n" +
+        `  from:     ${from.name} <${from.email}>\n` +
+        `  to:       ${payload.to}\n` +
+        `  reply-to: ${replyTo}\n` +
+        `  subject:  ${payload.subject}\n` +
+        `  headers:  ${JSON.stringify(headers)}\n` +
+        `  task: ${payload.taskId}  comment: ${payload.commentId}\n` +
+        `  body (markdown):\n${payload.body}`
+    );
+    return;
+  }
+
+  const binding = env.SEND_EMAIL;
+  if (!binding) {
+    throw new Error('EMAIL_DRY_RUN is off but the SEND_EMAIL binding is missing from wrangler.jsonc');
+  }
+  const base: EmailMessageBuilder = {
+    from,
+    to: payload.to,
+    replyTo,
+    subject: payload.subject,
+    text: payload.body,
+    html,
+  };
+  if (headers === null) {
+    await binding.send(base);
+    return;
+  }
+  await sendWithHeaders(binding, base, headers, (code) => {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        msg: "email reply: threading headers were refused; resending without them",
+        taskId: payload.taskId,
+        commentId: payload.commentId,
+        code,
+      })
+    );
   });
 }
 

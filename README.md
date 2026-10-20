@@ -10,7 +10,7 @@ One Cloudflare Worker serves the SPA, the REST API, an MCP server, and WebSocket
 
 Task managers are slow, expensive per seat, and hostile to agents. Flow inverts all three:
 
-- **Agent-first.** A built-in MCP server at `/mcp` exposes 15 tools with proper annotations and structured output. Every tool calls the same Durable Object RPC method the UI and REST routes call, so a task created by Claude fires exactly the automations a task created by a human does. API keys impersonate real users, and the audit trail records which key did what — you always know whether a change came from a person or their agent.
+- **Agent-first.** A built-in MCP server at `/mcp` exposes 18 tools with proper annotations and structured output. Every tool calls the same Durable Object RPC method the UI and REST routes call, so a task created by Claude fires exactly the automations a task created by a human does. API keys impersonate real users, and the audit trail records which key did what — you always know whether a change came from a person or their agent.
 - **Fast in a way SaaS can't be.** The whole workspace lives in one Durable Object's SQLite, so reads are single-digit-millisecond, in-process queries — no network hop to a database. The client gets one snapshot, then applies deltas over a WebSocket forever; there is no "refetch the board" path anywhere in the codebase. Mutations are optimistic in the UI, and a localStorage boot cache paints the last known board before the bundle has even finished loading.
 - **Yours.** Your tasks live in your Cloudflare account, in SQLite you can query, with an audit log of every mutation. No seat pricing, no data egress negotiation, no vendor deciding which API endpoints agents are allowed to use.
 
@@ -18,12 +18,15 @@ Task managers are slow, expensive per seat, and hostile to agents. Flow inverts 
 
 - **Boards** with per-list status pipelines (exactly one `open` status first, one `closed` last, custom statuses between), drag-and-drop with fractional positions, filters, and a command palette
 - **Tasks** with markdown descriptions, single assignee, priority, due/start dates, tags, snooze ("waiting on…" with a wake time), and comments
-- **Asana-style subtasks** — lightweight done/not-done checklist steps with optional assignee and due date, deliberately not miniature tasks with their own status pipeline
+- **Asana-style subtasks** — lightweight done/not-done checklist steps with optional assignee, due date and a plain-text note, deliberately not miniature tasks with their own status pipeline
+- **My Work** — everything assigned to you, subtasks included, bucketed by due date, plus a rail of work you've assigned out
 - **Real-time sync** — delta protocol with a monotonic `seq`, replay on reconnect, hibernating WebSockets so idle connections cost nothing
-- **MCP server** — streamable HTTP at `/mcp`, 15 tools, structured output, per-tool annotations, error messages written so agents can self-correct
+- **MCP server** — streamable HTTP at `/mcp`, 18 tools, structured output, per-tool annotations, error messages written so agents can self-correct
 - **REST API** — the full surface, curl-friendly, with per-item results on bulk operations (up to 200 at a time)
 - **Automations** — trigger → conditions → actions rules evaluated inline in the mutation turn (depth-capped at 5), with a per-run log; outbound webhooks (HMAC-signed) and email go through a queue
 - **Email notifications** — assigned-to-me, comment-on-my-task, status changes, per-user preferences, sent via Cloudflare Email Sending with a dry-run gate that defaults to on
+- **Agent handoffs** — one person's agent files a request for a teammate's agent as a task with a state (requested → working / needs input → done / declined), over MCP or REST, with the trust model spelled out in the tool descriptions
+- **Email intake** — each list can take tickets at `<alias>@your-domain` from allowlisted senders, with threading (replies become comments), Cloudflare-verified sender authentication, optional acknowledgements, and comments you can email back to the requester
 - **Inbound webhooks** — per-list `inb_` tokens so a bug tracker or form tool can create tasks in exactly one list, with idempotent delivery
 - **Per-space visibility** — spaces are workspace-visible or private to a member list; snapshots, deltas, search results, and writes all enforce it
 - **Audit log** — every mutation records who, via what (`ui`/`api`/`mcp`/`webhook`/`automation`/`import`), which API key, which automation rule, and the diff
@@ -118,7 +121,7 @@ That's the whole integration. The agent gets workspace orientation, search, task
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The single-DO decision and its limits, the delta protocol, snapshot slimming, the automations engine, auth model, performance techniques |
 | [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) | End-to-end deployment runbook: Cloudflare setup, Access, email, R2, Queues, bootstrap |
-| [docs/AGENTS_AND_MCP.md](docs/AGENTS_AND_MCP.md) | MCP server, the 15 tools, API keys and impersonation, webhooks in and out |
+| [docs/AGENTS_AND_MCP.md](docs/AGENTS_AND_MCP.md) | MCP server, the 18 tools, agent handoffs, API keys and impersonation, webhooks in and out |
 | [docs/API.md](docs/API.md) | REST reference, every route with method, auth, and a curl example |
 | [docs/AUTOMATIONS.md](docs/AUTOMATIONS.md) | The rule vocabulary: triggers, conditions, actions, templates, the run log |
 | [docs/IMPORTING.md](docs/IMPORTING.md) | Migrating from ClickUp; where Asana/Trello extractors would go |

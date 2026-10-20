@@ -147,6 +147,13 @@ export const CreateCommentInput = z.object({
       LIMITS.commentBodyMax,
       `Comment body must be ${LIMITS.commentBodyMax} characters or fewer.`
     ),
+  /**
+   * Also email this comment to the person whose email opened the ticket, in
+   * their thread (TaskDetail.emailReplyTo says who that is). Sent by a person
+   * in the web app, or with an api key an owner or admin allowed to
+   * (ApiKey.canEmailRequesters). Never through MCP.
+   */
+  emailToRequester: z.boolean().optional(),
 });
 export type CreateCommentInput = z.infer<typeof CreateCommentInput>;
 
