@@ -544,6 +544,8 @@ export function buildTasks(
         ? (parseTs(t.date_closed) ?? parseTs(t.date_done) ?? parseTs(t.date_updated))
         : null,
       clickupId: t.id,
+      // ClickUp has no handoffs.
+      handoff: null,
     });
   }
 
@@ -617,6 +619,7 @@ export function buildComments(
         authorId: opts.idMap.id("user", String(c.user.id)),
         body,
         createdAt: parseTs(c.date) ?? opts.idMap.importedAt,
+        via: "import",
       });
     }
   }

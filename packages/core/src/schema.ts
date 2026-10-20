@@ -494,6 +494,29 @@ const EMAIL_INTAKE: string[] = [
   `CREATE INDEX idx_email_messages_list ON email_messages (list_id, received_at)`,
 ];
 
+// Agent handoffs (see Handoff in packages/shared/src/entities.ts). A handoff is
+// an ordinary task plus these five columns; `handoff_state` NULL means "not a
+// handoff", which is every task that exists today, so nothing is backfilled.
+// `handoff_context` is a JSON array of task ids. `comments.via` records how a
+// comment arrived (an agent's "api"/"mcp" vs a person's "ui"); NULL reads as
+// "not recorded", which is what every earlier comment is. The two partial
+// indexes serve listHandoffs' incoming (assignee) and outgoing (requester)
+// reads, newest state change first, and hold only handoff rows.
+const HANDOFFS: string[] = [
+  `ALTER TABLE tasks ADD COLUMN handoff_requested_by TEXT`,
+  `ALTER TABLE tasks ADD COLUMN handoff_state TEXT`,
+  `ALTER TABLE tasks ADD COLUMN handoff_return TEXT`,
+  `ALTER TABLE tasks ADD COLUMN handoff_context TEXT`,
+  `ALTER TABLE tasks ADD COLUMN handoff_state_changed_at INTEGER`,
+  `ALTER TABLE comments ADD COLUMN via TEXT`,
+  `CREATE INDEX idx_tasks_handoff_incoming
+     ON tasks (assignee_id, handoff_state, handoff_state_changed_at)
+     WHERE handoff_state IS NOT NULL`,
+  `CREATE INDEX idx_tasks_handoff_outgoing
+     ON tasks (handoff_requested_by, handoff_state, handoff_state_changed_at)
+     WHERE handoff_state IS NOT NULL`,
+];
+
 /**
  * Base schema first, then the automation engine's tables, then notifications.
  *
@@ -532,6 +555,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { id: ASSIGNMENT_ATTRIBUTION_MIGRATION_ID, statements: ASSIGNMENT_ATTRIBUTION },
   { id: "core-0011-job-status", statements: JOB_STATUS },
   { id: "core-0012-email-intake", statements: EMAIL_INTAKE },
+  { id: "core-0013-handoffs", statements: HANDOFFS },
 ];
 
 /**

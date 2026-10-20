@@ -21,4 +21,8 @@ export const LIMITS = {
   subtaskNoteMax: 2_000,
   /** importBatch only: titles longer than this are truncated, never rejected. */
   importTitleMax: 2_000,
+  /** What a handoff wants back ("a table of page, sessions, change date"). */
+  handoffReturnMax: 1_000,
+  /** Tasks a handoff points the recipient's agent at for context. */
+  handoffContextMax: 20,
 } as const;

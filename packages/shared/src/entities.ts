@@ -107,6 +107,34 @@ export type List = z.infer<typeof List>;
 export const Priority = z.enum(["urgent", "high", "normal", "low"]);
 export type Priority = z.infer<typeof Priority>;
 
+// How a mutation arrived. "api" and "mcp" are both a `flow_` key acting for a
+// person, which in practice means that person's agent; "ui" is the person.
+export const ActorVia = z.enum(["ui", "api", "mcp", "webhook", "automation", "import"]);
+export type ActorVia = z.infer<typeof ActorVia>;
+
+// --- agent handoffs ---------------------------------------------------------
+// A handoff is a task one person's agent files for a teammate's agent: the
+// task's title and description carry the ask, its assignee is the recipient,
+// and replies are ordinary comments. These fields add what a task alone can't
+// say — who asked, what they want back, and where the exchange stands.
+export const HandoffState = z.enum(["requested", "working", "needs_input", "done", "declined"]);
+export type HandoffState = z.infer<typeof HandoffState>;
+
+export const Handoff = z.object({
+  /** Whose agent filed it. The recipient is the task's assignee. */
+  requestedBy: Id,
+  state: HandoffState,
+  returnFormat: z
+    .string()
+    .max(LIMITS.handoffReturnMax, `Return format must be ${LIMITS.handoffReturnMax} characters or fewer.`)
+    .nullable()
+    .default(null),
+  /** Tasks the recipient's agent should read before starting. */
+  contextTaskIds: z.array(Id).max(LIMITS.handoffContextMax).default([]),
+  stateChangedAt: Ts,
+});
+export type Handoff = z.infer<typeof Handoff>;
+
 export const Task = z.object({
   id: Id,
   listId: Id,
@@ -142,6 +170,8 @@ export const Task = z.object({
   // Provenance for imported tasks; keeps the import idempotent and old
   // ClickUp links resolvable.
   clickupId: z.string().nullable().default(null),
+  /** Set when this task is an agent handoff (see Handoff). */
+  handoff: Handoff.nullable().default(null),
 });
 export type Task = z.infer<typeof Task>;
 
@@ -176,6 +206,8 @@ export const Comment = z.object({
     .min(1)
     .max(LIMITS.commentBodyMax, `Comment body must be ${LIMITS.commentBodyMax} characters or fewer.`), // markdown
   createdAt: Ts,
+  /** How it was posted; "api"/"mcp" mean the author's agent wrote it. Null before this was recorded. */
+  via: ActorVia.nullable().default(null),
 });
 export type Comment = z.infer<typeof Comment>;
 
@@ -213,7 +245,7 @@ export const Actor = z.object({
   userId: Id,
   // How the mutation arrived; "automation" carries the rule id in apiKeyId's
   // place semantics-wise, see AuditEntry.
-  via: z.enum(["ui", "api", "mcp", "webhook", "automation", "import"]),
+  via: ActorVia,
   apiKeyId: Id.nullable().default(null),
   automationRuleId: Id.nullable().default(null),
 });

@@ -72,6 +72,7 @@ function delegatedTask(index: number): StoreTask {
     position: index,
     createdAt: now,
     updatedAt: now,
+    handoff: null,
   };
 }
 

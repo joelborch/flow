@@ -64,4 +64,17 @@ describe("diffOf", () => {
     expect(diffOf(before, { tags: ["x"] }, ["tags"])).toEqual({});
     expect(diffOf(before, { tags: ["x", "y"] }, ["tags"])).toEqual({ tags: ["x", "y"] });
   });
+
+  it("compares objects by value, and reports null <-> object both ways", () => {
+    const handoff = (state: string) => ({ requestedBy: "us_a", state, contextTaskIds: [] });
+    expect(diffOf({ handoff: handoff("working") }, { handoff: handoff("working") }, ["handoff"])).toEqual({});
+    expect(diffOf({ handoff: handoff("working") }, { handoff: handoff("done") }, ["handoff"])).toEqual({
+      handoff: handoff("done"),
+    });
+    expect(diffOf({ handoff: null }, { handoff: handoff("requested") }, ["handoff"])).toEqual({
+      handoff: handoff("requested"),
+    });
+    expect(diffOf({ handoff: handoff("done") }, { handoff: null }, ["handoff"])).toEqual({ handoff: null });
+    expect(diffOf({ handoff: null }, { handoff: null }, ["handoff"])).toEqual({});
+  });
 });

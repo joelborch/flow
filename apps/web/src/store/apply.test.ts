@@ -47,6 +47,7 @@ function task(id: string, patch: Partial<Task> = {}): Task {
     updatedAt: 1,
     closedAt: null,
     clickupId: null,
+    handoff: null,
     ...patch,
   };
 }

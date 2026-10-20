@@ -1,3 +1,4 @@
+import { ActorVia, HandoffState } from "@flow/shared";
 import type {
   ApiKey,
   Attachment,
@@ -6,6 +7,7 @@ import type {
   AutomationRule,
   Comment,
   EmailIntake,
+  Handoff,
   List,
   SnapshotTask,
   Space,
@@ -93,6 +95,13 @@ export interface TaskRowSql {
   updated_at: number;
   closed_at: number | null;
   clickup_id: string | null;
+  /** core-0013-handoffs. `handoff_state` NULL means the task is not a handoff. */
+  handoff_requested_by: string | null;
+  handoff_state: string | null;
+  handoff_return: string | null;
+  /** JSON array of task ids. */
+  handoff_context: string | null;
+  handoff_state_changed_at: number | null;
 }
 
 /**
@@ -117,6 +126,13 @@ export interface SnapshotTaskRowSql {
   updated_at: number;
   snoozed_until: number | null;
   blocked_note: string | null;
+  /** core-0013-handoffs. `handoff_state` NULL means the task is not a handoff. */
+  handoff_requested_by: string | null;
+  handoff_state: string | null;
+  handoff_return: string | null;
+  /** JSON array of task ids. */
+  handoff_context: string | null;
+  handoff_state_changed_at: number | null;
   has_description: number;
 }
 
@@ -142,6 +158,8 @@ export interface CommentRow {
   author_id: string;
   body: string;
   created_at: number;
+  /** An ActorVia, or NULL for comments written before core-0013-handoffs. */
+  via: string | null;
 }
 
 export interface AttachmentRow {
@@ -308,6 +326,39 @@ export const toListWithSecrets = (r: ListRow, statuses: Status[]): List => ({
   createdAt: r.created_at,
 });
 
+type HandoffColumns = Pick<
+  TaskRowSql,
+  | "handoff_requested_by"
+  | "handoff_state"
+  | "handoff_return"
+  | "handoff_context"
+  | "handoff_state_changed_at"
+>;
+
+/**
+ * Storage -> contract for the five handoff columns: null unless the row is a
+ * handoff. Every column is read with `?? null` for the same stale-statement
+ * reason as the snooze columns. An unrecognised state (a hand-edited row) reads
+ * as "requested", so the handoff stays in the recipient's open list rather than
+ * quietly dropping out of it.
+ */
+export const toHandoff = (r: HandoffColumns): Handoff | null => {
+  const state = r.handoff_state ?? null;
+  const requestedBy = r.handoff_requested_by ?? null;
+  if (state === null || requestedBy === null) return null;
+  const parsed = HandoffState.safeParse(state);
+  const context = parseJson<unknown>(r.handoff_context ?? "[]", []);
+  return {
+    requestedBy,
+    state: parsed.success ? parsed.data : "requested",
+    returnFormat: r.handoff_return ?? null,
+    contextTaskIds: Array.isArray(context)
+      ? context.filter((x): x is string => typeof x === "string")
+      : [],
+    stateChangedAt: r.handoff_state_changed_at ?? 0,
+  };
+};
+
 export const toTask = (r: TaskRowSql): Task => ({
   id: r.id,
   listId: r.list_id,
@@ -332,6 +383,7 @@ export const toTask = (r: TaskRowSql): Task => ({
   updatedAt: r.updated_at,
   closedAt: r.closed_at,
   clickupId: r.clickup_id,
+  handoff: toHandoff(r),
 });
 
 export const toSnapshotTask = (r: SnapshotTaskRowSql): SnapshotTask => ({
@@ -350,6 +402,7 @@ export const toSnapshotTask = (r: SnapshotTaskRowSql): SnapshotTask => ({
   updatedAt: r.updated_at,
   snoozedUntil: r.snoozed_until,
   blockedNote: r.blocked_note,
+  handoff: toHandoff(r),
   hasDescription: r.has_description !== 0,
 });
 
@@ -380,12 +433,21 @@ export const toSubtask = (r: SubtaskRow): Subtask => ({
   createdAt: r.created_at,
 });
 
+const toActorVia = (raw: string | null): Comment["via"] => {
+  if (raw === null) return null;
+  const parsed = ActorVia.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+};
+
 export const toComment = (r: CommentRow): Comment => ({
   id: r.id,
   taskId: r.task_id,
   authorId: r.author_id,
   body: r.body,
   createdAt: r.created_at,
+  // Null for comments from before via was recorded, and for anything that is
+  // not an ActorVia (a hand-edited row): "unknown" beats a wrong answer.
+  via: toActorVia(r.via ?? null),
 });
 
 export const toAttachment = (r: AttachmentRow): Attachment => ({

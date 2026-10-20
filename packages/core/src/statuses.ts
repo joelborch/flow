@@ -130,6 +130,15 @@ export function openStatus(sql: SqlStorage, listId: string): Status {
   return statuses.find((s) => s.type === "open") ?? statuses[0]!;
 }
 
+/** The list's "closed" status — where a finished or declined handoff lands. */
+export function closedStatus(sql: SqlStorage, listId: string): Status {
+  const statuses = listStatuses(sql, listId);
+  if (statuses.length === 0) {
+    throw new Error(`List ${listId} has no statuses — the list is malformed.`);
+  }
+  return statuses.find((s) => s.type === "closed") ?? statuses[statuses.length - 1]!;
+}
+
 /**
  * Resolve a status NAME (case-insensitive, whitespace-tolerant) within a list.
  * Throws with the full valid set so callers — including LLM agents — can

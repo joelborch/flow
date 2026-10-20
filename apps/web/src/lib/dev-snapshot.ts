@@ -123,6 +123,7 @@ export function devSnapshot(taskCount = 48): BoardSnapshot {
         createdAt: now - Math.round(rnd() * 60 * DAY),
         updatedAt: now - Math.round(rnd() * 5 * DAY),
         hasDescription: false,
+        handoff: null,
       });
 
       const subCount = rnd() > 0.55 ? 2 + Math.floor(rnd() * 4) : 0;

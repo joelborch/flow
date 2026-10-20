@@ -43,6 +43,7 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     updatedAt: 1_700_000_000_000,
     closedAt: null,
     clickupId: null,
+    handoff: null,
     ...overrides,
   };
 }

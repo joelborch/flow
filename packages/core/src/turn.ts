@@ -199,7 +199,14 @@ export function toActor(actor: string | Actor, defaultVia: Actor["via"] = "api")
   return actor;
 }
 
-/** Only the fields that actually changed, for `update` deltas and audit diffs. */
+/**
+ * Only the fields that actually changed, for `update` deltas and audit diffs.
+ *
+ * Arrays and objects (`tags`, `handoff`) compare by value: the mappers build a
+ * fresh object on every read, so `!==` would report an untouched handoff as
+ * changed on every update. Both sides come from the same mapper, so key order
+ * is stable and JSON is a faithful comparison.
+ */
 export function diffOf<T extends Record<string, unknown>>(
   before: T,
   after: T,
@@ -209,8 +216,10 @@ export function diffOf<T extends Record<string, unknown>>(
   for (const k of keys) {
     const a = before[k];
     const b = after[k];
-    const changed = Array.isArray(a) && Array.isArray(b) ? JSON.stringify(a) !== JSON.stringify(b) : a !== b;
+    const changed = isStructured(a) || isStructured(b) ? JSON.stringify(a) !== JSON.stringify(b) : a !== b;
     if (changed) out[k] = b;
   }
   return out;
 }
+
+const isStructured = (value: unknown): boolean => typeof value === "object" && value !== null;

@@ -24,9 +24,12 @@ import type {
   Comment,
   CreateTaskInput,
   EmailIntake,
+  ListHandoffsInput,
   List,
   MoveTaskInput,
   NotificationPref,
+  ReplyHandoffInput,
+  RequestHandoffInput,
   SearchTasksInput,
   SearchTasksResult,
   SetEmailIntakeInput,
@@ -169,6 +172,21 @@ export interface WorkspaceApi extends WorkspaceRpc {
    * see the intake credential. Admin-gate every call site.
    */
   getListWithSecrets(listId: string): Promise<List | null>;
+
+  // --- agent handoffs -------------------------------------------------------
+  /**
+   * File a handoff: a task in `listId` assigned to `toUserId`, tagged
+   * "handoff", whose description is the ask. The recipient must be an active
+   * member who can see the list's space.
+   */
+  requestHandoff(input: RequestHandoffInput, actor: string | Actor): Promise<Task>;
+  /** Post a message (as a comment) and/or move the handoff's state. */
+  replyHandoff(
+    input: ReplyHandoffInput,
+    actor: string | Actor
+  ): Promise<{ task: Task; comment: Comment | null }>;
+  /** Handoffs assigned to the actor (incoming) or filed by them (outgoing), newest state change first. */
+  listHandoffs(input: ListHandoffsInput, actor: string | Actor): Promise<Task[]>;
 
   // --- email intake ---------------------------------------------------------
   /** Every list's email intake. Holds sender allowlists: admin-gate every call site. */

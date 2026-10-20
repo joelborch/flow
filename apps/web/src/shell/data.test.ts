@@ -46,6 +46,7 @@ function task(patch: Partial<StoreTask> & Pick<StoreTask, "id" | "title">): Stor
     position: 0,
     createdAt: NOW,
     updatedAt: NOW,
+    handoff: null,
     ...rest,
   };
 }

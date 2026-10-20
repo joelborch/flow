@@ -73,6 +73,7 @@ export async function createTask(input: CreateTaskInput): Promise<Task | null> {
     updatedAt: now,
     closedAt: null,
     clickupId: null,
+    handoff: null,
   };
 
   beginPending(tempId);
@@ -261,6 +262,7 @@ export async function addComment(taskId: string, body: string): Promise<boolean>
     authorId: me.value?.id ?? "us_unknown",
     body,
     createdAt: Date.now(),
+    via: "ui",
   };
   const put = (list: Comment[]): void => {
     const next = new Map(comments.value);
