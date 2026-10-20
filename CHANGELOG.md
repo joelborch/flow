@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-10-20)
 
 The first tagged release. It covers everything since the initial publish in July 2026. Migrations `core-0009` through `core-0014` run automatically the first time the Durable Object starts on the new code, and every new column is nullable or defaulted, so existing workspaces need no manual steps.
 
