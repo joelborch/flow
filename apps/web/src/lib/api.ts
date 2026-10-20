@@ -82,6 +82,11 @@ export const api = {
       subtaskId,
       assigneeId,
     }),
+  setSubtaskNote: (subtaskId: string, note: string | null) =>
+    request<Subtask>("PATCH", `/api/subtasks/${encodeURIComponent(subtaskId)}`, {
+      subtaskId,
+      note,
+    }),
 
   addComment: (taskId: string, body: string) =>
     request<Comment>("POST", `/api/tasks/${encodeURIComponent(taskId)}/comments`, {

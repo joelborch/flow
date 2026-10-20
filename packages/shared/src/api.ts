@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
   Attachment, blockedNote, Comment, Id, LIMITS, List, Priority, Space, SpaceVisibility, Status,
-  Subtask, Task, Ts, taskDescription, taskTags, taskTitle,
+  Subtask, subtaskNote, Task, Ts, taskDescription, taskTags, taskTitle,
 } from "./entities.js";
 import { AutomationRule } from "./automations.js";
 
@@ -124,6 +124,7 @@ export const CreateSubtaskInput = z.object({
     ),
   assigneeId: Id.nullable().optional(),
   dueDate: Ts.nullable().optional(),
+  note: subtaskNote().nullable().optional(),
 });
 export type CreateSubtaskInput = z.infer<typeof CreateSubtaskInput>;
 export const ToggleSubtaskInput = z.object({ subtaskId: Id, done: z.boolean() });
@@ -133,6 +134,7 @@ export const UpdateSubtaskInput = z.object({
   title: taskTitle().optional(),
   assigneeId: Id.nullable().optional(),
   dueDate: Ts.nullable().optional(),
+  note: subtaskNote().nullable().optional(),
 });
 export type UpdateSubtaskInput = z.infer<typeof UpdateSubtaskInput>;
 export type ToggleSubtaskInput = z.infer<typeof ToggleSubtaskInput>;

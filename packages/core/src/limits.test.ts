@@ -7,6 +7,7 @@ import {
   LIMITS,
   Subtask,
   Task,
+  UpdateSubtaskInput,
   UpdateTaskInput,
 } from "@flow/shared";
 import { truncateImportTitle } from "./import.js";
@@ -116,6 +117,21 @@ describe("input caps", () => {
         title: "ok",
         subtasks: [{ title: "s".repeat(LIMITS.subtaskTitleMax + 1) }],
       }).success
+    ).toBe(false);
+  });
+
+  it("caps subtask notes at 2000 characters on create, update, and the entity", () => {
+    const over = "n".repeat(LIMITS.subtaskNoteMax + 1);
+    const create = CreateSubtaskInput.safeParse({ taskId: "tk_1", title: "ok", note: over });
+    expect(create.success).toBe(false);
+    expect(issues(create)).toContain(`${LIMITS.subtaskNoteMax} characters or fewer`);
+
+    expect(UpdateSubtaskInput.safeParse({ subtaskId: "sb_1", note: over }).success).toBe(false);
+    expect(UpdateSubtaskInput.safeParse({ subtaskId: "sb_1", note: null }).success).toBe(true);
+
+    expect(
+      Subtask.safeParse({ id: "sb_1", taskId: "tk_1", title: "ok", note: over, position: 1, createdAt: 0 })
+        .success
     ).toBe(false);
   });
 

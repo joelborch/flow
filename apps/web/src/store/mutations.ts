@@ -87,6 +87,7 @@ export async function createTask(input: CreateTaskInput): Promise<Task | null> {
         done: false,
         assigneeId: s.assigneeId ?? null,
         dueDate: null,
+        note: null,
         position: pos++,
         createdAt: now,
       });
@@ -192,6 +193,21 @@ export async function setSubtaskAssignee(
   }
 }
 
+export async function setSubtaskNote(subtaskId: string, note: string | null): Promise<void> {
+  const prev = getSubtask(subtaskId);
+  if (!prev || (prev.note ?? null) === note) return;
+  putSubtask({ ...prev, note });
+  flush();
+  try {
+    putSubtask(await api.setSubtaskNote(subtaskId, note));
+    flush();
+  } catch (err) {
+    putSubtask(prev);
+    flush();
+    toast(`Couldn't save the note — ${reason(err)}`, "error");
+  }
+}
+
 export async function createSubtask(taskId: string, title: string): Promise<void> {
   const existing = subtasks.value.get(taskId) ?? [];
   const tempId = rid("sb");
@@ -202,6 +218,7 @@ export async function createSubtask(taskId: string, title: string): Promise<void
     done: false,
     assigneeId: null,
     dueDate: null,
+    note: null,
     position: append(existing.map((s) => s.position)),
     createdAt: Date.now(),
   };

@@ -473,7 +473,7 @@ export function registerFlowTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Create subtasks",
       description:
-        "Add up to 100 subtasks under one parent taskId; subtasks are done/not-done checklist steps with an optional assigneeId and dueDate and carry no status.",
+        "Add up to 100 subtasks under one parent taskId; subtasks are done/not-done checklist steps with an optional assigneeId, dueDate and plain-text note, and carry no status.",
       inputSchema: CreateSubtasksArgs.shape,
       outputSchema: CreateSubtasksOut.shape,
       annotations: WRITE,

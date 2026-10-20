@@ -566,6 +566,7 @@ export function buildTasks(
       done: isClosedStatusType(t.status.type),
       assigneeId: userId(pickAssignee(t.assignees, opts, t.id)),
       dueDate: parseTs(t.due_date),
+      note: null,
       position: n,
       createdAt: parseTs(t.date_created) ?? opts.idMap.importedAt,
     });

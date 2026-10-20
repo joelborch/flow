@@ -116,7 +116,7 @@ export interface WorkspaceApi extends WorkspaceRpc {
   createSubtask(input: CreateSubtaskInput, actor: string | Actor): Promise<Subtask>;
   toggleSubtask(input: ToggleSubtaskInput, actor: string | Actor): Promise<Subtask>;
   updateSubtask(
-    input: { subtaskId: string; title?: string; assigneeId?: string | null; dueDate?: number | null; position?: number },
+    input: { subtaskId: string; title?: string; assigneeId?: string | null; dueDate?: number | null; note?: string | null; position?: number },
     actor: string | Actor
   ): Promise<Subtask>;
   deleteSubtask(subtaskId: string, actor: string | Actor): Promise<Ok>;

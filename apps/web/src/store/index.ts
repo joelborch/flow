@@ -55,6 +55,7 @@ export {
   updateTask,
   moveTask,
   setSubtaskAssignee,
+  setSubtaskNote,
   toggleSubtask,
   createSubtask,
   addComment,

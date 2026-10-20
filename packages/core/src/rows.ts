@@ -123,6 +123,7 @@ export interface SubtaskRow {
   done: number;
   assignee_id: string | null;
   due_date: number | null;
+  note: string | null;
   position: number;
   created_at: number;
 }
@@ -351,6 +352,7 @@ export const toSubtask = (r: SubtaskRow): Subtask => ({
   done: r.done !== 0,
   assigneeId: r.assignee_id,
   dueDate: r.due_date,
+  note: r.note,
   position: r.position,
   createdAt: r.created_at,
 });

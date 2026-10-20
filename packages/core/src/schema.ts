@@ -353,6 +353,12 @@ const SYNC_META: string[] = [
 // so the key survives even if the request never reaches the R2 delete: a
 // route's waitUntil clears the row once the object is actually gone, and the
 // daily backup job sweeps whatever is still here as a fallback.
+// Plain-text context on a checklist step. Nullable with no default, so every
+// existing subtask reads back as "no note" without a backfill.
+const SUBTASK_NOTE: string[] = [
+  `ALTER TABLE subtasks ADD COLUMN note TEXT`,
+];
+
 const PENDING_OBJECT_DELETES: string[] = [
   `CREATE TABLE pending_object_deletes (
      r2_key TEXT PRIMARY KEY,
@@ -393,6 +399,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { id: "core-0006-sync-meta", statements: SYNC_META },
   { id: CHANGES_SPACE_ID_MIGRATION_ID, statements: CHANGES_SPACE_ID },
   { id: "core-0008-pending-object-deletes", statements: PENDING_OBJECT_DELETES },
+  { id: "core-0009-subtask-note", statements: SUBTASK_NOTE },
 ];
 
 /**

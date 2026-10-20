@@ -135,6 +135,7 @@ export function devSnapshot(taskCount = 48): BoardSnapshot {
           done: rnd() > 0.5,
           assigneeId: owned ? users[Math.floor(rnd() * users.length)]!.id : null,
           dueDate: owned && rnd() > 0.4 ? now + Math.round((rnd() * 14 - 4)) * DAY : null,
+          note: rnd() > 0.7 ? "Use the March numbers, not April — see the shared sheet." : null,
           position: s,
           createdAt: now - DAY,
         });

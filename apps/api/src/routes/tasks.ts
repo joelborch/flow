@@ -8,6 +8,7 @@ import {
   Id,
   MoveTaskInput,
   SearchTasksInput,
+  subtaskNote,
   ToggleSubtaskInput,
   UpdateSubtaskInput,
   UpdateTaskInput,
@@ -221,6 +222,7 @@ taskRoutes.post("/tasks/:taskId/subtasks", async (c) => {
               title: z.string().min(1),
               assigneeId: Id.nullable().optional(),
               dueDate: z.number().int().nonnegative().nullable().optional(),
+              note: subtaskNote().nullable().optional(),
             })
           )
           .min(1)
@@ -251,7 +253,7 @@ taskRoutes.patch("/subtasks/:subtaskId", async (c) => {
   const ws = workspace(c.env);
   let result;
   const { done, ...fields } = input;
-  const hasFieldEdit = ["title", "assigneeId", "dueDate"].some(
+  const hasFieldEdit = ["title", "assigneeId", "dueDate", "note"].some(
     (k) => (fields as Record<string, unknown>)[k] !== undefined
   );
   if (hasFieldEdit) result = await ws.updateSubtask(fields, auth.actor);

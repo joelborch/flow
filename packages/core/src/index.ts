@@ -1319,7 +1319,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     const visibleTaskIds = visibleListIds === null ? null : new Set(tasks.map((t) => t.id));
     const subtasks = this.sql
       .exec<SubtaskRow>(
-        `SELECT s.id, s.task_id, s.title, s.done, s.assignee_id, s.due_date, s.position, s.created_at
+        `SELECT s.id, s.task_id, s.title, s.done, s.assignee_id, s.due_date, s.note, s.position, s.created_at
          FROM subtasks s JOIN tasks t ON t.id = s.task_id
          WHERE t.closed_at IS NULL OR t.closed_at >= ?
          ORDER BY s.task_id, s.position`,
@@ -1475,7 +1475,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   listSubtasks(taskId: string): Subtask[] {
     return this.sql
       .exec<SubtaskRow>(
-        `SELECT id, task_id, title, done, assignee_id, due_date, position, created_at
+        `SELECT id, task_id, title, done, assignee_id, due_date, note, position, created_at
          FROM subtasks WHERE task_id = ? ORDER BY position`,
         taskId
       )
@@ -2074,13 +2074,20 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         title: input.title,
         assigneeId: input.assigneeId ?? null,
         dueDate: input.dueDate ?? null,
+        note: input.note ?? null,
       });
     });
   }
 
   private applySubtaskCreate(
     t: Turn,
-    input: { taskId: string; title: string; assigneeId: string | null; dueDate: number | null }
+    input: {
+      taskId: string;
+      title: string;
+      assigneeId: string | null;
+      dueDate: number | null;
+      note?: string | null;
+    }
   ): Subtask {
     this.requireTaskRow(input.taskId);
     requireAssignee(this.sql, input.assigneeId);
@@ -2091,17 +2098,19 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       done: false,
       assigneeId: input.assigneeId,
       dueDate: input.dueDate,
+      note: input.note ?? null,
       position: nextSubtaskPosition(this.sql, input.taskId),
       createdAt: t.now,
     };
     this.sql.exec(
-      `INSERT INTO subtasks (id, task_id, title, done, assignee_id, due_date, position, created_at)
-       VALUES (?, ?, ?, 0, ?, ?, ?, ?)`,
+      `INSERT INTO subtasks (id, task_id, title, done, assignee_id, due_date, note, position, created_at)
+       VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?)`,
       subtask.id,
       subtask.taskId,
       subtask.title,
       subtask.assigneeId,
       subtask.dueDate,
+      subtask.note,
       subtask.position,
       subtask.createdAt
     );
@@ -2113,7 +2122,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   }
 
   updateSubtask(
-    input: { subtaskId: string; title?: string; assigneeId?: string | null; dueDate?: number | null; position?: number },
+    input: { subtaskId: string; title?: string; assigneeId?: string | null; dueDate?: number | null; note?: string | null; position?: number },
     actor: string | Actor
   ): Subtask {
     return this.runTurn(toActor(actor), (t) => {
@@ -2134,6 +2143,10 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         sets.push("due_date = ?");
         params.push(input.dueDate ?? null);
       }
+      if (input.note !== undefined && (input.note ?? null) !== before.note) {
+        sets.push("note = ?");
+        params.push(input.note ?? null);
+      }
       if (input.position !== undefined && input.position !== before.position) {
         sets.push("position = ?");
         params.push(input.position);
@@ -2144,7 +2157,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       const patch = diffOf(
         before as unknown as Record<string, unknown>,
         after as unknown as Record<string, unknown>,
-        ["title", "assigneeId", "dueDate", "position", "done"]
+        ["title", "assigneeId", "dueDate", "note", "position", "done"]
       );
       t.emit("update", "subtask", after.id, patch, { taskId: after.taskId });
       t.audit("subtask.update", after.id, patch);
@@ -3878,7 +3891,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   private requireSubtask(subtaskId: string): Subtask {
     const rows = this.sql
       .exec<SubtaskRow>(
-        `SELECT id, task_id, title, done, assignee_id, due_date, position, created_at
+        `SELECT id, task_id, title, done, assignee_id, due_date, note, position, created_at
          FROM subtasks WHERE id = ?`,
         subtaskId
       )

@@ -19,6 +19,7 @@ import {
   LIMITS,
   MoveTaskInput,
   SearchTasksInput,
+  subtaskNote,
   ToggleSubtaskInput,
   Ts,
   UpdateTaskInput,
@@ -100,6 +101,7 @@ export const CreateSubtasksArgs = z.object({
           ),
         assigneeId: Id.nullable().optional(),
         dueDate: Ts.nullable().optional(),
+        note: subtaskNote().nullable().optional(),
       })
     )
     .min(1)

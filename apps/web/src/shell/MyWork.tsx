@@ -7,7 +7,7 @@ import { me, toggleSubtask } from "../store/index.js";
 import { listById, myOpenSubtasks, myOpenTasks, spaceOfList, statusOfTask, type MyOpenSubtask } from "./data.js";
 import { cn, formatDue, startOfDay, today } from "./format.js";
 import { openTask } from "./nav.js";
-import { ChevronDown, ChevronRight, PriorityFlag, StatusDot } from "./ui.js";
+import { ChevronDown, ChevronRight, NoteLines, PriorityFlag, StatusDot } from "./ui.js";
 
 const DAY = 86_400_000;
 
@@ -159,7 +159,15 @@ function SubtaskRow({ subtask, parent }: { subtask: MyOpenSubtask["subtask"]; pa
         onClick={() => openTask(parent.id)}
         class="flex min-w-0 flex-1 items-center gap-2.5 py-2.5 text-left sm:gap-3"
       >
-        <span class="min-w-0 flex-[3_1_0%] truncate text-[13.5px] text-text">{subtask.title}</span>
+        <span
+          class="min-w-0 flex-[3_1_0%] truncate text-[13.5px] text-text"
+          title={subtask.note ?? undefined}
+        >
+          {subtask.title}
+          {subtask.note && (
+            <NoteLines class="ml-1.5 inline-block h-3 w-3 align-[-1px] text-faint" />
+          )}
+        </span>
 
         {/* The parent task is the context that matters for a step; the full
             Space / List path still lives in the tooltip. */}
