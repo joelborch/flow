@@ -7,6 +7,9 @@ import type {
   BoardSnapshot,
 } from "@flow/shared";
 
+import { DEMO, READ_ONLY_MESSAGE, demoRequest, demoSource } from "./demo.js";
+import { setupNeeded, signInUnconfigured } from "./setup.js";
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -62,6 +65,13 @@ async function request<T>(
   body?: unknown,
   opts: RequestOptions = {}
 ): Promise<T> {
+  if (DEMO) {
+    const answer = demoRequest(method, path, demoSource());
+    if (answer.answered) return answer.value as T;
+    // 403, not a network 0: the store toasts the message for a 403, where a
+    // 0 would read "no connection".
+    throw new ApiError(403, READ_ONLY_MESSAGE);
+  }
   let res: Response;
   try {
     res = await fetch(path, {
@@ -75,6 +85,12 @@ async function request<T>(
   }
   if (!res.ok) {
     if (res.status === 401 && opts.authRedirect !== false && typeof window !== "undefined") {
+      // A fresh deploy with no sign-in configured: show the setup steps
+      // rather than redirect to an Access login that isn't there.
+      if (await signInUnconfigured()) {
+        setupNeeded.value = true;
+        throw new ApiError(401, "Sign-in isn't set up on this deployment yet");
+      }
       if (recoverExpiredSession()) {
         throw new ApiError(401, "Session expired, redirecting to login");
       }

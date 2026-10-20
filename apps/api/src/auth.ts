@@ -18,15 +18,33 @@ import { hashToken, looksLikeApiToken, parseBearer } from "./tokens.js";
  *     its id lands in the audit trail.
  *
  * Unauthenticated requests are rejected on /api/* and /mcp. The only exceptions
- * are /api/health (liveness) and /api/inbound/* (authenticated per-list by the
- * list's own inboundToken, inside the route).
+ * are /api/health (liveness), /api/setup (whether sign-in is configured, a
+ * single word), and /api/inbound/* (authenticated per-list by the list's own
+ * inboundToken, inside the route).
  */
 
 /** Paths that skip this middleware entirely. */
 export function isPublicPath(pathname: string): boolean {
-  if (pathname === "/api/health") return true;
+  if (pathname === "/api/health" || pathname === "/api/setup") return true;
   if (pathname === "/api/inbound" || pathname.startsWith("/api/inbound/")) return true;
   return false;
+}
+
+/**
+ * How people sign in to this deployment, for the public GET /api/setup. A
+ * fresh deploy (the Deploy to Cloudflare button, or wrangler.example.jsonc
+ * copied as-is) has no Access AUD yet, so every request 401s; reporting
+ * "unconfigured" lets the web app show the setup steps instead of sending the
+ * browser to an Access login page that doesn't exist on this hostname.
+ */
+export function signInMode(
+  env: Pick<Env, "ACCESS_TEAM_DOMAIN" | "ACCESS_AUD" | "DEV_NO_AUTH">
+): "access" | "dev" | "unconfigured" {
+  if (env.DEV_NO_AUTH === "true") return "dev";
+  const aud = (env.ACCESS_AUD ?? "").trim();
+  const team = (env.ACCESS_TEAM_DOMAIN ?? "").trim().toLowerCase();
+  const teamSet = team.endsWith(".cloudflareaccess.com") && team !== "your-team.cloudflareaccess.com";
+  return /^[0-9a-f]{64}$/i.test(aud) && teamSet ? "access" : "unconfigured";
 }
 
 function actorForUi(user: User): Actor {

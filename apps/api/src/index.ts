@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 import { Hono } from "hono";
 import { Workspace } from "@flow/core";
-import { authMiddleware } from "./auth.js";
+import { authMiddleware, signInMode } from "./auth.js";
 import { cachedBackupHealth } from "./do.js";
 import { handleEmail } from "./email-intake.js";
 import { onError, notFoundHandler } from "./errors.js";
@@ -49,9 +49,14 @@ app.get("/api/health", async (c) => {
   }
 });
 
+// Whether sign-in is configured yet: "access", "dev" (DEV_NO_AUTH) or
+// "unconfigured". Public and a single word, so the web app can ask before it
+// redirects a 401 to Access (see signInMode in auth.ts).
+app.get("/api/setup", (c) => c.json({ signIn: signInMode(c.env) }));
+
 /**
  * Auth gate for everything that is not the SPA. `authMiddleware` lets
- * /api/health and /api/inbound/* through (the latter authenticates per-list
+ * /api/health, /api/setup and /api/inbound/* through (the latter authenticates per-list
  * against the list's own token) and rejects everything else without a valid
  * Cloudflare Access JWT or `flow_` bearer token.
  */

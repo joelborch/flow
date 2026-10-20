@@ -51,6 +51,8 @@ const TITLES = [
   "Train the team on the new CRM",
 ];
 
+const STEPS = ["Draft it", "Review with the team", "Make the change", "Check it in staging", "Close the loop"];
+
 const TAGS = ["ops", "design", "billing", "marketing", "urgent-fix", "vendor", "compliance"];
 const PRIORITIES: Array<Priority | null> = ["urgent", "high", "normal", "low", null, null];
 
@@ -104,14 +106,21 @@ export function devSnapshot(taskCount = 48): BoardSnapshot {
       // Roughly one card in eight is parked, so the board's "N snoozed" note
       // and the Show snoozed toggle have something to show under vite dev.
       const snoozed = status.type !== "closed" && rnd() > 0.87;
+      // Drawn here in the same order the literal below used to draw them, so
+      // the seeded board comes out unchanged.
+      const title = `${TITLES[Math.floor(rnd() * TITLES.length)]!}${i > TITLES.length ? ` (${i})` : ""}`;
+      const assigneeId = rnd() > 0.25 ? users[Math.floor(rnd() * users.length)]!.id : null;
+      // Every third card someone else holds was handed out by the demo owner,
+      // so My Work's "Assigned out" rail has something to show.
+      const delegated = assigneeId !== null && assigneeId !== "us_alice" && i % 3 === 0;
       tasks.push({
         id,
         listId: list.id,
-        title: `${TITLES[Math.floor(rnd() * TITLES.length)]!}${i > TITLES.length ? ` (${i})` : ""}`,
+        title,
         statusId: status.id,
-        assigneeId: rnd() > 0.25 ? users[Math.floor(rnd() * users.length)]!.id : null,
-        assignedBy: null,
-        assignedAt: null,
+        assigneeId,
+        assignedBy: delegated ? "us_alice" : null,
+        assignedAt: delegated ? now - ((i % 5) + 1) * DAY : null,
         priority: PRIORITIES[Math.floor(rnd() * PRIORITIES.length)]!,
         dueDate: hasDue ? now + Math.round((rnd() * 20 - 6)) * DAY : null,
         snoozedUntil: snoozed ? now + Math.round(1 + rnd() * 9) * DAY : null,
@@ -134,7 +143,7 @@ export function devSnapshot(taskCount = 48): BoardSnapshot {
         subtasks.push({
           id: `sb_${id}_${s}`,
           taskId: id,
-          title: `Step ${s + 1}`,
+          title: STEPS[s % STEPS.length]!,
           done: rnd() > 0.5,
           assigneeId: owned ? users[Math.floor(rnd() * users.length)]!.id : null,
           assignedBy: null,

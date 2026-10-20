@@ -8,11 +8,13 @@
 import type { ClientMsg, ServerMsg } from "@flow/shared";
 import { api } from "../lib/api.js";
 import { reconcileBootUser, writeCachedMe } from "../lib/boot-cache.js";
+import { DEMO, setDemoSource } from "../lib/demo.js";
+import { setupNeeded } from "../lib/setup.js";
 import { devSnapshot, devTaskCount } from "../lib/dev-snapshot.js";
 import { earlySocket, releaseEarlySocket, type EarlyWS } from "../lib/early-ws.js";
 import { toast } from "../lib/toast.js";
 import { applyDeltas, hydrate, invalidateBootCache, scheduleBootCacheFlush } from "./apply.js";
-import { connected, hydrated, lastSeq, me, setSeq, users } from "./state.js";
+import { connected, hydrated, lastSeq, me, setSeq, subtasks, taskIndex, users } from "./state.js";
 
 const PING_MS = 25_000;
 const MAX_BACKOFF_MS = 20_000;
@@ -57,7 +59,8 @@ function devFallback(): void {
 }
 
 function scheduleReconnect(): void {
-  if (stopped) return;
+  // No sign-in on this deploy yet (lib/setup.ts): every attempt would fail.
+  if (stopped || setupNeeded.value) return;
   const delay = Math.min(MAX_BACKOFF_MS, 400 * 2 ** attempt) * (0.7 + Math.random() * 0.6);
   attempt++;
   retryTimer = setTimeout(open, delay);
@@ -191,6 +194,8 @@ function open(): void {
  * and fell back) so the caller can render immediately either way.
  */
 export function connect(): Promise<void> {
+  // bootDemo() already did everything a connection would.
+  if (DEMO) return Promise.resolve();
   if (connecting) return connecting;
   stopped = false;
   connecting = new Promise<void>((resolve) => {
@@ -222,6 +227,24 @@ export function connect(): Promise<void> {
     });
   }
   return connecting;
+}
+
+/**
+ * Demo build: no Worker, no socket. main.tsx calls this before the first
+ * render, so even a deep-linked task panel's first detail read finds the
+ * board: always a fresh sample board (a boot cache from an earlier visit
+ * would have stale dates), the first user signed in, and reads answered from
+ * the board through lib/demo.ts.
+ */
+export function bootDemo(): void {
+  hydrate(devSnapshot(devTaskCount()));
+  setDemoSource({
+    task: (taskId) => taskIndex.get(taskId),
+    subtasks: (taskId) => subtasks.value.get(taskId) ?? [],
+    users: () => users.value,
+  });
+  me.value = users.value[0] ?? null;
+  connected.value = true;
 }
 
 export function disconnect(): void {

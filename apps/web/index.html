@@ -37,6 +37,10 @@
          in src/lib/early-ws.ts). -->
     <script>
       (function () {
+        // The static demo build (VITE_DEMO=true, see src/lib/demo.ts) has no
+        // server to connect to. Vite replaces %VITE_DEMO% at build time and
+        // leaves it as-is when the variable is unset.
+        if ("%VITE_DEMO%" === "true") return;
         try {
           var raw = localStorage.getItem("flow.boot");
           var m = raw && raw.slice(0, 200).match(/"seq":(\d+)/);

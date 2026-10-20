@@ -1,0 +1,14 @@
+// The public read-only demo: an assets-only Worker serving the static build
+// from `pnpm build:demo` (apps/web with VITE_DEMO=true, see
+// apps/web/src/lib/demo.ts). No Durable Object, no API, no data: the sample
+// board lives in the bundle. Deploy with `pnpm deploy:demo`.
+{
+  "$schema": "../apps/api/node_modules/wrangler/config-schema.json",
+  "name": "flow-demo",
+  "compatibility_date": "2026-07-01",
+  "workers_dev": true,
+  "assets": {
+    "directory": "../apps/web/dist-demo",
+    "not_found_handling": "single-page-application"
+  }
+}

@@ -3,14 +3,16 @@
   "private": true,
   "version": "0.1.0",
   "license": "MIT",
-  "description": "Flow \u2014 fast task management on Cloudflare Workers",
+  "description": "Flow — fast task management on Cloudflare Workers",
   "scripts": {
     "dev": "pnpm --filter @flow/api dev",
     "dev:web": "pnpm --filter @flow/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "deploy": "pnpm --filter @flow/web build && pnpm --filter @flow/api deploy"
+    "deploy": "pnpm --filter @flow/web build && pnpm --filter @flow/api deploy",
+    "build:demo": "pnpm --filter @flow/web build:demo",
+    "deploy:demo": "pnpm build:demo && pnpm --filter @flow/api exec wrangler deploy --config ../../demo/wrangler.jsonc"
   },
   "devDependencies": {
     "typescript": "^5.7.2"
