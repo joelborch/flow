@@ -101,7 +101,7 @@ async function freshWorkspace(bucket: R2Bucket) {
   const db = new DatabaseSync(":memory:");
   const ctx = fakeCtx(db);
   const env = { ATTACHMENTS: bucket } as never;
-  return new Workspace(ctx, env);
+  return { ws: new Workspace(ctx, env), db };
 }
 
 async function gunzip(buf: ArrayBuffer): Promise<string> {
@@ -110,13 +110,14 @@ async function gunzip(buf: ArrayBuffer): Promise<string> {
 }
 
 describe("backup job", () => {
-  let ws: Awaited<ReturnType<typeof freshWorkspace>>;
+  let ws: Awaited<ReturnType<typeof freshWorkspace>>["ws"];
+  let db: DatabaseSync;
   let objects: Map<string, StoredObject>;
 
   beforeEach(async () => {
     const r2 = fakeR2Bucket();
     objects = r2.objects;
-    ws = await freshWorkspace(r2.bucket);
+    ({ ws, db } = await freshWorkspace(r2.bucket));
 
     ws.importBatch(
       {
@@ -158,6 +159,38 @@ describe("backup job", () => {
     expect(taskRow?.row.title).toBe("Task A");
     const spaceRow = lines.find((l) => l.table === "spaces" && l.row.id === "sp_a");
     expect(spaceRow?.row.name).toBe("Space A");
+  });
+
+  it("excludes leading-underscore tables — prod's sqlite_master exposes the runtime's _cf_KV, which is prohibited to SELECT and killed every backup until 2026-08-17", async () => {
+    // node:sqlite has no _cf_KV, so fabricate one the way workerd exposes it.
+    // If the filter regresses, this table shows up in the dump (here) and the
+    // whole backup throws (in prod).
+    db.prepare("CREATE TABLE _cf_KV (key TEXT PRIMARY KEY, value BLOB)").run();
+    db.prepare("INSERT INTO _cf_KV (key, value) VALUES (?, ?)").run("alarm", "internal");
+
+    const now = Date.UTC(2026, 0, 15, 6, 0, 0);
+    await (ws as unknown as { runJob(job: unknown, now: number): Promise<Record<string, number>> }).runJob(
+      { id: 1, run_at: now, kind: "backup", payload: null, every_ms: 86_400_000 },
+      now
+    );
+
+    const entry = [...objects.values()][0];
+    if (!entry) throw new Error("expected a stored backup object");
+    const text = await gunzip(entry.body);
+    const tables = new Set(
+      text.trim().split("\n").map((l) => (JSON.parse(l) as { table: string }).table)
+    );
+    expect(tables.has("_cf_KV")).toBe(false);
+    expect(tables.has("_migrations")).toBe(false);
+    expect(tables.has("tasks")).toBe(true); // still a real backup, not an empty one
+  });
+
+  it("runBackupNow runs the same backup immediately", async () => {
+    const stats = await ws.runBackupNow();
+    expect(stats.processed).toBeGreaterThanOrEqual(4);
+    expect(objects.size).toBe(1);
+    const key = [...objects.keys()][0];
+    expect(key).toMatch(/^backups\/\d{4}-\d{2}-\d{2}\.ndjson\.gz$/);
   });
 
   it("prunes backups/ down to the newest 30 objects after a successful run", async () => {

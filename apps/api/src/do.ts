@@ -259,6 +259,15 @@ export interface WorkspaceApi extends WorkspaceRpc {
     userId?: string;
     action?: string;
   }): Promise<{ entries: AuditEntry[]; nextBefore: number | null }>;
+
+  // --- ops ------------------------------------------------------------------
+  /**
+   * Run the daily backup immediately — same code path as the scheduled job,
+   * so a failed night can be re-run without waiting 24h. Admin-gated at the
+   * route; the DO method itself takes no actor because it exposes no data
+   * (it only writes to R2).
+   */
+  runBackupNow(): Promise<Record<string, number>>;
 }
 
 /**

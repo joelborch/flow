@@ -20,6 +20,14 @@ importRoutes.get("/import/status", async (c) => {
   return c.json({ ok: true });
 });
 
+// Manual backup trigger. Lives on the admin ops surface with import because
+// both are owner-only maintenance endpoints, not workspace features.
+importRoutes.post("/admin/backup", async (c) => {
+  requireAdmin(c);
+  const result = await workspace(c.env).runBackupNow();
+  return c.json({ ok: true, ...result });
+});
+
 importRoutes.post("/import/batch", async (c) => {
   const auth = requireAdmin(c);
   const batch = (await c.req.json()) as ImportBatch;

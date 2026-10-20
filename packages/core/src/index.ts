@@ -3673,6 +3673,12 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     return this.sql.exec("DELETE FROM changes WHERE seq <= ?", floor).rowsWritten;
   }
 
+  /** Manual trigger for the daily backup (admin route); same code path as the
+   *  scheduled job, including the prune and orphan sweep. */
+  runBackupNow(): Promise<Record<string, number>> {
+    return this.runBackup(Date.now());
+  }
+
   /**
    * Dumps every user table to gzipped NDJSON in R2 (`backups/YYYY-MM-DD.ndjson.gz`,
    * one `{"table":...,"row":...}` line per row) and prunes to the newest 30
@@ -4003,7 +4009,10 @@ function backupTableNames(sql: SqlStorage): string[] {
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
     )
     .toArray();
-  return rows.map((r) => r.name).filter((name) => name !== "_migrations" && !name.startsWith("tasks_fts"));
+  // Leading-underscore names cover our _migrations bookkeeping AND the
+  // runtime's internal _cf_KV table, which sqlite_master exposes in prod but
+  // SELECTing from is prohibited (this killed every backup until 2026-08-17).
+  return rows.map((r) => r.name).filter((name) => !name.startsWith("_") && !name.startsWith("tasks_fts"));
 }
 
 async function gzipText(text: string): Promise<ArrayBuffer> {
