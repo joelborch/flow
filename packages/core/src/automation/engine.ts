@@ -34,6 +34,7 @@ const INTERNAL_ACTIONS = new Set<Action["kind"]>([
   "set_status",
   "set_assignee",
   "set_priority",
+  "set_due_date",
   "add_tags",
   "remove_tags",
   "create_next_recurring_task",
@@ -332,6 +333,8 @@ function describe(action: Action): string {
       return `assignee -> ${action.userId ?? "unassigned"}`;
     case "set_priority":
       return `priority -> ${action.priority ?? "none"}`;
+    case "set_due_date":
+      return `due -> same day before ${action.cutoffHour}:00, else next${action.businessDays ? " business" : ""} day (${action.timeZone})`;
     case "add_tags":
       return `tags += ${action.tags.join(", ")}`;
     case "remove_tags":

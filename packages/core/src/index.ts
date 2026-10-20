@@ -54,7 +54,7 @@ import type {
 import { AUTOMATION_MAX_DEPTH, mergeNotificationPrefs } from "@flow/shared";
 
 import { evaluateAutomations } from "./automation/engine.js";
-import { nextRecurringDue } from "./automation/recurrence.js";
+import { dueDateWithCutoff, nextRecurringDue } from "./automation/recurrence.js";
 import { pruneDueFires, sweepDueDateAutomations } from "./automation/schedule.js";
 import type {
   AutomationContext,
@@ -1176,6 +1176,11 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         case "set_priority":
           this.applyTaskUpdate(t, { taskId, priority: action.priority }, "automation.set_priority");
           break;
+        case "set_due_date": {
+          const dueDate = dueDateWithCutoff(t.now, action.cutoffHour, action.timeZone, action.businessDays);
+          this.applyTaskUpdate(t, { taskId, dueDate }, "automation.set_due_date");
+          break;
+        }
         case "add_tags": {
           const current = toTask(this.requireTaskRow(taskId)).tags;
           const seen = new Set(current.map((x) => x.toLowerCase()));
