@@ -167,6 +167,34 @@ export const LockIcon = svg([
   <rect x="3.5" y="7.5" width="9" height="6" rx="1.3" />,
   <path d="M5.5 7.5V5.3a2.5 2.5 0 0 1 5 0V7.5" />,
 ]);
+export const ExternalLink = svg([
+  <path d="M9.5 2.5h4v4M13.5 2.5l-6 6" />,
+  <path d="M11.5 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3" />,
+]);
+
+/**
+ * Opens a task title's link in a new tab from inside a row or card whose own
+ * click opens the task. A span rather than an anchor because My Work rows are
+ * <button>s, which can't legally hold a link; it swallows the click so the task
+ * doesn't open too, and data-no-drag keeps a press on it from starting a card
+ * drag. The task panel shows a real, focusable link for keyboard users.
+ */
+export function TitleLinkIcon({ url, class: cls }: { url: string; class?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      title={`Open ${url}`}
+      data-no-drag
+      onClick={(e) => {
+        e.stopPropagation();
+        window.open(url, "_blank", "noopener,noreferrer");
+      }}
+      class={cn("shrink-0 cursor-pointer rounded p-0.5 text-faint transition-colors hover:text-accent", cls)}
+    >
+      <ExternalLink class="h-3.5 w-3.5" />
+    </span>
+  );
+}
 
 // --- avatar ----------------------------------------------------------------
 

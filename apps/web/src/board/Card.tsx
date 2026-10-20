@@ -6,6 +6,8 @@ import {
   visibleTags,
 } from "../lib/fmt.js";
 import { openTask } from "../lib/shell-bridge.js";
+import { titleLink } from "../lib/title-link.js";
+import { TitleLinkIcon } from "../shell/ui.js";
 import { prefetchTaskDetail, subtaskProgress, userById, type StoreTask } from "../store/index.js";
 import { consumedByDrag, onCardPointerDown } from "./dnd.js";
 import { focusCard, rangeSelect } from "./keyboard.js";
@@ -60,6 +62,7 @@ export function Card({ task }: { task: StoreTask }) {
   // A snoozed card is normally filtered out entirely; it only reaches here when
   // "Show snoozed" is on, so it renders dimmed and says why.
   const snoozed = isSnoozed(task.snoozedUntil);
+  const link = titleLink(task.title);
   const tags = visibleTags(task.tags);
   const hasMeta =
     snoozed ||
@@ -120,7 +123,10 @@ export function Card({ task }: { task: StoreTask }) {
         snoozed ? " opacity-55 hover:opacity-100" : ""
       }`}
     >
-      <p class="line-clamp-3 text-[13px] leading-[1.35] text-text">{task.title}</p>
+      <div class="flex items-start gap-1">
+        <p class="line-clamp-3 min-w-0 flex-1 text-[13px] leading-[1.35] text-text">{task.title}</p>
+        {link ? <TitleLinkIcon url={link} class="-mr-1 -mt-px" /> : null}
+      </div>
 
       {hasMeta ? (
         <div class="mt-2 flex min-w-0 items-center gap-2 overflow-hidden text-[11px] text-muted">

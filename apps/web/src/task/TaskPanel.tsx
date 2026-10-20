@@ -7,7 +7,8 @@ import { addComment, comments as commentStore, fetchTaskDetail, updateTask } fro
 import { listById, spaceOfList, taskById } from "../shell/data.js";
 import { formatDateTime } from "../shell/format.js";
 import { panelFocus } from "../shell/nav.js";
-import { CalendarIcon, FlagIcon, Moon, TagIcon, X, useDialogFocus } from "../shell/ui.js";
+import { titleLink } from "../lib/title-link.js";
+import { CalendarIcon, ExternalLink, FlagIcon, Moon, TagIcon, X, useDialogFocus } from "../shell/ui.js";
 import {
   AssigneePicker, BlockedNoteField, DuePicker, PriorityPicker, PropertyRow, SnoozeBanner,
   SnoozePicker, StatusPicker, TagEditor,
@@ -241,6 +242,7 @@ export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => 
                   onBlur={saveTitle}
                   class="-mx-2 block w-[calc(100%+1rem)] resize-none overflow-hidden rounded-lg bg-transparent px-2 py-0.5 text-[19px] font-semibold leading-[1.3] tracking-[-0.018em] text-text transition-colors hover:bg-raised focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/25 sm:text-[22px] sm:leading-[1.28] sm:tracking-[-0.021em]"
                 />
+                <TitleLinkRow title={task.title} />
 
                 <SnoozeBanner task={task} />
 
@@ -305,3 +307,20 @@ export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => 
 }
 
 export default TaskPanel;
+
+/** A title that is (or contains) a link gets a real, focusable way to open it. */
+function TitleLinkRow({ title }: { title: string }) {
+  const url = titleLink(title);
+  if (!url) return null;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      class="mt-1 inline-flex max-w-full items-center gap-1.5 rounded text-[12.5px] text-muted transition-colors hover:text-accent"
+    >
+      <ExternalLink class="h-3.5 w-3.5" />
+      <span class="truncate">Open {new URL(url).host}</span>
+    </a>
+  );
+}
