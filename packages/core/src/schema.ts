@@ -444,7 +444,7 @@ const PENDING_OBJECT_DELETES: string[] = [
 ];
 
 // Last outcome of a scheduled job, one row per job kind. The daily backup
-// failed silently for four days in August 2026 because its only trace was a
+// could fail silently for days because its only trace was a
 // console line; the backup job now writes its row here on every run, and
 // /api/health reads it to flag a stale backup. `last_success_detail` is JSON
 // (object key, row count, bytes). IF NOT EXISTS so it is a no-op on an
@@ -522,7 +522,7 @@ const HANDOFFS: string[] = [
 // delivery stands ("sending", then "sent" or "failed" from the queue consumer).
 // NULL in both is an ordinary internal comment, which every earlier one is.
 // `api_keys.can_email_requesters` lets an owner or admin allow one key (say,
-// the one a CLI uses) to send those replies too; every key starts without it.
+// the one an API client uses) to send those replies too; every key starts without it.
 // `email_messages.authenticated` keeps whether Cloudflare vouched for each
 // sender. Rows filed before it are backfilled from their email.ingest audit
 // row, and any row that audit can't vouch for reads as unverified (0). Replies

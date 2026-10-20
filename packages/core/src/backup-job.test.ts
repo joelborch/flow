@@ -175,7 +175,7 @@ describe("backup job", () => {
     expect(spaceRow?.row.name).toBe("Space A");
   });
 
-  it("excludes leading-underscore tables — prod's sqlite_master exposes the runtime's _cf_KV, which is prohibited to SELECT and killed every backup until 2026-08-17", async () => {
+  it("excludes leading-underscore tables — prod's sqlite_master exposes the runtime's _cf_KV, which is prohibited to SELECT and used to kill every backup", async () => {
     // node:sqlite has no _cf_KV, so fabricate one the way workerd exposes it.
     // If the filter regresses, this table shows up in the dump (here) and the
     // whole backup throws (in prod).

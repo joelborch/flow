@@ -405,7 +405,7 @@ flowcurl "$FLOW/api/handoffs?direction=outgoing&states=done,declined&limit=20"
 # Reply: a message (posted as a comment), a new state, or both.
 flowcurl -X POST $FLOW/api/tasks/tk_hnd123/handoff \
   -H 'Content-Type: application/json' \
-  -d '{"message":"| page | sessions | vs Feb |\n|---|---|---|\n| /implants | 1,204 | +8% |","state":"done"}'
+  -d '{"message":"| page | sessions | vs Feb |\n|---|---|---|\n| /pricing | 1,204 | +8% |","state":"done"}'
 # {"task":{...},"comment":{...}}     comment is null when only the state moved
 ```
 

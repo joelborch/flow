@@ -391,7 +391,7 @@ describe("core-0014-email-replies", () => {
     const message = (messageId: string, taskId: string) =>
       sql.exec(
         `INSERT INTO email_messages (message_id, list_id, alias, task_id, comment_id, sender, received_at)
-         VALUES (?, 'ls_1', 'support', ?, NULL, 'pat@clinic.com', 0)`,
+         VALUES (?, 'ls_1', 'support', ?, NULL, 'pat@clinic.example', 0)`,
         messageId,
         taskId
       );
@@ -400,7 +400,7 @@ describe("core-0014-email-replies", () => {
         `INSERT INTO audit (actor, action, entity, diff, at, actor_user_id, api_key_id)
          VALUES ('{}', 'email.ingest', ?, ?, 0, 'us_1', NULL)`,
         taskId,
-        JSON.stringify({ listId, alias: "support", sender: "pat@clinic.com", authenticated, messageId, commentId: null })
+        JSON.stringify({ listId, alias: "support", sender: "pat@clinic.example", authenticated, messageId, commentId: null })
       );
     message("verified@x", "tk_1");
     ingestAudit("verified@x", "tk_1", true);

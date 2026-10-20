@@ -3,8 +3,8 @@ import { titleLink } from "./title-link.js";
 
 describe("titleLink", () => {
   it("returns a bare URL title as-is", () => {
-    expect(titleLink("https://x.com/angeldot_/status/2103095295215100189")).toBe(
-      "https://x.com/angeldot_/status/2103095295215100189"
+    expect(titleLink("https://x.com/example/status/1234567890")).toBe(
+      "https://x.com/example/status/1234567890"
     );
   });
 

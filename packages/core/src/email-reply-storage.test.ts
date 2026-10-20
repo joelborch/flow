@@ -100,7 +100,7 @@ async function seeded(env: { EMAIL_INTAKE_REPLY?: string } = { EMAIL_INTAKE_REPL
   ws.upsertUser({ id: OWNER, email: "owner@example.com", name: "Owner", role: "owner" }, OWNER);
   const space = ws.createSpace(CreateSpaceInput.parse({ name: "Ops", visibility: "workspace" }), OWNER);
   const support = ws.createList(CreateListInput.parse({ spaceId: space.id, name: "Support" }), OWNER);
-  ws.setEmailIntake(support.id, { alias: "support", allowedSenders: ["@clinic.com"] }, OWNER);
+  ws.setEmailIntake(support.id, { alias: "support", allowedSenders: ["@clinic.example"] }, OWNER);
 
   const frames: ServerMsg[] = [];
   sockets.push({
@@ -114,9 +114,9 @@ async function seeded(env: { EMAIL_INTAKE_REPLY?: string } = { EMAIL_INTAKE_REPL
     n += 1;
     return {
       alias: "support",
-      sender: "pat@clinic.com",
+      sender: "pat@clinic.example",
       authenticated: true,
-      messageId: `m${n}@clinic.com`,
+      messageId: `m${n}@clinic.example`,
       referenceIds: [],
       task: { title: `Ticket ${n}`, description: `Body ${n}` },
       commentBody: `Reply ${n}`,
@@ -161,26 +161,26 @@ async function seeded(env: { EMAIL_INTAKE_REPLY?: string } = { EMAIL_INTAKE_REPL
 describe("createComment with emailToRequester", () => {
   it("records the recipient on the comment and queues the reply in the requester's thread", async () => {
     const { ws, ticket, mail, replies, comment, auditActions } = await seeded();
-    const taskId = ticket({ messageId: "first@clinic.com", task: { title: "Re: Printer jammed", description: "Help" } });
+    const taskId = ticket({ messageId: "first@clinic.example", task: { title: "Re: Printer jammed", description: "Help" } });
     // A follow-up in the same thread, so the reply answers the newest message.
-    ws.ingestEmail(mail({ messageId: "second@clinic.com", referenceIds: ["first@clinic.com"] }), MAIL);
+    ws.ingestEmail(mail({ messageId: "second@clinic.example", referenceIds: ["first@clinic.example"] }), MAIL);
 
     const created = ws.createComment(comment(taskId, "Done, here it is: https://example.com/page", true), PERSON);
-    expect(created).toMatchObject({ emailTo: "pat@clinic.com", emailStatus: "sending", via: "ui" });
+    expect(created).toMatchObject({ emailTo: "pat@clinic.example", emailStatus: "sending", via: "ui" });
     expect(ws.getTaskDetail(taskId).comments.find((c) => c.id === created.id)).toMatchObject({
-      emailTo: "pat@clinic.com",
+      emailTo: "pat@clinic.example",
       emailStatus: "sending",
     });
 
     expect(replies()).toEqual([
       {
         kind: "email-reply",
-        to: "pat@clinic.com",
+        to: "pat@clinic.example",
         alias: "support",
         subject: "Re: Printer jammed",
         body: "Done, here it is: https://example.com/page",
-        inReplyTo: "second@clinic.com",
-        references: ["first@clinic.com", "second@clinic.com"],
+        inReplyTo: "second@clinic.example",
+        references: ["first@clinic.example", "second@clinic.example"],
         taskId,
         commentId: created.id,
       },
@@ -210,8 +210,8 @@ describe("createComment with emailToRequester", () => {
     const taskId = ticket();
     const allowed = key(true);
 
-    const sent = ws.createComment(comment(taskId, "Done, from the CLI", true), viaKey(allowed.id));
-    expect(sent).toMatchObject({ emailTo: "pat@clinic.com", emailStatus: "sending", via: "api" });
+    const sent = ws.createComment(comment(taskId, "Done, from an API client", true), viaKey(allowed.id));
+    expect(sent).toMatchObject({ emailTo: "pat@clinic.example", emailStatus: "sending", via: "api" });
     expect(replies()).toHaveLength(1);
 
     expect(() => ws.createComment(comment(taskId, "Done", true), viaKey(allowed.id, "mcp"))).toThrow(
@@ -245,10 +245,10 @@ describe("createComment with emailToRequester", () => {
 
   it("answers an unverified sender too, at the address the ticket came from", async () => {
     const { ws, ticket, replies, comment } = await seeded();
-    const taskId = ticket({ authenticated: false, sender: "dana@clinic.com" });
+    const taskId = ticket({ authenticated: false, sender: "dana@clinic.example" });
     const created = ws.createComment(comment(taskId, "Done", true), PERSON);
-    expect(created).toMatchObject({ emailTo: "dana@clinic.com", emailStatus: "sending" });
-    expect(replies()).toEqual([expect.objectContaining({ to: "dana@clinic.com", commentId: created.id })]);
+    expect(created).toMatchObject({ emailTo: "dana@clinic.example", emailStatus: "sending" });
+    expect(replies()).toEqual([expect.objectContaining({ to: "dana@clinic.example", commentId: created.id })]);
   });
 
   it("is refused for a task that never came in by email, and after its intake alias is removed", async () => {
@@ -267,11 +267,11 @@ describe("TaskDetail.emailReplyTo", () => {
   it("names the requester, verified or not, and is null for a task that can't be answered", async () => {
     const { ws, ticket, support } = await seeded();
     expect(ws.getTaskDetail(ticket({ task: { title: "Fwd: Hours", description: "x" } }))).toMatchObject({
-      emailReplyTo: "pat@clinic.com",
+      emailReplyTo: "pat@clinic.example",
       emailReplySubject: "Re: Hours",
     });
     expect(ws.getTaskDetail(ticket({ authenticated: false, task: { title: "Hours", description: "x" } }))).toMatchObject({
-      emailReplyTo: "pat@clinic.com",
+      emailReplyTo: "pat@clinic.example",
       emailReplySubject: "Re: Hours",
     });
     const typed = ws.createTask(CreateTaskInput.parse({ listId: support.id, title: "Typed in" }), PERSON);
@@ -299,7 +299,7 @@ describe("markEmailReply", () => {
         entity: "comment",
         op: "update",
         id: created.id,
-        data: expect.objectContaining({ taskId, emailStatus: "sent", emailTo: "pat@clinic.com" }),
+        data: expect.objectContaining({ taskId, emailStatus: "sent", emailTo: "pat@clinic.example" }),
       }),
     ]);
     expect(auditActions()).toContain("comment.email_status");
@@ -338,7 +338,7 @@ describe("setApiKeyEmailRequesters", () => {
     expect(auditActions().filter((a) => a === "api_key.email_requesters")).toHaveLength(2);
   });
 
-  it("works from an owner's api key (the CLI), but never over MCP", async () => {
+  it("works from an owner's api key, but never over MCP", async () => {
     const { ws, key, viaKey } = await seeded();
     const cli = key(false);
     expect(ws.setApiKeyEmailRequesters(cli.id, true, viaKey(cli.id)).canEmailRequesters).toBe(true);

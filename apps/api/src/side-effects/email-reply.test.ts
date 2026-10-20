@@ -21,12 +21,12 @@ type Reply = Extract<SideEffectPayload, { kind: "email-reply" }>;
 function reply(over: Partial<Reply> = {}): Reply {
   return {
     kind: "email-reply",
-    to: "pat@clinic.com",
+    to: "pat@clinic.example",
     alias: "support",
     subject: "Re: Printer jammed",
     body: "Done, here it is: https://example.com/page",
-    inReplyTo: "second@clinic.com",
-    references: ["first@clinic.com", "second@clinic.com"],
+    inReplyTo: "second@clinic.example",
+    references: ["first@clinic.example", "second@clinic.example"],
     taskId: "tk_1",
     commentId: "cm_1",
     ...over,
@@ -90,13 +90,13 @@ describe("deliverEmailReply", () => {
     const message = send.mock.calls[0]![0];
     expect(message).toMatchObject({
       from: DEFAULT_EMAIL_FROM,
-      to: "pat@clinic.com",
+      to: "pat@clinic.example",
       replyTo: "support@help.example.com",
       subject: "Re: Printer jammed",
       text: "Done, here it is: https://example.com/page",
       headers: {
-        "In-Reply-To": "<second@clinic.com>",
-        References: "<first@clinic.com> <second@clinic.com>",
+        "In-Reply-To": "<second@clinic.example>",
+        References: "<first@clinic.example> <second@clinic.example>",
       },
     });
     expect(message.html).toContain("https://example.com/page");

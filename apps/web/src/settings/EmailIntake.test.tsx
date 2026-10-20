@@ -32,7 +32,7 @@ const DOMAIN = "tickets.example.com";
 const ACME: EmailIntake = {
   listId: "li_acme",
   alias: "acme",
-  allowedSenders: ["dr@clinic.com", "@lab.com"],
+  allowedSenders: ["dr@clinic.example", "@lab.example"],
   createdAt: 1,
   updatedAt: 1,
 };
@@ -170,8 +170,8 @@ describe("Email intake settings", () => {
     expect(text).toContain("Email intake");
     expect(text).toContain("Clinical / Acme");
     expect(text).toContain("acme@tickets.example.com");
-    expect(text).toContain("dr@clinic.com");
-    expect(text).toContain("@lab.com");
+    expect(text).toContain("dr@clinic.example");
+    expect(text).toContain("@lab.example");
     expect(button("Copy acme@tickets.example.com")).toBeTruthy();
   });
 
@@ -212,14 +212,14 @@ describe("Email intake settings", () => {
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
     typeInto(field<HTMLInputElement>('form input[aria-label="Alias"]'), "  front-desk  ");
-    typeInto(field<HTMLTextAreaElement>("form textarea"), "  pat@clinic.com \n\n   @clinic.org\n  ");
+    typeInto(field<HTMLTextAreaElement>("form textarea"), "  pat@clinic.example \n\n   @clinic.org\n  ");
     await click(button("Save"));
 
     expect(putCalls()).toEqual([
       {
         method: "PUT",
         url: "/api/lists/li_front/email-intake",
-        body: { alias: "front-desk", allowedSenders: ["pat@clinic.com", "@clinic.org"] },
+        body: { alias: "front-desk", allowedSenders: ["pat@clinic.example", "@clinic.org"] },
       },
     ]);
     expect(root.textContent).toContain("Clinical / Front desk");
@@ -234,19 +234,19 @@ describe("Email intake settings", () => {
 
     expect(field<HTMLInputElement>('form input[aria-label="Alias"]').value).toBe("acme");
     const senders = field<HTMLTextAreaElement>("form textarea");
-    expect(senders.value).toBe("dr@clinic.com\n@lab.com");
+    expect(senders.value).toBe("dr@clinic.example\n@lab.example");
 
-    typeInto(senders, "dr@clinic.com\n  \n @lab.com \nnew@clinic.com  ");
+    typeInto(senders, "dr@clinic.example\n  \n @lab.example \nnew@clinic.example  ");
     await click(button("Save"));
 
     expect(putCalls()).toEqual([
       {
         method: "PUT",
         url: "/api/lists/li_acme/email-intake",
-        body: { alias: "acme", allowedSenders: ["dr@clinic.com", "@lab.com", "new@clinic.com"] },
+        body: { alias: "acme", allowedSenders: ["dr@clinic.example", "@lab.example", "new@clinic.example"] },
       },
     ]);
-    expect(root.textContent).toContain("new@clinic.com");
+    expect(root.textContent).toContain("new@clinic.example");
     expect(root.querySelector("form")).toBeNull();
   });
 
@@ -262,7 +262,7 @@ describe("Email intake settings", () => {
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
     typeInto(field<HTMLInputElement>('form input[aria-label="Alias"]'), "acme");
-    typeInto(field<HTMLTextAreaElement>("form textarea"), "pat@clinic.com");
+    typeInto(field<HTMLTextAreaElement>("form textarea"), "pat@clinic.example");
     await click(button("Save"));
 
     expect(putCalls()).toHaveLength(1);

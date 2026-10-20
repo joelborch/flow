@@ -496,7 +496,7 @@ async function loadTaskDetail(taskId: string): Promise<TaskDetail | null> {
       subtasks: subtasks.value.get(taskId) ?? [],
       comments: comments.value.get(taskId) ?? [],
       attachments: [],
-      // Unknown offline; only the CLI reads these anyway.
+      // Unknown offline; only API clients read these anyway.
       emailReplyTo: null,
       emailReplySubject: null,
     };

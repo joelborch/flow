@@ -320,8 +320,8 @@ describe("authenticationLog", () => {
 describe("titleFromSubject", () => {
   it("collapses whitespace and strips reply/forward prefixes", () => {
     expect(titleFromSubject("Re: FW:  Printer \n  broken")).toBe("Printer broken");
-    expect(titleFromSubject("RE: Fwd: Re[2]: x-ray sensor")).toBe("x-ray sensor");
-    expect(titleFromSubject("Recall notice")).toBe("Recall notice");
+    expect(titleFromSubject("RE: Fwd: Re[2]: printer jam")).toBe("printer jam");
+    expect(titleFromSubject("Renewal notice")).toBe("Renewal notice");
   });
 
   it("falls back for a blank or prefix-only subject", () => {
@@ -1302,13 +1302,13 @@ describe("deleteUploads", () => {
     remove.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("R2 500")).mockResolvedValueOnce(undefined);
     const uploads = Array.from({ length: 2500 }, (_, i) => ({
       id: `at_${i}`,
-      r2Key: `email/abc/at_${i}/patient-${i}.pdf`,
+      r2Key: `email/abc/at_${i}/private-name-${i}.pdf`,
     }));
     await deleteUploads(makeEnv(), uploads);
     expect(remove.mock.calls.map((call) => (call[0] as string[]).length)).toEqual([1000, 1000, 500]);
     const logged = errors.join("\n");
     expect(logged).toContain("at_1000");
-    expect(logged).not.toContain("patient-");
+    expect(logged).not.toContain("private-name-");
     expect(logged).not.toContain("email/");
   });
 });

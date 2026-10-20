@@ -834,7 +834,7 @@ export function planAttachments(parsed: Pick<Email, "attachments" | "html">, mes
 /**
  * Best effort, in batches R2 accepts: an object left behind is unreferenced
  * garbage, never a broken link. Logs ids and counts only, since keys and
- * filenames can name patients.
+ * filenames can name people.
  */
 export async function deleteUploads(
   env: Env,

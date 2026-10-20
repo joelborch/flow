@@ -5269,7 +5269,7 @@ function backupTableNames(sql: SqlStorage): string[] {
     .toArray();
   // Leading-underscore names cover our _migrations bookkeeping AND the
   // runtime's internal _cf_KV table, which sqlite_master exposes in prod but
-  // SELECTing from is prohibited (this killed every backup until 2026-08-17).
+  // SELECTing from is prohibited (this used to kill every backup).
   return rows.map((r) => r.name).filter((name) => !name.startsWith("_") && !name.startsWith("tasks_fts"));
 }
 

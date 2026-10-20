@@ -104,15 +104,15 @@ describe("EmailedNote", () => {
     body: "Done",
     createdAt: 9,
     via: "ui",
-    emailTo: "pat@clinic.com",
+    emailTo: "pat@clinic.example",
     emailStatus,
   });
 
   it("says who got the comment and where delivery stands", () => {
     const cases: Array<[Comment["emailStatus"], string]> = [
-      ["sending", "Sending to pat@clinic.com…"],
-      ["sent", "Emailed to pat@clinic.com"],
-      ["failed", "Email to pat@clinic.com failed"],
+      ["sending", "Sending to pat@clinic.example…"],
+      ["sent", "Emailed to pat@clinic.example"],
+      ["failed", "Email to pat@clinic.example failed"],
     ];
     for (const [status, text] of cases) {
       act(() => render(<Comments comments={[emailed(status)]} />, root));

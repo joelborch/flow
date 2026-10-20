@@ -122,7 +122,7 @@ describe("PATCH /api/api-keys/:apiKeyId", () => {
     expect(body.apiKey).not.toHaveProperty("tokenHash");
   });
 
-  it("works from an owner's api key, since the CLI is where this is set", async () => {
+  it("works from an owner's api key, since that's how it's set without a switch in the app", async () => {
     const fromKey = appWith(API_KEY, apiKey(false));
     expect((await fromKey.patchKey({ canEmailRequesters: true })).status).toBe(200);
     expect(fromKey.setApiKeyEmailRequesters).toHaveBeenCalledWith("ak_1", true, API_KEY);
