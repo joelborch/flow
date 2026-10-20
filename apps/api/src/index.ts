@@ -73,7 +73,7 @@ app.route("/api", inboundRoutes);
 app.route("/api", importRoutes);
 
 // --- MCP -------------------------------------------------------------------
-// Streamable HTTP: one endpoint, all methods. Owned by the mcp agent; auth has
+// Streamable HTTP: one endpoint, all methods. Auth has
 // already run, so the resolved caller is handed straight over and every tool
 // acts as that user.
 app.all("/mcp", (c) => mcpHandler(c.req.raw, c.env, c.get("auth")));
