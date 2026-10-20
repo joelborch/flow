@@ -200,6 +200,32 @@ export const CHANGES_RETENTION = 50_000;
 export const AUTOMATION_RUNS_RETENTION = 20_000;
 /** Objects kept under `backups/` in R2 — one per day, so 30 is ~a month. */
 export const BACKUP_RETENTION = 30;
+/**
+ * Audit rows older than this are deleted by the same daily job. Unlike
+ * automation_runs this one can be age-based: `idx_audit_at` covers `at`, so
+ * the oldest-first range read is an index walk, not a table scan.
+ */
+export const AUDIT_RETENTION_DAYS = 365;
+/**
+ * Rows per audit DELETE, and DELETEs per daily run. A first run over a big
+ * backlog stops at 100k rows and leaves the rest for tomorrow instead of
+ * turning one alarm into an unbounded one.
+ */
+export const AUDIT_PRUNE_BATCH = 5_000;
+export const AUDIT_PRUNE_MAX_BATCHES = 20;
+/** /api/health reports the backup stale when its last success is older than this. */
+export const BACKUP_STALE_MS = 36 * 3_600_000;
+
+/** Last outcome of the daily backup, as persisted in `job_status`. */
+export interface BackupStatus {
+  lastSuccessAt: number | null;
+  /** R2 key, row count and gzipped bytes of the last successful backup. */
+  lastSuccess: { key: string; rows: number; bytes: number } | null;
+  lastFailureAt: number | null;
+  lastFailureError: string | null;
+  /** No successful backup within BACKUP_STALE_MS (or ever). */
+  stale: boolean;
+}
 
 interface ConnState {
   userId: string;
@@ -3692,9 +3718,13 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     const alarmStartedAt = Date.now();
     const now = Date.now();
+    // Oldest first, except the backup always goes last: it is the one job
+    // heavy enough to kill the isolate (it holds every table in memory), so
+    // everything else due in this alarm has already run if it does.
     const jobs = this.sql
       .exec<JobRow>(
-        "SELECT id, run_at, kind, payload, every_ms FROM scheduled_jobs WHERE run_at <= ? ORDER BY run_at LIMIT 100",
+        `SELECT id, run_at, kind, payload, every_ms FROM scheduled_jobs
+         WHERE run_at <= ? ORDER BY kind = 'backup', run_at LIMIT 100`,
         now
       )
       .toArray();
@@ -3711,6 +3741,14 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     let completed = 0;
     let failed = 0;
     for (const job of jobs) {
+      // Claim the job BEFORE running it, and wait for that write to be
+      // durable. A job that kills the isolate outright (OOM, CPU limit) never
+      // reaches the catch below, so if the reschedule came after the await,
+      // every alarm retry would pick the same job again and starve the rest.
+      // Claimed first, a crash costs only that one run.
+      this.claimJob(job, now);
+      await this.ctx.storage.sync();
+
       const jobStartedAt = Date.now();
       let result: Record<string, number> = { processed: 0 };
       let status = "ok";
@@ -3734,20 +3772,6 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
           })
         );
       }
-      this.sql.exec("DELETE FROM scheduled_jobs WHERE id = ?", job.id);
-      if (job.every_ms !== null && job.every_ms > 0) {
-        // Skip missed intervals rather than firing a backlog.
-        let nextRun = job.run_at + job.every_ms;
-        while (nextRun <= now) nextRun += job.every_ms;
-        this.sql.exec(
-          "INSERT INTO scheduled_jobs (run_at, kind, payload, every_ms, created_at) VALUES (?, ?, ?, ?, ?)",
-          nextRun,
-          job.kind,
-          job.payload,
-          job.every_ms,
-          now
-        );
-      }
     }
 
     this.armedAlarm = null;
@@ -3761,6 +3785,21 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         duration_ms: Math.max(0, Date.now() - alarmStartedAt),
       })
     );
+  }
+
+  /**
+   * Take a due job off the schedule: a one-off is deleted, a recurring one is
+   * advanced to its next slot. At-most-once per slot, whatever the outcome.
+   */
+  private claimJob(job: JobRow, now: number): void {
+    if (job.every_ms !== null && job.every_ms > 0) {
+      // Skip missed intervals rather than firing a backlog.
+      let nextRun = job.run_at + job.every_ms;
+      while (nextRun <= now) nextRun += job.every_ms;
+      this.sql.exec("UPDATE scheduled_jobs SET run_at = ? WHERE id = ?", nextRun, job.id);
+    } else {
+      this.sql.exec("DELETE FROM scheduled_jobs WHERE id = ?", job.id);
+    }
   }
 
   /** Queue a one-off job; automations can use this via ctx.sql too. */
@@ -3781,7 +3820,13 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       case "prune_changes": {
         const changes = this.pruneChanges();
         const runs = this.pruneAutomationRuns();
-        return { changes_pruned: changes, automation_runs_pruned: runs, processed: changes + runs };
+        const audit = this.pruneAudit(now);
+        return {
+          changes_pruned: changes,
+          automation_runs_pruned: runs,
+          audit_pruned: audit,
+          processed: changes + runs + audit,
+        };
       }
       case "backup":
         return this.runBackup(now);
@@ -3827,38 +3872,145 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     return this.sql.exec("DELETE FROM automation_runs WHERE id <= ?", floor).rowsWritten;
   }
 
+  /**
+   * Deletes audit rows older than AUDIT_RETENTION_DAYS, oldest first, in
+   * batches of AUDIT_PRUNE_BATCH and at most AUDIT_PRUNE_MAX_BATCHES per run.
+   * The inner SELECT walks `idx_audit_at` and the outer DELETE is by rowid.
+   * RETURNING gives an exact count; rowsWritten would include index writes.
+   */
+  private pruneAudit(now: number): number {
+    const cutoff = now - AUDIT_RETENTION_DAYS * DAY_MS;
+    let deleted = 0;
+    for (let batch = 0; batch < AUDIT_PRUNE_MAX_BATCHES; batch++) {
+      const n = this.sql
+        .exec(
+          `DELETE FROM audit WHERE id IN (
+             SELECT id FROM audit WHERE at < ? ORDER BY at LIMIT ?
+           ) RETURNING id`,
+          cutoff,
+          AUDIT_PRUNE_BATCH
+        )
+        .toArray().length;
+      deleted += n;
+      if (n < AUDIT_PRUNE_BATCH) break;
+    }
+    return deleted;
+  }
+
   /** Manual trigger for the daily backup (admin route); same code path as the
-   *  scheduled job, including the prune and orphan sweep. */
+   *  scheduled job, including the prune, the orphan sweep and the outcome
+   *  recorded in `job_status`. */
   runBackupNow(): Promise<Record<string, number>> {
     return this.runBackup(Date.now());
   }
 
   /**
+   * The backup's last recorded outcome. `stale` compares against `now`, so it
+   * also catches a backup that stopped running without ever reporting a
+   * failure (an isolate killed mid-dump never reaches the catch). The error
+   * text and object key are for admins; /api/health exposes only the times
+   * and the flag.
+   */
+  getBackupStatus(now: number = Date.now()): BackupStatus {
+    const row = this.sql
+      .exec<{
+        last_success_at: number | null;
+        last_success_detail: string | null;
+        last_failure_at: number | null;
+        last_failure_error: string | null;
+      }>(
+        `SELECT last_success_at, last_success_detail, last_failure_at, last_failure_error
+         FROM job_status WHERE kind = 'backup'`
+      )
+      .toArray()[0];
+    const lastSuccessAt = row?.last_success_at ?? null;
+    const detail =
+      row?.last_success_detail != null
+        ? (safeJson(row.last_success_detail) as BackupStatus["lastSuccess"])
+        : null;
+    return {
+      lastSuccessAt,
+      lastSuccess: detail,
+      lastFailureAt: row?.last_failure_at ?? null,
+      lastFailureError: row?.last_failure_error ?? null,
+      stale: lastSuccessAt === null || now - lastSuccessAt > BACKUP_STALE_MS,
+    };
+  }
+
+  /**
    * Dumps every user table to gzipped NDJSON in R2 (`backups/YYYY-MM-DD.ndjson.gz`,
    * one `{"table":...,"row":...}` line per row) and prunes to the newest 30
-   * objects under `backups/`. A thrown error here is caught by alarm()'s
-   * per-job try/catch like every other job kind — it does not wedge the
-   * schedule, and the job's `every_ms` reschedule (also in alarm(), outside
-   * the try/catch) fires it again tomorrow regardless of today's outcome.
+   * objects under `backups/`. The outcome lands in `job_status` either way: a
+   * success once the object is in R2, a failure (then rethrown to alarm()'s
+   * per-job catch) if the dump, the put, or the post-backup cleanup throws.
+   * alarm() has already advanced the job to tomorrow before this runs.
    */
   private async runBackup(now: number): Promise<Record<string, number>> {
-    const tables = backupTableNames(this.sql);
-    let rows = 0;
-    const lines: string[] = [];
-    for (const table of tables) {
-      const tableRows = this.sql.exec<Record<string, SqlStorageValue>>(`SELECT * FROM ${table}`).toArray();
-      for (const row of tableRows) {
-        lines.push(JSON.stringify({ table, row }));
-        rows += 1;
+    let written: string | null = null;
+    try {
+      const tables = backupTableNames(this.sql);
+      let rows = 0;
+      const lines: string[] = [];
+      for (const table of tables) {
+        const tableRows = this.sql.exec<Record<string, SqlStorageValue>>(`SELECT * FROM ${table}`).toArray();
+        for (const row of tableRows) {
+          lines.push(JSON.stringify({ table, row }));
+          rows += 1;
+        }
       }
+      const ndjson = lines.length > 0 ? lines.join("\n") + "\n" : "";
+      const gz = await gzipText(ndjson);
+      const key = `backups/${backupDateKey(now)}.ndjson.gz`;
+      await this.env.ATTACHMENTS.put(key, gz);
+      written = key;
+      this.recordJobOutcome("backup", now, { success: { key, rows, bytes: gz.byteLength } });
+      const pruned = await pruneOldBackups(this.env.ATTACHMENTS, BACKUP_RETENTION);
+      const sweptDeletes = await this.sweepPendingObjectDeletes();
+      return { processed: rows, tables: tables.length, bytes: gz.byteLength, pruned, sweptDeletes };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.recordJobOutcome("backup", now, {
+        failure:
+          written === null ? message : `${written} was written, but post-backup cleanup failed: ${message}`,
+      });
+      throw err;
     }
-    const ndjson = lines.length > 0 ? lines.join("\n") + "\n" : "";
-    const gz = await gzipText(ndjson);
-    const key = `backups/${backupDateKey(now)}.ndjson.gz`;
-    await this.env.ATTACHMENTS.put(key, gz);
-    const pruned = await pruneOldBackups(this.env.ATTACHMENTS, BACKUP_RETENTION);
-    const sweptDeletes = await this.sweepPendingObjectDeletes();
-    return { processed: rows, tables: tables.length, bytes: gz.byteLength, pruned, sweptDeletes };
+  }
+
+  /**
+   * Upsert one job kind's row in `job_status`. Never throws: failing to
+   * record an outcome must not turn a good backup into a failed job.
+   */
+  private recordJobOutcome(
+    kind: string,
+    at: number,
+    outcome: { success: Record<string, unknown> } | { failure: string }
+  ): void {
+    try {
+      if ("success" in outcome) {
+        this.sql.exec(
+          `INSERT INTO job_status (kind, last_success_at, last_success_detail) VALUES (?, ?, ?)
+           ON CONFLICT (kind) DO UPDATE SET
+             last_success_at = excluded.last_success_at,
+             last_success_detail = excluded.last_success_detail`,
+          kind,
+          at,
+          JSON.stringify(outcome.success)
+        );
+      } else {
+        this.sql.exec(
+          `INSERT INTO job_status (kind, last_failure_at, last_failure_error) VALUES (?, ?, ?)
+           ON CONFLICT (kind) DO UPDATE SET
+             last_failure_at = excluded.last_failure_at,
+             last_failure_error = excluded.last_failure_error`,
+          kind,
+          at,
+          outcome.failure.slice(0, 2_000)
+        );
+      }
+    } catch (err) {
+      console.error("cannot record job outcome", kind, err);
+    }
   }
 
   /**

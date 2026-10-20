@@ -2,6 +2,7 @@
 import { Hono } from "hono";
 import { Workspace } from "@flow/core";
 import { authMiddleware } from "./auth.js";
+import { cachedBackupHealth } from "./do.js";
 import { onError, notFoundHandler } from "./errors.js";
 import { mcpHandler } from "./mcp/index.js";
 import { handleDeadLetterBatch, handleSideEffectBatch } from "./side-effects/index.js";
@@ -30,10 +31,20 @@ const app = new Hono<AppEnv>();
 app.onError(onError);
 app.notFound(notFoundHandler);
 
-// Liveness. Public by design so uptime checks do not need a credential.
-app.get("/api/health", (c) =>
-  c.json({ ok: true, service: "flow", ts: Date.now() })
-);
+// Liveness plus backup freshness. Public by design so uptime checks do not
+// need a credential, which is why `backup` carries only times and the stale
+// flag; the error text and object key live on GET /api/admin/backup. A stale
+// backup keeps `ok: true` (the app is up); an unreachable DO is a 503. The
+// answer is cached per isolate for a minute (see cachedBackupHealth).
+app.get("/api/health", async (c) => {
+  try {
+    const backup = await cachedBackupHealth(c.env);
+    return c.json({ ok: true, service: "flow", ts: Date.now(), backup });
+  } catch (err) {
+    console.error("health: workspace unreachable", err instanceof Error ? err.message : err);
+    return c.json({ ok: false, service: "flow", ts: Date.now(), backup: null }, 503);
+  }
+});
 
 /**
  * Auth gate for everything that is not the SPA. `authMiddleware` lets

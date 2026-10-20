@@ -191,3 +191,51 @@ describe("POST /import/attachments", () => {
     ).rejects.toThrow(/non-HTTPS/);
   });
 });
+
+describe("GET /admin/backup", () => {
+  const status = {
+    lastSuccessAt: 1_758_690_000_000,
+    lastSuccess: { key: "backups/2026-09-24.ndjson.gz", rows: 1234, bytes: 56_789 },
+    lastFailureAt: 1_758_600_000_000,
+    lastFailureError: "R2 put failed: 503",
+    stale: false,
+  };
+
+  function appAs(role: "owner" | "member") {
+    const app = new Hono<AppEnv>();
+    app.onError(onError);
+    const auth = {
+      user: { id: "us_x", email: "x@example.com", role },
+      actor: { userId: "us_x", via: "api", apiKeyId: null, automationRuleId: null },
+      apiKey: null,
+    } as AuthContext;
+    app.use("*", async (c, next) => {
+      c.set("auth", auth);
+      await next();
+    });
+    app.route("/api", importRoutes);
+    const getBackupStatus = vi.fn().mockResolvedValue(status);
+    const env = {
+      WORKSPACE: {
+        idFromName: vi.fn().mockReturnValue({}),
+        get: vi.fn().mockReturnValue({ getBackupStatus }),
+      },
+    } as unknown as Env;
+    const get = () => app.fetch(new Request("https://flow.example/api/admin/backup"), env);
+    return { get, getBackupStatus };
+  }
+
+  it("gives admins the full status, including the error and object key /api/health leaves out", async () => {
+    const { get } = appAs("owner");
+    const res = await get();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(status);
+  });
+
+  it("refuses members without reading the status", async () => {
+    const { get, getBackupStatus } = appAs("member");
+    const res = await get();
+    expect(res.status).toBe(403);
+    expect(getBackupStatus).not.toHaveBeenCalled();
+  });
+});

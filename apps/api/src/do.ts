@@ -1,6 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 import type { z } from "zod";
-import type { ImportBatch, ImportResult, Workspace } from "@flow/core";
+import type { BackupStatus, ImportBatch, ImportResult, Workspace } from "@flow/core";
 import {
   CreateListInput as CreateListSchema,
   CreateSpaceInput as CreateSpaceSchema,
@@ -268,6 +268,54 @@ export interface WorkspaceApi extends WorkspaceRpc {
    * (it only writes to R2).
    */
   runBackupNow(): Promise<Record<string, number>>;
+  /**
+   * Last recorded backup outcome from `job_status`: success time plus object
+   * key / row count, failure time plus error message, and `stale` (no success
+   * in 36h). The error and key are admin-only; /api/health returns only
+   * `publicBackupHealth` of this.
+   */
+  getBackupStatus(): Promise<BackupStatus>;
+}
+
+/**
+ * The slice of BackupStatus that is safe on the unauthenticated /api/health:
+ * times and the stale flag, never the error text or the bucket key.
+ */
+export function publicBackupHealth(status: BackupStatus): PublicBackupHealth {
+  return {
+    lastSuccessAt: status.lastSuccessAt,
+    lastFailureAt: status.lastFailureAt,
+    stale: status.stale,
+  };
+}
+
+export type PublicBackupHealth = {
+  lastSuccessAt: number | null;
+  lastFailureAt: number | null;
+  stale: boolean;
+};
+
+/** How long an isolate reuses the last good answer for /api/health. */
+export const HEALTH_CACHE_MS = 60_000;
+let healthCache: { at: number; backup: PublicBackupHealth } | null = null;
+
+/**
+ * `publicBackupHealth`, cached per isolate. /api/health is public, so without
+ * this every uptime ping (or anyone hammering it) is an RPC into the one DO
+ * that serves every mutation. Backups move once a day, so a minute-old answer
+ * loses nothing. Only successes are cached: an unreachable DO is re-checked on
+ * every call, so the 503 stays live.
+ */
+export async function cachedBackupHealth(env: Env, now = Date.now()): Promise<PublicBackupHealth> {
+  if (healthCache && now - healthCache.at < HEALTH_CACHE_MS) return healthCache.backup;
+  const backup = publicBackupHealth(await workspace(env).getBackupStatus());
+  healthCache = { at: now, backup };
+  return backup;
+}
+
+/** Test hook: forget the cached health answer. */
+export function resetHealthCache(): void {
+  healthCache = null;
 }
 
 /**

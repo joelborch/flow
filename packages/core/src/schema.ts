@@ -443,6 +443,22 @@ const PENDING_OBJECT_DELETES: string[] = [
    )`,
 ];
 
+// Last outcome of a scheduled job, one row per job kind. The daily backup
+// failed silently for four days in August 2026 because its only trace was a
+// console line; the backup job now writes its row here on every run, and
+// /api/health reads it to flag a stale backup. `last_success_detail` is JSON
+// (object key, row count, bytes). IF NOT EXISTS so it is a no-op on an
+// instance that already has the table.
+const JOB_STATUS: string[] = [
+  `CREATE TABLE IF NOT EXISTS job_status (
+     kind TEXT PRIMARY KEY,
+     last_success_at INTEGER,
+     last_success_detail TEXT,
+     last_failure_at INTEGER,
+     last_failure_error TEXT
+   )`,
+];
+
 /**
  * Base schema first, then the automation engine's tables, then notifications.
  *
@@ -479,6 +495,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { id: "core-0008-pending-object-deletes", statements: PENDING_OBJECT_DELETES },
   { id: "core-0009-subtask-note", statements: SUBTASK_NOTE },
   { id: ASSIGNMENT_ATTRIBUTION_MIGRATION_ID, statements: ASSIGNMENT_ATTRIBUTION },
+  { id: "core-0011-job-status", statements: JOB_STATUS },
 ];
 
 /**
