@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { messageIdsIn, normalizeMessageId, senderAllowed } from "./email-intake.js";
+import { messageIdsIn, normalizeMessageId, replySubject, senderAllowed } from "./email-intake.js";
 
 // ---------------------------------------------------------------------------
 // The pure halves of email intake: who may write in, and how Message-ID /
@@ -68,5 +68,22 @@ describe("messageIdsIn", () => {
     expect(messageIdsIn(undefined)).toEqual([]);
     expect(messageIdsIn("")).toEqual([]);
     expect(messageIdsIn("no ids here")).toEqual([]);
+  });
+});
+
+describe("replySubject", () => {
+  it("prefixes Re: once, dropping earlier reply and forward prefixes and line breaks", () => {
+    expect(replySubject("Printer jammed")).toBe("Re: Printer jammed");
+    expect(replySubject("RE: Fwd: re :  Printer jammed")).toBe("Re: Printer jammed");
+    expect(replySubject("AW: Hours\r\nupdate")).toBe("Re: Hours update");
+    expect(replySubject("Re:")).toBe("Re: your request");
+    expect(replySubject("Regarding hours")).toBe("Re: Regarding hours");
+  });
+
+  it("stays fast on a long run of spaces", () => {
+    const started = performance.now();
+    expect(replySubject(`re:${" ".repeat(50_000)}x`)).toBe("Re: x");
+    expect(replySubject(`re ${" ".repeat(50_000)}x`).startsWith("Re: re")).toBe(true);
+    expect(performance.now() - started).toBeLessThan(200);
   });
 });

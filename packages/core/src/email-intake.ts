@@ -48,13 +48,17 @@ export const EMAIL_REPLY_REFERENCE_LIMIT = 20;
  * do line breaks, which a header can't carry.
  */
 export function replySubject(title: string): string {
-  const base = title
-    .replace(/[\r\n]+/g, " ")
-    .replace(/^(\s*(re|fwd?|aw)\s*:\s*)+/i, "")
-    .trim()
-    .slice(0, 200);
+  let base = title.replace(/[\r\n]+/g, " ").trim();
+  // One prefix at a time: a single /^(\s*(re|fwd?|aw)\s*:\s*)+/ is
+  // polynomial on long runs of spaces, and the title came from a sender.
+  for (let m = REPLY_PREFIX.exec(base); m !== null; m = REPLY_PREFIX.exec(base)) {
+    base = base.slice(m[0].length).trimStart();
+  }
+  base = base.trim().slice(0, 200);
   return base === "" ? "Re: your request" : `Re: ${base}`;
 }
+
+const REPLY_PREFIX = /^(?:re|fwd?|aw)[ \t]*:/i;
 
 /** An attachment the Worker has already written to R2. */
 export interface EmailIngestAttachment {
