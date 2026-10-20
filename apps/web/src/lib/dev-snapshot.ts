@@ -125,13 +125,16 @@ export function devSnapshot(taskCount = 48): BoardSnapshot {
 
       const subCount = rnd() > 0.55 ? 2 + Math.floor(rnd() * 4) : 0;
       for (let s = 0; s < subCount; s++) {
+        // Some steps carry an assignee and a due date so My Work's subtask
+        // rows have something to show under vite dev.
+        const owned = rnd() > 0.6;
         subtasks.push({
           id: `sb_${id}_${s}`,
           taskId: id,
           title: `Step ${s + 1}`,
           done: rnd() > 0.5,
-          assigneeId: null,
-          dueDate: null,
+          assigneeId: owned ? users[Math.floor(rnd() * users.length)]!.id : null,
+          dueDate: owned && rnd() > 0.4 ? now + Math.round((rnd() * 14 - 4)) * DAY : null,
           position: s,
           createdAt: now - DAY,
         });

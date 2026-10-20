@@ -3,10 +3,10 @@
 // re-scanning arrays, and must be called during render so the signal reads
 // register as dependencies.
 import { computed, type ReadonlySignal } from "@preact/signals";
-import type { List, Space, Status, User } from "@flow/shared";
+import type { List, Space, Status, Subtask, User } from "@flow/shared";
 import {
   listById as listMap, lists, listsBySpace, spaceById as spaceMap, spaces,
-  statusById as statusMap, tasks, userById as userMap, type StoreTask,
+  statusById as statusMap, subtasks, tasks, userById as userMap, type StoreTask,
 } from "../store/index.js";
 
 export function listById(listId: string | null | undefined): List | undefined {
@@ -60,6 +60,30 @@ export function myOpenTasks(meId: string | null | undefined): StoreTask[] {
     const bp = b.priority ? (rank[b.priority] ?? 9) : 9;
     if (ap !== bp) return ap - bp;
     return a.title.localeCompare(b.title);
+  });
+}
+
+/** A subtask assigned to me, paired with the open parent task it belongs to. */
+export type MyOpenSubtask = { subtask: Subtask; parent: StoreTask };
+
+/** Assigned to me, not done, on a still-open parent; due date then title.
+ *  A closed parent retires its checklist with it, so those never surface. */
+export function myOpenSubtasks(meId: string | null | undefined): MyOpenSubtask[] {
+  if (!meId) return [];
+  const out: MyOpenSubtask[] = [];
+  for (const arr of subtasks.value.values()) {
+    for (const s of arr) {
+      if (s.done || s.assigneeId !== meId) continue;
+      const parent = tasks.value.get(s.taskId);
+      if (!parent || isClosed(parent)) continue;
+      out.push({ subtask: s, parent });
+    }
+  }
+  return out.sort((a, b) => {
+    const ad = a.subtask.dueDate ?? Number.MAX_SAFE_INTEGER;
+    const bd = b.subtask.dueDate ?? Number.MAX_SAFE_INTEGER;
+    if (ad !== bd) return ad - bd;
+    return a.subtask.title.localeCompare(b.subtask.title);
   });
 }
 
