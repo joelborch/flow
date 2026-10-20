@@ -251,7 +251,9 @@ export async function createSubtask(taskId: string, title: string): Promise<void
   }
 }
 
-export async function addComment(taskId: string, body: string): Promise<void> {
+/** Resolves false when the post failed (already rolled back and toasted), so
+ *  the composer can hand the draft back instead of losing it. */
+export async function addComment(taskId: string, body: string): Promise<boolean> {
   const tempId = rid("cm");
   const optimistic: Comment = {
     id: tempId,
@@ -276,9 +278,11 @@ export async function addComment(taskId: string, body: string): Promise<void> {
       ...(comments.value.get(taskId) ?? []).filter((c) => c.id !== tempId && c.id !== created.id),
       created,
     ]);
+    return true;
   } catch (err) {
     put((comments.value.get(taskId) ?? []).filter((c) => c.id !== tempId));
     toast(`Couldn't post the comment — ${reason(err)}`, "error");
+    return false;
   }
 }
 

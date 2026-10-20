@@ -30,12 +30,20 @@ export function QuickAdd({
       if (!value.trim()) onClose();
       return;
     }
+    const draft = value;
+    const dismissed = dismissedInput;
     void createTask({
       listId,
       title,
       description: "",
       status: statusName,
       dueDate: parsed?.dueDate,
+    }).then((created) => {
+      // A failed create has toasted and pulled its card; hand the title back so
+      // it can be retried, unless the next one is already being typed.
+      if (created) return;
+      setValue((cur) => (cur === "" ? draft : cur));
+      setDismissedInput((cur) => cur ?? dismissed);
     });
     setValue("");
     setDismissedInput(null);
