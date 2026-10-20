@@ -205,6 +205,19 @@ See [AGENTS_AND_MCP.md](AGENTS_AND_MCP.md) for other clients and the full tool r
 
 If you're migrating, run the importer now, before the team starts creating tasks — see [IMPORTING.md](IMPORTING.md). The import is idempotent, fires no automations, and streams attachments server-side into R2.
 
+## Email intake (optional)
+
+Each list can take tickets by email at `<alias>@<your intake domain>`: mail from an allowlisted sender becomes a task tagged `email`, and replies in the thread become comments.
+
+1. **Pick a domain Email Routing can own outright.** Onboarding a zone's apex to Email Routing replaces its MX records, so don't use a domain that already receives company mail. A small dedicated domain (e.g. `help.example.com` as its own zone) is the clean setup.
+2. In the Cloudflare dashboard, enable Email Routing on that zone and point its **catch-all** rule at this Worker. Each list's alias then works without its own rule.
+3. Set `EMAIL_INTAKE_DOMAIN` in `wrangler.jsonc` and redeploy. It tells the UI and API which domain to show next to each alias.
+4. In **Settings → Inbound**, give a list an alias and a sender allowlist (exact addresses or whole `@domains`). Anything else gets a polite bounce.
+5. Send a test message and check `wrangler tail` for the `email intake auth` line. Mail Cloudflare authenticated (aligned DMARC, DKIM or SPF) is filed normally; anything else is tagged `unverified`. Once you've seen the header, you can set `EMAIL_INTAKE_ACK` to `"true"` to send authenticated senders a short acknowledgement, threaded on their message, with Reply-To on the intake address.
+6. Optional: `EMAIL_INTAKE_REPLY="true"` lets you email a comment back to the sender, either from the app or with an API key an admin allowed (`PATCH /api/api-keys/:id` with `{"canEmailRequesters": true}`, then `POST /api/tasks/:id/comments` with `{"emailToRequester": true}`). The comment is the email, and the task records "Emailed to …". Replies go to unverified senders too, since the address is always on the allowlist and a forger never receives the reply.
+
+Both acknowledgements and replies go out through `SEND_EMAIL` from `EMAIL_FROM`, so finish [Email sending](#6-email-sending) first.
+
 ## Local development
 
 ```bash
@@ -224,7 +237,7 @@ curl -s localhost:8787/api/me | jq
 
 ## Operations notes
 
-- **Backups.** The workspace is one SQLite database inside a Durable Object; Cloudflare's [point-in-time recovery](https://developers.cloudflare.com/durable-objects/api/sql-storage/) covers SQLite-backed DOs. For belt-and-braces, `GET /api/snapshot` plus the audit log gives you an application-level export you can cron from anywhere with an API key. The DO also runs its own daily backup job — every table gzipped to NDJSON (one `{"table":...,"row":...}` line per row) and written to the attachments R2 bucket under `backups/YYYY-MM-DD.ndjson.gz`, at 05:00 UTC, with the newest 30 objects retained. To restore, the file is just table/row NDJSON — read it, group by table, and re-insert.
+- **Backups.** The workspace is one SQLite database inside a Durable Object; Cloudflare's [point-in-time recovery](https://developers.cloudflare.com/durable-objects/api/sql-storage/) covers SQLite-backed DOs. For belt-and-braces, `GET /api/snapshot` plus the audit log gives you an application-level export you can cron from anywhere with an API key. The DO also runs its own daily backup job — every table gzipped to NDJSON (one `{"table":...,"row":...}` line per row) and written to the attachments R2 bucket under `backups/YYYY-MM-DD.ndjson.gz`, at 05:00 UTC, with the newest 30 objects retained. To restore, the file is just table/row NDJSON — read it, group by table, and re-insert. Every run records its outcome: `/api/health` reports `backup.stale` after 36 hours without a success, `GET /api/admin/backup` shows the last error, and `POST /api/admin/backup` runs one on demand.
 - **Logs.** `observability.enabled` is on, so `pnpm exec wrangler tail` from `apps/api` streams structured logs — including `[EMAIL_DRY_RUN] would send:` blocks and automation failures.
-- **Retention.** The delta log keeps its newest 50,000 rows (pruned daily); a reconnect older than that gets a fresh snapshot instead of a replay. The audit log is not pruned.
+- **Retention.** The delta log keeps its newest 50,000 rows (pruned daily); a reconnect older than that gets a fresh snapshot instead of a replay. The automation run log keeps its newest 20,000 rows, and audit entries older than 365 days are deleted by the same daily job.
 - **The DLQ.** Messages that fail 5 deliveries land in `flow-dlq`, where a consumer (`handleDeadLetterBatch`) logs each one and writes an `ok:false` row to the automation run log rather than dropping it silently — check the run log or `wrangler tail` when a webhook endpoint has been down.

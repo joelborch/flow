@@ -245,6 +245,30 @@ field-named error. `handoff` is in `TASK_DIFF_KEYS`, and `diffOf` compares
 object values by JSON, so a change ships the whole new object and an
 untouched handoff never appears in a patch.
 
+## Email intake and replies
+
+The Worker's `email()` handler parses each message and hands it to
+**`ingestEmail(input, actor)`**, which decides in one turn what it is: a new
+task in the intake's list (tagged `email`, plus `unverified` when Cloudflare
+couldn't authenticate the sender), a comment on the task an earlier message
+opened (matched through `References`, without touching its status), a
+duplicate, or a refusal (unknown alias, sender not on the allowlist, either
+rate limit). The outcome and its `email_messages` row commit together, so a
+redelivered message can never file twice. Errors no retry can fix carry the
+`EMAIL_INGEST_PERMANENT_ERROR` prefix, so the Worker bounces them.
+
+**`createComment`** with `emailToRequester` also emails the comment back to
+the sender whose email opened the task. Before anything is written it checks
+that `EMAIL_INTAKE_REPLY` is on, that the actor is a person in the app or an
+api key with `canEmailRequesters` (never MCP), and that the task has a
+requester whose intake alias still exists. The comment then records `emailTo`
+and `emailStatus: "sending"`, and an `email-reply` side effect is queued with
+the alias (for Reply-To), a `Re: <title>` subject and the thread's
+Message-IDs. **`markEmailReply(commentId, status)`** is the queue consumer's
+report: it moves a `sending` comment to `sent` or `failed` once, and later
+reports are ignored. **`setApiKeyEmailRequesters`** (owner/admin, never over
+MCP) turns the permission on or off for one key.
+
 ## importBatch
 
 ```ts
@@ -304,20 +328,29 @@ a snapshot". It is sent after `importBatch` (to everyone), and after
 `setSpaceVisibility` or a private space's `setSpaceMembers` (to the affected
 non-admin connections only — a client that just lost access holds a subtree it
 must forget, and one that just gained access has never seen the rows, and
-neither is expressible as a patch).
+neither is expressible as a patch). The same applies when any turn moves a task
+or list across spaces with a private end, including a `move_to_list`
+automation (`resyncForSpaceMoves`, run from `runTurn`), and to a user whose
+role crosses between member and owner/admin. Deactivating a user closes their
+sockets, and a deactivated user's `hello` is refused.
 
 ## Alarm and scheduled jobs
 
 A DO gets one alarm, so `scheduled_jobs` multiplexes it. `alarm()` drains rows
-with `run_at <= now` (100 at a time), re-inserts recurring ones (`every_ms`,
-skipping missed intervals rather than firing a backlog) and re-arms to the next
-`run_at`. A job that throws is logged and dropped rather than wedging the
-schedule, since alarms retry.
+with `run_at <= now` (100 at a time, backup last), and claims each one before
+running it: recurring jobs are advanced to their next `run_at` (skipping missed
+intervals rather than firing a backlog), one-off jobs are deleted, and that
+write is made durable first. So a job that throws, or kills the isolate
+outright, costs only that one run instead of wedging the schedule. The alarm
+then re-arms to the next `run_at`. Each kind's last success and failure are
+kept in `job_status`; `getBackupStatus` reads the backup's, and `/api/health`
+reports it as `stale` after 36 hours without a success.
 
 | Kind | Cadence | Work |
 | --- | --- | --- |
 | `due_date_check` | hourly | `sweepDueDateAutomations` — fires `due_date_approaching` rules; the engine's `(rule, task, dueDate)` guard makes it idempotent — **and** the snooze wake pass below |
-| `prune_changes` | daily, 09:00 UTC | Keep the last 50,000 `changes` rows |
+| `prune_changes` | daily, 09:00 UTC | Keep the last 50,000 `changes` rows, cap `automation_runs`, and delete `audit` rows older than 365 days (`AUDIT_RETENTION_DAYS`) |
+| `backup` | daily, 05:00 UTC | Gzipped NDJSON of every table to R2 `backups/YYYY-MM-DD.ndjson.gz` (30 kept), then sweep `pending_object_deletes` |
 
 `scheduleJob({ runAt, kind, payload?, everyMs? })` adds more.
 
@@ -361,6 +394,17 @@ Tables: `users`, `spaces`, `lists`, `statuses`, `tasks`, `subtasks`, `comments`,
 `attachments`, `space_members`, `api_keys`, `automation_rules`,
 `automation_runs`, `automation_due_fires`, `changes`, `audit`, `scheduled_jobs`,
 `tasks_fts`.
+
+`core-0014-email-replies` adds `comments.email_to` and `comments.email_status`
+(both NULL on an ordinary internal comment), `api_keys.can_email_requesters`
+(every key starts without it) and `email_messages.authenticated`, backfilled
+from each message's `email.ingest` audit row with anything the audit can't
+vouch for read as unverified.
+
+`core-0012-email-intake` adds `email_intakes` (one row per list that accepts
+mail; the alias is unique) and `email_messages`, the dedupe record keyed by
+(Message-ID, list) and written in the same turn as the task or comment it
+produced. The same rows drive threading and both hourly rate limits.
 
 `core-0013-handoffs` adds five nullable columns to `tasks`
 (`handoff_requested_by`, `handoff_state`, `handoff_return`, `handoff_context`

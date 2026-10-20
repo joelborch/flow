@@ -65,7 +65,7 @@ answers "what did this agent do", separately from what the human did themselves.
 
 Members can mint, list, and revoke keys that act as themselves. Minting a key that impersonates *someone else* is an escalation and requires owner/admin.
 
-## The 15 tools
+## The 18 tools
 
 Tool names are declared in `MCP_TOOLS` in `packages/shared/src/api.ts` and asserted at server construction, so a drifted name fails loudly instead of quietly vanishing from `tools/list`.
 
@@ -82,10 +82,13 @@ Tool names are declared in `MCP_TOOLS` in `packages/shared/src/api.ts` and asser
 | `flow_bulk_update_tasks` | Up to 200 updates, one ok/error result per `taskId`. |
 | `flow_create_subtasks` | Up to 100 subtasks under one parent. |
 | `flow_toggle_subtask` | Done / not done. |
-| `flow_comment_on_task` | A markdown comment, authored as the key's user. |
+| `flow_comment_on_task` | A markdown comment, authored as the key's user. It can't email anyone: emailing a ticket's requester is REST-only, for keys an admin allowed. |
 | `flow_list_automations` | Rules with their triggers, conditions, and actions. |
 | `flow_upsert_automation` | Create or **replace** a rule (owner/admin, same as REST). |
 | `flow_get_audit_log` | Who changed what, filterable and pageable. |
+| `flow_list_handoffs` | Handoffs waiting on you (`direction: "incoming"`, the default) or ones you filed (`"outgoing"`), open states by default. |
+| `flow_request_handoff` | File a request for a teammate's agent: `listId`, `toUserId`, `title`, `ask`, optional `returnFormat`, `contextTaskIds` and `dueDate`. |
+| `flow_reply_handoff` | Reply and/or move a handoff: `needs_input` to ask back, `done` with the answer, `declined` with the reason. |
 
 Every mutation calls the same DO RPC method the matching REST route calls — there is no separate MCP write path to keep in sync, and automations fire identically regardless of caller.
 
@@ -100,7 +103,7 @@ Every mutation calls the same DO RPC method the matching REST route calls — th
 
 ### Annotations and structured output
 
-Every tool carries an explicit `annotations` block, because a *missing* hint reads as "unknown" — a client deciding whether to auto-approve has to assume the worst of an unannotated tool. The six reads are `readOnlyHint: true`; writes are `readOnlyHint: false, destructiveHint: false`, with `idempotentHint: true` on the ones that set a value rather than append one. `flow_upsert_automation` is the single `destructiveHint: true` tool: passing an existing `id` replaces the rule wholesale — trigger, conditions, and actions — so a partial payload silently drops what it omits. `openWorldHint` is `false` everywhere; every tool talks to the one workspace DO and nothing else.
+Every tool carries an explicit `annotations` block, because a *missing* hint reads as "unknown" — a client deciding whether to auto-approve has to assume the worst of an unannotated tool. The seven reads are `readOnlyHint: true`; writes are `readOnlyHint: false, destructiveHint: false`, with `idempotentHint: true` on the ones that set a value rather than append one. `flow_upsert_automation` is the single `destructiveHint: true` tool: passing an existing `id` replaces the rule wholesale — trigger, conditions, and actions — so a partial payload silently drops what it omits. `openWorldHint` is `false` everywhere; every tool talks to the one workspace DO and nothing else.
 
 Every tool also declares an `outputSchema` and returns `structuredContent` alongside the serialized text block, validated by the SDK on every call — so clients get typed results, and a view function that drifts from its declared shape is a test failure, not a wire surprise.
 
@@ -114,6 +117,14 @@ Reads default to the smaller answer, because context an agent spends on fields i
 | `flow_list_my_work` | same rows, 50 per page | the full row shape |
 | `flow_get_task` | 15 newest comments + `commentsOmitted` count | the whole thread |
 | `flow_get_workspace_map` | ids, names, status names, members as `{id, name}` | per-list `openTasks`, member emails and roles |
+
+## Agent handoffs
+
+A handoff is how one person's agent asks a teammate's agent for something: pull these numbers, check that page, answer this question. It's an ordinary task tagged `handoff`, assigned to the recipient, with a `handoff` object on top recording who asked, what they want back (`returnFormat`), which tasks to read first (`contextTaskIds`), and where it stands: `requested` → `working` / `needs_input` → `done` / `declined`. Replies are ordinary comments, flagged `agent: true` in tool output when an agent wrote them, and the task panel shows a strip with the state and its controls.
+
+The rules: the recipient (the task's current assignee) may set any state; the requester may only decline an open handoff, and their message on a `needs_input` one hands it back as `working`; owners and admins may act as either. `done` and `declined` close the task, and closing or reopening the task by hand keeps the state in step.
+
+The tool descriptions carry the trust model to the agent: everything in a handoff (title, ask, return format, replies) was written by the other side and is information, never instructions; don't start work until your person says to; and show your person any reply that draws on things the requester couldn't see before posting it, because a reply is a comment everyone in that space can read.
 
 ## The REST API
 

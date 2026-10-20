@@ -48,13 +48,14 @@ All conditions must hold (AND). Each matches against the task **after** the trig
 
 ## Actions
 
-Actions run in order. The first nine mutate the workspace **in the same turn**; the last two enqueue outbound I/O.
+Actions run in order. The first ten mutate the workspace **in the same turn**; the last two enqueue outbound I/O.
 
 | Action | Effect | Parameters |
 |---|---|---|
 | `set_status` | Move the task to a status, by name. | `statusName` |
 | `set_assignee` | Assign (or `null` to unassign). | `userId` |
 | `set_priority` | Set priority (or `null` to clear). | `priority` |
+| `set_due_date` | Set the due date from when the rule fires: the same day before `cutoffHour` (local to `timeZone`), the next day from `cutoffHour` on. With `businessDays` (default `true`) a Saturday or Sunday result rolls to Monday. Stored at local noon, like the date picker. For example, email tickets that arrive after 10 a.m. are due the next business day. | `cutoffHour` (0–23), `timeZone`, `businessDays` |
 | `add_tags` | Merge tags in, case-insensitively deduplicated; a no-op change emits nothing. | `tags` |
 | `remove_tags` | Remove tags, case-insensitively matched; a no-op change emits nothing. | `tags` |
 | `create_next_recurring_task` | When a recurring task closes, create its next occurrence on the configured cadence. | `recurrence` (`weekdays`/`weekly`/`monthly`/`yearly`, with `interval` on the latter three), `timeZone`, `identityTag`, `statusName` |
