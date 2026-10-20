@@ -416,6 +416,12 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     // snapshot and the replay are both filtered by the identity this socket was
     // accepted with, so a member never receives private-space rows either way.
     const userId = this.connUserId(ws);
+    // upsertUser closes a deactivated user's sockets, and the Worker refuses
+    // them at upgrade; this catches a socket accepted in between the two.
+    if (this.isDeactivated(userId)) {
+      this.closeSocket(ws, 1008, "user deactivated");
+      return;
+    }
     const maxSeq = this.maxSeq();
     if (msg.sinceSeq === null) {
       this.send(ws, { type: "snapshot", snapshot: this.getSnapshot(userId) });
@@ -489,7 +495,9 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
-    ws.close(websocketCloseReplyCode(code), reason);
+    // The reply can race a close we started (a deactivated user's socket), in
+    // which case the socket is already closing and close() throws.
+    this.closeSocket(ws, websocketCloseReplyCode(code), reason);
   }
 
   async webSocketError(_ws: WebSocket, error: unknown): Promise<void> {
@@ -596,6 +604,77 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   }
 
   /**
+   * Resync the users for whom a task or list changed space in this turn.
+   *
+   * A move is broadcast as an ordinary update stamped with the NEW space, which
+   * is only a correct patch for someone who sees both ends: a member who sees
+   * only the destination gets `{listId, statusId, …}` for a task they never
+   * held, and one who sees only the source never learns it left (nor, for a
+   * list, that its tasks went with it). Like a visibility flip, that cannot be
+   * patched, so the floor is bumped and exactly those users resync. Same-list
+   * and same-space moves stop at the first checks, so ordinary drags stay cheap.
+   *
+   * Runs before `flush`, so an affected client sees `resync` first and drops
+   * the half-patch that follows instead of briefly rendering it.
+   */
+  private resyncForSpaceMoves(t: Turn): void {
+    const moves: Array<{ from: string | null; to: string | null }> = [];
+    for (const { delta, spaceId } of t.entries) {
+      if (delta.op !== "update" || delta.data === null) continue;
+      let from: string | null;
+      if (delta.entity === "task" && "listId" in delta.data) {
+        const prevListId = delta.prev?.["listId"];
+        if (typeof prevListId !== "string") continue;
+        from = this.spaceIdForList(prevListId);
+      } else if (delta.entity === "list" && "spaceId" in delta.data) {
+        const prevSpaceId = delta.prev?.["spaceId"];
+        if (typeof prevSpaceId !== "string") continue;
+        from = prevSpaceId;
+      } else {
+        continue;
+      }
+      if (from !== spaceId) moves.push({ from, to: spaceId });
+    }
+    if (moves.length === 0) return;
+
+    // Between two workspace-visible spaces everyone sees both ends already.
+    const restricted = privateSpaceIds(this.sql);
+    const isRestricted = (id: string | null) => id !== null && restricted.has(id);
+    if (!moves.some((m) => isRestricted(m.from) || isRestricted(m.to))) return;
+
+    // Offline clients replaying across this seq would hit the same hole.
+    bumpResyncFloor(this.sql, this.maxSeq());
+    this.resyncFor((userId) => {
+      const visible = visibleSpaceIds(this.sql, userId);
+      if (visible === null) return false;
+      const sees = (id: string | null) => id !== null && visible.has(id);
+      return moves.some((m) => sees(m.from) !== sees(m.to));
+    });
+  }
+
+  /** Every open socket accepted for this user id (see `ConnState`). */
+  private socketsFor(userId: string): WebSocket[] {
+    return this.ctx.getWebSockets().filter((ws) => this.connUserId(ws) === userId);
+  }
+
+  private closeSocket(ws: WebSocket, code: number, reason: string): void {
+    try {
+      ws.close(code, reason);
+    } catch {
+      // Already closing; the close handler cleans up.
+    }
+  }
+
+  /** Unknown ids are not "deactivated": they keep the member treatment. */
+  private isDeactivated(userId: string): boolean {
+    if (userId === "") return false;
+    const row = this.sql
+      .exec<{ deactivated: number }>("SELECT deactivated FROM users WHERE id = ?", userId)
+      .toArray()[0];
+    return row?.deactivated === 1;
+  }
+
+  /**
    * Replayed deltas paired with the space id STORED on each `changes` row at
    * emit time (null for pre-migration rows and genuinely space-less deltas).
    * The stored value survives row deletion, which live resolution does not.
@@ -641,6 +720,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     this.drainAutomations(t);
     // After automations, so a rule that reassigns or moves a task also notifies.
     this.drainNotifications(t);
+    // After automations too: a move_to_list rule can carry a task across spaces.
+    this.resyncForSpaceMoves(t);
     this.flush(t);
     return result;
   }
@@ -2734,7 +2815,11 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         after as unknown as Record<string, unknown>,
         ["name", "archived", "position", "spaceId"]
       );
-      t.emit("update", "list", after.id, patch);
+      // `prev.spaceId` is how resyncForSpaceMoves spots a cross-space move: the
+      // list and every task under it just changed visibility for someone.
+      t.emit("update", "list", after.id, patch, {
+        prev: prevOf(before as unknown as Record<string, unknown>, patch),
+      });
       t.audit("list.update", after.id, patch);
       return after;
     });
@@ -2871,10 +2956,27 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
   /** Upsert by id when given, otherwise by email (case-insensitive). */
   upsertUser(input: UpsertUserInput, actor: string | Actor): User {
-    return this.runTurn(toActor(actor), (t) => this.applyUserUpsert(t, input));
+    const { before, after } = this.runTurn(toActor(actor), (t) => this.applyUserUpsert(t, input));
+    if (before === null) return after;
+    // Crossing member <-> owner/admin changes everything this user may see,
+    // automation rules included. The user delta cannot express that, so replay
+    // from any earlier seq is invalid and their open sockets resync.
+    if (isPrivilegedRole(before.role) !== isPrivilegedRole(after.role)) {
+      bumpResyncFloor(this.sql, this.maxSeq());
+      if (!after.deactivated) {
+        for (const ws of this.socketsFor(after.id)) this.send(ws, { type: "resync" });
+      }
+    }
+    // The Worker refuses a deactivated user at upgrade, but a socket that is
+    // already open would otherwise keep streaming deltas indefinitely.
+    if (after.deactivated) {
+      for (const ws of this.socketsFor(after.id)) this.closeSocket(ws, 1008, "user deactivated");
+    }
+    return after;
   }
 
-  private applyUserUpsert(t: Turn, input: UpsertUserInput): User {
+  /** `before` is null for a newly created user, and equals `after` on a no-op. */
+  private applyUserUpsert(t: Turn, input: UpsertUserInput): { before: User | null; after: User } {
     const email = input.email.trim();
     const existingRows = this.sql
       .exec<UserRow>(
@@ -2909,7 +3011,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       );
       t.emit("create", "user", user.id, user as unknown as Record<string, unknown>);
       t.audit("user.create", user.id, { email: user.email, role: user.role });
-      return user;
+      return { before: null, after: user };
     }
 
     const before = toUser(existing);
@@ -2935,7 +3037,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       sets.push("clickup_id = ?");
       params.push(input.clickupId);
     }
-    if (sets.length === 0) return before;
+    if (sets.length === 0) return { before, after: before };
     this.sql.exec(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`, ...params, before.id);
     const after = toUser(
       this.sql
@@ -2953,7 +3055,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     );
     t.emit("update", "user", after.id, patch);
     t.audit("user.update", after.id, patch);
-    return after;
+    return { before, after };
   }
 
   createApiKey(input: CreateApiKeyInput, actor: string | Actor): ApiKey {

@@ -20,6 +20,11 @@
 // snapshot (~50KB) for up-to-date clients reconnecting before the next real
 // delta lands, which is cheap and self-heals.
 //
+// A second family writes a delta that is not enough on its own: a task or list
+// moved across spaces when either end is private, and a user crossing between
+// member and owner/admin. The delta replays, but the rows a user gained or lost
+// with it do not, so these bump the floor exactly the same way.
+//
 // The floor is workspace-wide, not per-user. `setSpaceMembers` /
 // `setSpaceVisibility` only actually invalidate replay for the users whose
 // visibility changed, so a per-user floor would be more precise — but the
