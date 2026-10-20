@@ -4,11 +4,14 @@ import { Board } from "./board/index.js";
 import { readBootCache, readCachedMe, setBootUserId } from "./lib/boot-cache.js";
 import { listPath, navigate, routeListId, routeTaskId } from "./lib/router.js";
 import { registerShell, shell, shellExists, shellModule } from "./lib/shell-bridge.js";
+import { DEMO, DEMO_EMBED, DEPLOY_URL, REPO_URL } from "./lib/demo.js";
+import { setupNeeded } from "./lib/setup.js";
 import { dismissToast, toasts } from "./lib/toast.js";
 import { settingsOpen } from "./settings/route.js";
 import * as shellMod from "./shell/index.js";
+import { SetupScreen } from "./shell/SetupScreen.js";
 import {
-  connect, connected, firstList, hydrate, hydrated, listById, listsBySpace, me, spaces, tasks,
+  bootDemo, connect, connected, firstList, hydrate, hydrated, listById, listsBySpace, me, spaces, tasks,
 } from "./store/index.js";
 import "./styles.css";
 
@@ -25,7 +28,10 @@ registerShell(shellMod);
 // The cache is written for whoever was signed in at the time. We cannot know
 // synchronously whether that is still this person, so store/ws.ts reconciles it
 // against /api/me a moment later and wipes-and-reloads on a mismatch.
-{
+if (DEMO) {
+  // The static demo has no server and no cache worth trusting: sample board now.
+  bootDemo();
+} else {
   const cached = readBootCache();
   if (cached) {
     setBootUserId(cached.userId);
@@ -103,6 +109,21 @@ function Toasts() {
   );
 }
 
+/** Demo build only: says the board is sample data and points at the real thing. */
+function DemoBadge() {
+  return (
+    <div class="fixed bottom-3 right-3 z-30 flex items-center gap-2 rounded-full border border-line bg-surface/95 px-3 py-1.5 text-[12px] text-muted shadow-sm backdrop-blur">
+      <span>Read-only demo with sample data</span>
+      <a href={DEPLOY_URL} target="_blank" rel="noopener noreferrer" class="font-medium text-accent hover:underline">
+        Deploy your own
+      </a>
+      <a href={REPO_URL} target="_blank" rel="noopener noreferrer" class="text-muted hover:text-text hover:underline">
+        GitHub
+      </a>
+    </div>
+  );
+}
+
 // --- app -------------------------------------------------------------------
 
 function App() {
@@ -138,6 +159,9 @@ function App() {
     navigate(listPath(spaceId, listId, deepTaskId), { replace: true });
   }, [routed, fallbackList?.id, inSettings, deepTaskId, deepTaskListId, deepTaskSpaceId]);
 
+  // A fresh deploy with no sign-in configured: the steps, not an empty board.
+  if (setupNeeded.value) return <SetupScreen />;
+
   const listId = shellList ?? routed ?? fallbackList?.id ?? null;
 
   const content = listId ? (
@@ -154,6 +178,7 @@ function App() {
       <>
         {Shell ? <Shell>{content}</Shell> : <div class="h-screen w-screen" />}
         <Toasts />
+        {DEMO && !DEMO_EMBED && <DemoBadge />}
       </>
     );
   }
@@ -165,6 +190,7 @@ function App() {
         <main class="min-w-0 flex-1">{content}</main>
       </div>
       <Toasts />
+      {DEMO && !DEMO_EMBED && <DemoBadge />}
     </>
   );
 }

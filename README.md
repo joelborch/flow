@@ -1,8 +1,18 @@
 # Flow
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/joelborch/flow)
 
 **Agent-first project management you self-host on Cloudflare.** A drop-in replacement for the ClickUp/Asana/Linear slice most teams actually use — spaces, lists, boards, tasks, subtasks, comments, attachments, automations — built so that AI agents are first-class users, not an afterthought bolted onto a REST API.
+
+**[Try the read-only demo](https://flow-demo.joel-a67.workers.dev)** (sample data, nothing to install), or deploy your own copy with the button above.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/board-dark.png">
+    <img src="docs/assets/board.png" alt="A Flow board: four status columns of task cards with due dates, subtask progress, tags and assignees" width="900">
+  </picture>
+</p>
 
 One Cloudflare Worker serves the SPA, the REST API, an MCP server, and WebSockets. One Durable Object holds the entire workspace in SQLite. The Cloudflare free tier covers a small team: Workers, one DO, R2 for attachments, Queues for side effects. Your realistic monthly bill is $0–5, against $7–19 per seat per month for the SaaS tools it replaces.
 
@@ -32,6 +42,17 @@ Task managers are slow, expensive per seat, and hostile to agents. Flow inverts 
 - **Audit log** — every mutation records who, via what (`ui`/`api`/`mcp`/`webhook`/`automation`/`import`), which API key, which automation rule, and the diff
 - **ClickUp import** — a three-pass extract/transform/load pipeline with deterministic ids, so re-running is an upsert, not a duplicate workspace
 - **Dark mode, keyboard layer, instant loads** — Preact + Signals SPA, ~no dependencies, boot cache, early WebSocket open from an inline script in `index.html`
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/task-handoff.png" alt="A task panel showing an agent handoff: who asked, what they want back, its state, and the description"></td>
+    <td width="50%"><img src="docs/assets/my-work.png" alt="My Work: overdue, today, this week and no-date buckets, with an assigned-out rail"></td>
+  </tr>
+  <tr>
+    <td align="center">An agent handoff on a task</td>
+    <td align="center">My Work, with what you've assigned out</td>
+  </tr>
+</table>
 
 ## What it deliberately doesn't do
 
@@ -70,7 +91,9 @@ Every mutation runs as one synchronous turn inside the DO: write rows, append on
 
 ## Quickstart
 
-Prerequisites: Node 20+, [pnpm](https://pnpm.io), a Cloudflare account, `wrangler` (installed as a dev dependency).
+**One click.** The [Deploy to Cloudflare](https://deploy.workers.cloudflare.com/?url=https://github.com/joelborch/flow) button copies the repo into your GitHub account, creates the Durable Object, R2 bucket and queues, and deploys to a `*.workers.dev` address. Until sign-in is set up, Flow shows the remaining steps: create two Cloudflare Access applications, then set `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `OWNER_EMAIL` under the Worker's Settings → Variables ([details](docs/SELF_HOSTING.md#5-cloudflare-access)). The button deploys from the root `wrangler.jsonc`; for a custom domain and email, use the manual setup below. If the Cloudflare account already runs a Flow, rename the bucket and both queues on the button's setup page, because it preselects existing resources with the default names.
+
+**By hand.** Prerequisites: Node 20+, [pnpm](https://pnpm.io), a Cloudflare account, `wrangler` (installed as a dev dependency).
 
 ```bash
 git clone https://github.com/joelborch/flow.git
@@ -141,7 +164,7 @@ packages/core   The Workspace Durable Object: SQLite schema, mutation turns, aut
 
 ## Contributing
 
-PRs welcome. Ground rules: TypeScript strict everywhere, `pnpm typecheck` and `pnpm test` must pass, no new runtime dependencies without a strong reason (the whole app currently runs on hono, zod, preact, and @preact/signals), and contract changes go through `packages/shared`. Good first contributions: an Asana or Trello extractor for the importer ([docs/IMPORTING.md](docs/IMPORTING.md#future-work-asana-and-trello) shows exactly where it plugs in), and @-mention parsing (the notification preference already exists and is waiting for an emitter).
+PRs welcome. Ground rules: TypeScript strict everywhere, `pnpm typecheck` and `pnpm test` must pass, no new runtime dependencies without a strong reason (the whole app currently runs on hono, zod, preact, and @preact/signals), and contract changes go through `packages/shared`. Good first contributions: an Asana or Trello extractor for the importer ([docs/IMPORTING.md](docs/IMPORTING.md#future-work-asana-and-trello) shows exactly where it plugs in), and @-mention parsing (the notification preference already exists and is waiting for an emitter). [ROADMAP.md](ROADMAP.md) lists what's planned and what's deliberately out of scope.
 
 ## License
 

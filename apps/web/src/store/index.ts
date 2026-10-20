@@ -49,7 +49,7 @@ export {
 } from "./state.js";
 
 export { hydrate, applyDeltas } from "./apply.js";
-export { connect, disconnect } from "./ws.js";
+export { bootDemo, connect, disconnect } from "./ws.js";
 export {
   createTask,
   updateTask,

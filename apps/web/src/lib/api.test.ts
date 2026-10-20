@@ -57,6 +57,25 @@ describe("API session recovery", () => {
     );
   });
 
+  it("shows the setup steps instead of redirecting when sign-in isn't configured", async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url === "/api/setup"
+        ? new Response(JSON.stringify({ signIn: "unconfigured" }), { status: 200 })
+        : new Response(JSON.stringify({ error: "unauthenticated" }), { status: 401 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { api } = await import("./api.js");
+    const { setupNeeded } = await import("./setup.js");
+
+    await expect(api.me()).rejects.toMatchObject({ status: 401 });
+    await expect(api.me()).rejects.toMatchObject({ status: 401 });
+    expect(setupNeeded.value).toBe(true);
+    expect(replace).not.toHaveBeenCalled();
+    // Asked once per page load, however many requests 401.
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/setup")).toHaveLength(1);
+    expect(localStorage.getItem("flow.boot")).toBe("cached");
+  });
+
   it("surfaces the server error instead of looping after a recent retry", async () => {
     vi.stubGlobal("sessionStorage", storage({ "flow.auth-retry": String(Date.now()) }));
     vi.stubGlobal(

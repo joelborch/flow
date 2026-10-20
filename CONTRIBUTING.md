@@ -103,7 +103,7 @@ points:
   via an extract → transform → load pipeline with checkpoints; an Asana or
   Trello extractor that emits the same intermediate shape reuses transform and
   load for free.
-- **New MCP tools** — if an agent workflow you run needs a capability the 15
+- **New MCP tools** — if an agent workflow you run needs a capability the 18
   existing tools don't cover, propose it in an issue; tool names live in
   `packages/shared/src/api.ts` and implementations in `apps/api/src/mcp/`.
   See [docs/AGENTS_AND_MCP.md](docs/AGENTS_AND_MCP.md).

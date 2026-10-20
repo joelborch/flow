@@ -1,19 +1,40 @@
 {
   "name": "flow",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
-  "description": "Flow \u2014 fast task management on Cloudflare Workers",
+  "description": "Flow — fast task management on Cloudflare Workers",
   "scripts": {
     "dev": "pnpm --filter @flow/api dev",
     "dev:web": "pnpm --filter @flow/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "deploy": "pnpm --filter @flow/web build && pnpm --filter @flow/api deploy"
+    "deploy": "pnpm --filter @flow/web build && node scripts/deploy-worker.mjs",
+    "build:demo": "pnpm --filter @flow/web build:demo",
+    "deploy:demo": "pnpm build:demo && pnpm --filter @flow/api exec wrangler deploy --config ../../demo/wrangler.jsonc"
   },
   "devDependencies": {
     "typescript": "^5.7.2"
   },
-  "packageManager": "pnpm@11.12.0"
+  "packageManager": "pnpm@11.12.0",
+  "cloudflare": {
+    "bindings": {
+      "OWNER_EMAIL": {
+        "description": "Your email address. Signing in with it makes you the workspace owner. Set it under the Worker's **Settings → Variables** after the first deploy."
+      },
+      "ACCESS_TEAM_DOMAIN": {
+        "description": "Your Cloudflare Access team domain, like `your-team.cloudflareaccess.com`. Until it and `ACCESS_AUD` are set, Flow shows the setup steps instead of the app. See [the setup guide](https://github.com/joelborch/flow/blob/main/docs/SELF_HOSTING.md#5-cloudflare-access)."
+      },
+      "ACCESS_AUD": {
+        "description": "The **Application Audience (AUD) tag** of the Access application protecting Flow's hostname: a 64-character hex string from Zero Trust → Access → Applications → Overview."
+      },
+      "APP_HOSTNAME": {
+        "description": "The hostname Flow is served from, used in task links and webhook payloads: your `*.workers.dev` address or a custom domain."
+      },
+      "EMAIL_DRY_RUN": {
+        "description": "Leave `\"true\"` (log instead of send) until Cloudflare Email Sending is set up for `EMAIL_FROM`."
+      }
+    }
+  }
 }

@@ -13,6 +13,7 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import { APP_ORIGIN, settingsApi, type CreatedApiKey } from "../lib/api.js";
+import { DEMO } from "../lib/demo.js";
 import { Button, CopyBlock, ErrorNote, errorMessage } from "../settings/ui.js";
 import { me } from "../store/index.js";
 import { canUseQuickAdd } from "./quick-add.js";
@@ -156,7 +157,8 @@ export function Onboarding() {
   useEffect(() => {
     if (autoOpenChecked || !identified) return;
     autoOpenChecked = true;
-    if (!hasOnboarded()) onboardingOpen.value = true;
+    // The demo has no server to mint step 2's key against, so it never auto-opens.
+    if (!DEMO && !hasOnboarded()) onboardingOpen.value = true;
   }, [identified]);
 
   useEffect(() => {
