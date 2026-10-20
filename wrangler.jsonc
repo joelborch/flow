@@ -1,0 +1,56 @@
+// One-click deploy config, read by the "Deploy to Cloudflare" button in the
+// README (and by `pnpm deploy` from the repo root when you haven't created
+// apps/api/wrangler.jsonc). It serves Flow from a *.workers.dev hostname with
+// sign-in not yet configured: the app shows the remaining setup steps until
+// ACCESS_TEAM_DOMAIN, ACCESS_AUD and OWNER_EMAIL are set in the Worker's
+// Settings → Variables. For a custom domain, email sending and the rest, copy
+// apps/api/wrangler.example.jsonc to apps/api/wrangler.jsonc instead; see
+// docs/SELF_HOSTING.md.
+{
+  "$schema": "./apps/api/node_modules/wrangler/config-schema.json",
+  "name": "flow",
+  "main": "apps/api/src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "assets": {
+    "directory": "apps/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // API/MCP/inbound routes must always hit the Worker, never the SPA shell.
+    "run_worker_first": ["/api/*", "/mcp", "/mcp/*", "/ws"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "WORKSPACE", "class_name": "Workspace" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Workspace"] }],
+  // No send_email binding here: it needs Email Sending onboarding first, and
+  // EMAIL_DRY_RUN keeps every send a log line until then. Add it from
+  // apps/api/wrangler.example.jsonc when you're ready to send mail.
+  "r2_buckets": [{ "binding": "ATTACHMENTS", "bucket_name": "flow-attachments" }],
+  "queues": {
+    "producers": [{ "binding": "SIDE_EFFECTS", "queue": "flow-side-effects" }],
+    "consumers": [
+      { "queue": "flow-side-effects", "max_retries": 5, "dead_letter_queue": "flow-dlq" },
+      { "queue": "flow-dlq", "max_retries": 3 }
+    ]
+  },
+  // Values you set in the dashboard (Settings → Variables) survive the
+  // redeploy every push to your copy of the repo triggers.
+  "keep_vars": true,
+  "vars": {
+    "EMAIL_DRY_RUN": "true",
+    "APP_HOSTNAME": "flow.example.com",
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": "",
+    "OWNER_EMAIL": "owner@example.com",
+    "EMAIL_FROM": "flow@mail.example.com",
+    "EMAIL_FROM_NAME": "Flow",
+    "EMAIL_BRAND_NAME": "Flow",
+    "GLEAP_ATTACHMENT_HOSTS": ".gleap.io",
+    "EMAIL_INTAKE_DOMAIN": "",
+    "EMAIL_INTAKE_ACK": "false",
+    "EMAIL_INTAKE_REPLY": "false"
+  },
+  "observability": { "enabled": true }
+}

@@ -42,6 +42,15 @@ jobs:
       - name: Build web
         run: pnpm --filter @flow/web build
 
+      - name: Build the static demo
+        run: pnpm --filter @flow/web build:demo
+
+      # The committed root wrangler.jsonc is what the Deploy to Cloudflare
+      # button deploys; checked before the step below creates
+      # apps/api/wrangler.jsonc, so the one-click path is what runs.
+      - name: One-click config dry-run deploy
+        run: node scripts/deploy-worker.mjs --dry-run
+
       - name: Wrangler dry-run deploy
         working-directory: apps/api
         run: |
