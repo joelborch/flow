@@ -28,7 +28,7 @@ import { ToolContext } from "./context.js";
 import { registerFlowTools } from "./tools.js";
 
 const SERVER_NAME = "flow";
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = "0.2.0";
 
 /**
  * Read by the client before it has called anything, and often truncated — some

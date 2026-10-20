@@ -5,7 +5,7 @@
 
 **Agent-first project management you self-host on Cloudflare.** A drop-in replacement for the ClickUp/Asana/Linear slice most teams actually use — spaces, lists, boards, tasks, subtasks, comments, attachments, automations — built so that AI agents are first-class users, not an afterthought bolted onto a REST API.
 
-**[Try the read-only demo](DEMO_URL)** (sample data, nothing to install), or deploy your own copy with the button above.
+**[Try the read-only demo](https://flow-demo.joel-a67.workers.dev)** (sample data, nothing to install), or deploy your own copy with the button above.
 
 <p align="center">
   <picture>
@@ -164,7 +164,7 @@ packages/core   The Workspace Durable Object: SQLite schema, mutation turns, aut
 
 ## Contributing
 
-PRs welcome. Ground rules: TypeScript strict everywhere, `pnpm typecheck` and `pnpm test` must pass, no new runtime dependencies without a strong reason (the whole app currently runs on hono, zod, preact, and @preact/signals), and contract changes go through `packages/shared`. Good first contributions: an Asana or Trello extractor for the importer ([docs/IMPORTING.md](docs/IMPORTING.md#future-work-asana-and-trello) shows exactly where it plugs in), and @-mention parsing (the notification preference already exists and is waiting for an emitter).
+PRs welcome. Ground rules: TypeScript strict everywhere, `pnpm typecheck` and `pnpm test` must pass, no new runtime dependencies without a strong reason (the whole app currently runs on hono, zod, preact, and @preact/signals), and contract changes go through `packages/shared`. Good first contributions: an Asana or Trello extractor for the importer ([docs/IMPORTING.md](docs/IMPORTING.md#future-work-asana-and-trello) shows exactly where it plugs in), and @-mention parsing (the notification preference already exists and is waiting for an emitter). [ROADMAP.md](ROADMAP.md) lists what's planned and what's deliberately out of scope.
 
 ## License
 
