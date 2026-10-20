@@ -115,6 +115,10 @@ export const Search = svg([
   <circle cx="7" cy="7" r="3.75" />,
   <path d="M10 10l3 3" />,
 ]);
+export const MailIcon = svg([
+  <rect x="2" y="3.5" width="12" height="9" rx="1.5" />,
+  <path d="m2.5 4.5 5.5 4.5 5.5-4.5" />,
+]);
 export const Inbox = svg([
   <path d="M2 8.5h3l1 2h4l1-2h3" />,
   <path d="M3.5 3.5h9l1.5 5v4.5h-12V8.5l1.5-5Z" />,
