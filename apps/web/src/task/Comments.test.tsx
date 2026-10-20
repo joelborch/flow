@@ -2,7 +2,9 @@
 import { act } from "preact/test-utils";
 import { render } from "preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CommentComposer } from "./Comments.js";
+import type { Comment } from "@flow/shared";
+import { users } from "../store/index.js";
+import { CommentComposer, Comments } from "./Comments.js";
 
 let root: HTMLDivElement;
 
@@ -62,5 +64,34 @@ describe("CommentComposer", () => {
     await type("Second thought");
     await act(async () => finish(false));
     expect(textarea().value).toBe("Second thought");
+  });
+});
+
+describe("Comments", () => {
+  function comment(id: string, via: Comment["via"] | undefined): Comment {
+    const c = { id, taskId: "tk_1", authorId: "us_blake", body: `Reply ${id}`, createdAt: Number(id.slice(3)) };
+    // Comments loaded before `via` existed carry no field at all.
+    return (via === undefined ? c : { ...c, via }) as Comment;
+  }
+
+  it("labels agent-written replies and leaves human ones alone", () => {
+    users.value = [
+      { id: "us_blake", email: "blake@example.com", name: "Blake", role: "member", deactivated: false, createdAt: 0 },
+    ];
+    const thread = [
+      comment("cm_1", "api"),
+      comment("cm_2", "mcp"),
+      comment("cm_3", "ui"),
+      comment("cm_4", null),
+      comment("cm_5", undefined),
+    ];
+    act(() => render(<Comments comments={thread} />, root));
+
+    const labelled = Array.from(root.querySelectorAll("li")).map((li) =>
+      Array.from(li.querySelectorAll("span")).some((s) => s.textContent === "agent")
+    );
+    expect(labelled).toEqual([true, true, false, false, false]);
+    expect(root.querySelector('[title="Written by Blake\'s agent"]')).not.toBeNull();
+    users.value = [];
   });
 });

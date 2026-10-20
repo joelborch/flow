@@ -9,7 +9,7 @@
 //                 detail fetch or a delta has landed them)
 //   lookups      listById, spaceById, userById, statusById, listsBySpace, firstList
 //   derived      tasksByListAndStatus(listId), listBucket(listId), subtaskProgress(id)
-//   mutations    createTask, updateTask, moveTask, toggleSubtask, createSubtask,
+//   mutations    createTask, updateTask, setHandoffState, moveTask, toggleSubtask, createSubtask,
 //                addComment, deleteTask, fetchTaskDetail, prefetchTaskDetail,
 //                createSpace, updateSpace, createList, updateList
 //
@@ -53,6 +53,7 @@ export { connect, disconnect } from "./ws.js";
 export {
   createTask,
   updateTask,
+  setHandoffState,
   moveTask,
   setSubtaskAssignee,
   setSubtaskNote,

@@ -10,6 +10,12 @@ import { Avatar, SectionLabel } from "../shell/ui.js";
 import { Markdown } from "./markdown.js";
 import { isSubmitChord, useAutogrow } from "./autogrow.js";
 
+/** "api" and "mcp" are a person's own key, which in practice is their agent.
+ *  Comments from before `via` was recorded (null, or absent) read as human. */
+export function isAgentComment(comment: Comment): boolean {
+  return comment.via === "api" || comment.via === "mcp";
+}
+
 export function Comments({ comments }: { comments: Comment[] }) {
   const rows = [...comments].sort((a, b) => a.createdAt - b.createdAt);
 
@@ -27,6 +33,7 @@ export function Comments({ comments }: { comments: Comment[] }) {
         <ul class="space-y-4">
           {rows.map((c) => {
             const author = userById(c.authorId);
+            const agent = isAgentComment(c);
             return (
               <li key={c.id} class="flex gap-2.5">
                 {/* Imported threads reference authors who were never imported,
@@ -40,6 +47,14 @@ export function Comments({ comments }: { comments: Comment[] }) {
                 <div class="min-w-0 flex-1">
                   <div class="flex items-baseline gap-2">
                     <span class="text-[13px] font-medium text-text">{author?.name ?? "Unknown"}</span>
+                    {agent && (
+                      <span
+                        class="rounded bg-bg px-1 py-px text-[11px] font-medium text-muted"
+                        title={`Written by ${author ? `${author.name}'s` : "their"} agent`}
+                      >
+                        agent
+                      </span>
+                    )}
                     <span class="text-[11.5px] text-faint" title={formatDateTime(c.createdAt)}>
                       {relativeTime(c.createdAt)}
                     </span>

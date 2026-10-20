@@ -3,7 +3,7 @@
 import type {
   Comment, List, Space, Subtask, Task, TaskDetail, User,
   CreateListInput, CreateSpaceInput, CreateTaskInput, UpdateTaskInput, MoveTaskInput,
-  SearchTasksInput, SearchTasksResult,
+  SearchTasksInput, SearchTasksResult, ReplyHandoffInput,
   BoardSnapshot,
 } from "@flow/shared";
 
@@ -149,6 +149,15 @@ export const api = {
       taskId,
       body,
     }),
+
+  // An agent handoff's reply and/or state move. `comment` is null when no
+  // message was sent; both also arrive as WS deltas.
+  replyHandoff: (taskId: string, input: Omit<ReplyHandoffInput, "taskId">) =>
+    request<{ task: Task; comment: Comment | null }>(
+      "POST",
+      `/api/tasks/${encodeURIComponent(taskId)}/handoff`,
+      { ...input, taskId }
+    ),
 
   searchTasks: (input: SearchTasksInput) =>
     request<SearchTasksResult>("POST", "/api/tasks/search", input),

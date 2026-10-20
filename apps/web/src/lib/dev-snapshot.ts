@@ -157,6 +157,25 @@ export function devSnapshot(taskCount = 48): BoardSnapshot {
     mine.blockedNote = "waiting on design sign-off";
   }
 
+  // Likewise one open agent handoff, Mara's agent asking Alice's, so the
+  // panel's handoff strip and its state menu have something to show.
+  const closedIds = new Set(lists.flatMap((l) => l.statuses.filter((s) => s.type === "closed").map((s) => s.id)));
+  const ask = tasks.find(
+    (t) => t.assigneeId === "us_alice" && t !== mine && t.snoozedUntil === null && !closedIds.has(t.statusId)
+  );
+  if (ask) {
+    const context = tasks.find((t) => t !== ask && t.listId === ask.listId);
+    ask.tags = [...ask.tags, "handoff"];
+    ask.dueDate = now + 2 * DAY;
+    ask.handoff = {
+      requestedBy: "us_mara",
+      state: "working",
+      returnFormat: "A table of page, sessions and change date",
+      contextTaskIds: context ? [context.id] : [],
+      stateChangedAt: now - DAY,
+    };
+  }
+
   return { seq: 0, spaces, lists, tasks, subtasks, users, automationRules: [] };
 }
 
