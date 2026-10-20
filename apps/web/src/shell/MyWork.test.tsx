@@ -100,13 +100,19 @@ afterEach(() => {
 });
 
 describe("My Work assigned-out rail", () => {
-  it("shows five delegated items in the desktop preview and expands the rest", () => {
+  it("starts collapsed, then shows five delegated items and expands the rest", () => {
     for (let i = 1; i <= 6; i++) putTask(delegatedTask(i));
     flush();
     act(() => render(<MyWork />, root));
 
     const aside = root.querySelector("aside");
     expect(aside?.textContent).toContain("Assigned out");
+    expect(aside?.querySelectorAll("li")).toHaveLength(0);
+
+    const header = aside?.querySelector<HTMLButtonElement>('button[aria-expanded="false"]');
+    expect(header).not.toBeNull();
+    act(() => header?.click());
+    expect(header?.getAttribute("aria-expanded")).toBe("true");
     expect(aside?.textContent).toContain("Blake Rivers");
     expect(aside?.querySelectorAll("li")).toHaveLength(5);
 

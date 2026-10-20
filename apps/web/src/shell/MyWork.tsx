@@ -266,8 +266,8 @@ function AssignedOutRow({ item }: { item: AssignedOutItem }) {
   );
 }
 
-function AssignedOutCard({ items, compact = false }: { items: AssignedOutItem[]; compact?: boolean }) {
-  const [open, setOpen] = useState(!compact);
+function AssignedOutCard({ items }: { items: AssignedOutItem[] }) {
+  const [open, setOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const ordered = [...items].sort((a, b) => {
     const snoozed = Number(assignedIsSnoozed(a)) - Number(assignedIsSnoozed(b));
@@ -291,35 +291,24 @@ function AssignedOutCard({ items, compact = false }: { items: AssignedOutItem[];
 
   return (
     <section aria-label="Assigned out" class="overflow-hidden rounded-xl border border-line bg-surface">
-      {compact ? (
-        <button
-          type="button"
-          onClick={() => setOpen((value) => !value)}
-          aria-expanded={open}
-          class="flex w-full items-center gap-3 px-4 py-3 text-left"
-        >
-          <span class="min-w-0 flex-1">
-            <span class="flex items-center gap-2 text-[13px] font-semibold text-text">
-              Assigned out
-              <span class="rounded-full bg-accent-soft px-2 py-0.5 text-[10.5px] font-semibold tabular-nums text-accent">
-                {items.length}
-              </span>
-            </span>
-            <span class="mt-0.5 block text-[11.5px] text-muted">{summary}</span>
-          </span>
-          {open ? <ChevronDown class="h-3.5 w-3.5 text-faint" /> : <ChevronRight class="h-3.5 w-3.5 text-faint" />}
-        </button>
-      ) : (
-        <div class="flex items-start gap-3 border-b border-line px-4 py-3.5">
-          <span class="min-w-0 flex-1">
-            <span class="block text-[13px] font-semibold text-text">Assigned out</span>
-            <span class="mt-0.5 block text-[11.5px] text-muted">{summary}</span>
-          </span>
-          <span class="rounded-full bg-accent-soft px-2.5 py-1 text-[11px] font-semibold tabular-nums text-accent">
-            {items.length}
-          </span>
-        </div>
-      )}
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        class={cn(
+          "flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-raised",
+          open && "border-b border-line"
+        )}
+      >
+        <span class="min-w-0 flex-1">
+          <span class="block text-[13px] font-semibold text-text">Assigned out</span>
+          <span class="mt-0.5 block text-[11.5px] text-muted">{summary}</span>
+        </span>
+        <span class="rounded-full bg-accent-soft px-2.5 py-1 text-[11px] font-semibold tabular-nums text-accent">
+          {items.length}
+        </span>
+        {open ? <ChevronDown class="h-3.5 w-3.5 text-faint" /> : <ChevronRight class="h-3.5 w-3.5 text-faint" />}
+      </button>
 
       {open ? (
         items.length === 0 ? (
@@ -426,7 +415,7 @@ export function MyWork() {
         </header>
 
         <div class="xl:hidden">
-          <AssignedOutCard items={delegated} compact />
+          <AssignedOutCard items={delegated} />
         </div>
 
         <main class="min-w-0 xl:col-start-1 xl:row-start-2">
