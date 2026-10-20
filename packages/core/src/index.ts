@@ -456,7 +456,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
   /**
    * WebSocket upgrade at `/ws`. The api Worker authenticates the request and
-   * forwards it with `?userId=us_…`; the DO does not re-authenticate.
+   * forwards the user id in `X-Flow-User-Id`; `?userId=us_…` is a fallback for
+   * direct-to-DO callers. The DO does not re-authenticate.
    */
   fetch(req: Request): Response {
     const url = new URL(req.url);

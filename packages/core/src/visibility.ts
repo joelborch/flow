@@ -5,7 +5,8 @@ import type { Actor, Role, SpaceVisibility } from "@flow/shared";
 //
 // The model is deliberately small:
 //
-//   - Every space is "workspace" (the default) or "private".
+//   - New spaces default to "private"; stored legacy rows without a value read
+//     as "workspace" through the shared Space entity schema.
 //   - Owners and admins see every space, always.
 //   - A member sees workspace-visible spaces, plus private spaces they are a
 //     member of (`space_members`).
