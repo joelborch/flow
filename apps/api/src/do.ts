@@ -88,6 +88,11 @@ export interface WorkspaceApi extends WorkspaceRpc {
   getSnapshot(forUserId?: string): Promise<BoardSnapshot>;
   /** Throws "Space … is private" rather than returning a task the user can't see. */
   getTaskDetail(taskId: string, forUserId?: string): Promise<TaskDetail>;
+  /** Up to TASK_DETAILS_MAX tasks in one turn; missing or hidden ids land in `errors`. */
+  getTaskDetails(
+    taskIds: string[],
+    forUserId?: string
+  ): Promise<{ details: TaskDetail[]; errors: Array<{ taskId: string; error: string }> }>;
   searchTasks(input: SearchTasksInput, actor?: string | Actor): Promise<SearchTasksResult>;
   listUsers(): Promise<User[]>;
   listSubtasks(taskId: string): Promise<Subtask[]>;

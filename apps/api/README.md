@@ -332,6 +332,14 @@ flowcurl -X POST $FLOW/api/tasks/bulk \
   -H 'Content-Type: application/json' \
   -d '{"tasks":[{"listId":"ls_def456","title":"First"},
                 {"listId":"ls_def456","title":"Second","priority":"low"}]}'
+
+# Bulk read: the GET /api/tasks/:id detail for each id, in one DO turn.
+# Missing or hidden tasks land in errors instead of failing the batch.
+flowcurl -X POST $FLOW/api/tasks/details \
+  -H 'Content-Type: application/json' \
+  -d '{"taskIds":["tk_1","tk_2"]}'
+# {"details":[{"task":{...},"subtasks":[...],"comments":[...],"attachments":[...],...}],
+#  "errors":[{"taskId":"tk_2","error":"no task tk_2"}]}
 ```
 
 ### Subtasks

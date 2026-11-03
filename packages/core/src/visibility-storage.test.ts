@@ -471,3 +471,19 @@ describe("createSpace: born private", () => {
     expect(createDeltasFor(memberBSock.frames)).toHaveLength(0);
   });
 });
+
+describe("getTaskDetails", () => {
+  it("matches getTaskDetail for each task and reports hidden or missing ids", async () => {
+    const { ws, a, b, c } = await seededWorkspace();
+
+    const owner = ws.getTaskDetails([a.task.id, b.task.id, c.task.id], OWNER);
+    expect(owner.errors).toEqual([]);
+    expect(owner.details).toEqual([a, b, c].map((x) => ws.getTaskDetail(x.task.id, OWNER)));
+
+    const member = ws.getTaskDetails([a.task.id, b.task.id, "tk_missing"], MEMBER_A);
+    expect(member.details.map((d) => d.task.id)).toEqual([a.task.id]);
+    expect(member.errors.map((e) => e.taskId)).toEqual([b.task.id, "tk_missing"]);
+    expect(member.errors[0]!.error).toMatch(/private/i);
+    expect(JSON.stringify(member.details)).not.toContain(b.task.id);
+  });
+});

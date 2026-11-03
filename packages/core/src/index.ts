@@ -1667,6 +1667,29 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   }
 
   /**
+   * Many tasks' details in one DO turn, so a reader such as the monthly backup
+   * makes one RPC per page instead of one per task, and every detail in the
+   * batch comes from the same workspace state. A missing or hidden task becomes
+   * an entry in `errors` with getTaskDetail's message rather than failing the
+   * whole batch.
+   */
+  getTaskDetails(
+    taskIds: string[],
+    forUserId?: string
+  ): { details: TaskDetail[]; errors: Array<{ taskId: string; error: string }> } {
+    const details: TaskDetail[] = [];
+    const errors: Array<{ taskId: string; error: string }> = [];
+    for (const taskId of taskIds) {
+      try {
+        details.push(this.getTaskDetail(taskId, forUserId));
+      } catch (err) {
+        errors.push({ taskId, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return { details, errors };
+  }
+
+  /**
    * `actor` is optional for internal callers; when present, results are limited
    * to the spaces that user may see (including `total`, so paging stays honest).
    */
