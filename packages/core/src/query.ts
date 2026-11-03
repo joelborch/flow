@@ -14,20 +14,46 @@
 //     transactionSync with a deliberate throw at the end, so even a write that
 //     slipped through would roll back.
 //
+//   - Members see only their spaces. Owners/admins get the views over every
+//     space; for anyone else each space-owned view is built with a filter to
+//     the spaces visibleSpaceIds allows (queryViews), the same rule the
+//     snapshot and search apply.
+//
 // The DO is single-threaded and a running query can't be interrupted, so a
-// careless cross join stalls everyone until it finishes. The route is
-// owner/admin only for that reason as much as for visibility: views ignore
-// private-space membership, exactly like the audit log.
+// careless cross join stalls everyone until it finishes. Members therefore get
+// a lower row cap and a per-minute budget (QueryRateLimiter); owners/admins
+// keep neither limit.
 
-/** Views the caller's SQL can use. Names must never collide with a real table. */
-export const QUERY_VIEWS: Record<string, string> = {
-  spaces_v: `SELECT id, name, visibility, archived, created_by, created_at FROM spaces`,
-  space_members_v: `SELECT space_id, user_id, created_at FROM space_members`,
-  lists_v: `SELECT l.id, l.name, l.space_id, s.name AS space_name, l.archived, l.position, l.created_at
-    FROM lists l JOIN spaces s ON s.id = l.space_id`,
-  statuses_v: `SELECT id, list_id, name, type, position FROM statuses`,
-  users_v: `SELECT id, name, email, role, deactivated, created_at FROM users`,
-  tasks_v: `SELECT t.id, t.title, t.description, t.list_id, l.name AS list_name, l.space_id,
+/**
+ * The views, built for one caller. `visible` is visibleSpaceIds's answer: null
+ * for an owner/admin, who sees every space, or the ids of the spaces a member
+ * can see, which every space-owned view is filtered to. Names must never
+ * collide with a real table.
+ *
+ * The filter lives inside each view body, so it applies however the caller
+ * reaches the rows: a join, a subquery or their own CTE all start from a view,
+ * and the base tables stay unnameable. users_v is not filtered because the
+ * whole user list is already visible to members (GET /api/users).
+ */
+export function queryViews(visible: ReadonlySet<string> | null): Record<string, string> {
+  // Ids are written into the SQL as literals rather than bound, because the
+  // caller's text shares the statement and may hold its own ? placeholders.
+  const ids = visible === null ? "" : [...visible].map((id) => `'${id.replace(/'/g, "''")}'`).join(", ");
+  const where = (cond: (inVisible: (column: string) => string) => string): string =>
+    visible === null ? "" : `\n    WHERE ${cond((column) => `${column} IN (${ids})`)}`;
+  const visibleTasks = (inVisible: (column: string) => string) =>
+    `SELECT vt.id FROM tasks vt JOIN lists vl ON vl.id = vt.list_id WHERE ${inVisible("vl.space_id")}`;
+
+  return {
+    spaces_v: `SELECT id, name, visibility, archived, created_by, created_at FROM spaces${where((v) => v("id"))}`,
+    space_members_v: `SELECT space_id, user_id, created_at FROM space_members${where((v) => v("space_id"))}`,
+    lists_v: `SELECT l.id, l.name, l.space_id, s.name AS space_name, l.archived, l.position, l.created_at
+    FROM lists l JOIN spaces s ON s.id = l.space_id${where((v) => v("l.space_id"))}`,
+    statuses_v: `SELECT id, list_id, name, type, position FROM statuses${where(
+      (v) => `list_id IN (SELECT id FROM lists WHERE ${v("space_id")})`
+    )}`,
+    users_v: `SELECT id, name, email, role, deactivated, created_at FROM users`,
+    tasks_v: `SELECT t.id, t.title, t.description, t.list_id, l.name AS list_name, l.space_id,
       sp.name AS space_name, t.status_id, st.name AS status, st.type AS status_type,
       t.assignee_id, u.name AS assignee_name, u.email AS assignee_email, t.priority,
       t.due_date, date(t.due_date / 1000, 'unixepoch') AS due_on, t.start_date,
@@ -41,21 +67,31 @@ export const QUERY_VIEWS: Record<string, string> = {
     JOIN lists l ON l.id = t.list_id
     JOIN spaces sp ON sp.id = l.space_id
     LEFT JOIN statuses st ON st.id = t.status_id
-    LEFT JOIN users u ON u.id = t.assignee_id`,
-  subtasks_v: `SELECT s.id, s.task_id, t.title AS task_title, s.title, s.done, s.note,
+    LEFT JOIN users u ON u.id = t.assignee_id${where((v) => v("l.space_id"))}`,
+    subtasks_v: `SELECT s.id, s.task_id, t.title AS task_title, s.title, s.done, s.note,
       s.assignee_id, u.name AS assignee_name, s.due_date,
       date(s.due_date / 1000, 'unixepoch') AS due_on, s.assigned_by, s.position, s.created_at
-    FROM subtasks s JOIN tasks t ON t.id = s.task_id LEFT JOIN users u ON u.id = s.assignee_id`,
-  comments_v: `SELECT c.id, c.task_id, c.author_id, u.name AS author_name, c.body, c.via,
+    FROM subtasks s JOIN tasks t ON t.id = s.task_id LEFT JOIN users u ON u.id = s.assignee_id${where(
+      (v) => `s.task_id IN (${visibleTasks(v)})`
+    )}`,
+    comments_v: `SELECT c.id, c.task_id, c.author_id, u.name AS author_name, c.body, c.via,
       c.email_to, c.email_status, c.created_at
-    FROM comments c LEFT JOIN users u ON u.id = c.author_id`,
-  attachments_v: `SELECT id, task_id, filename, size, mime_type, uploaded_by, storage_provider,
-      drive_web_view_link, created_at FROM attachments`,
-};
+    FROM comments c LEFT JOIN users u ON u.id = c.author_id${where((v) => `c.task_id IN (${visibleTasks(v)})`)}`,
+    attachments_v: `SELECT id, task_id, filename, size, mime_type, uploaded_by, storage_provider,
+      drive_web_view_link, created_at FROM attachments${where((v) => `task_id IN (${visibleTasks(v)})`)}`,
+  };
+}
+
+/** The unfiltered views an owner/admin queries; their names are the same for everyone. */
+export const QUERY_VIEWS: Record<string, string> = queryViews(null);
 
 export const QUERY_MAX_ROWS = 1000;
 export const QUERY_DEFAULT_ROWS = 200;
 export const QUERY_MAX_LENGTH = 10_000;
+/** A member's row cap; owners/admins get QUERY_MAX_ROWS. */
+export const QUERY_MEMBER_MAX_ROWS = 200;
+/** Queries a member may run per rolling minute. Owners/admins are unlimited. */
+export const QUERY_MEMBER_PER_MINUTE = 30;
 
 export interface QueryResult {
   columns: string[];
@@ -144,7 +180,11 @@ function closeQuote(text: string, open: number, close: string): number {
  * caller's query with QUERY_VIEWS prepended as CTEs. `forbidden` is every real
  * table and view name in the database (sqlite_master), lowercased.
  */
-export function prepareQuery(text: string, forbidden: ReadonlySet<string>): string {
+export function prepareQuery(
+  text: string,
+  forbidden: ReadonlySet<string>,
+  views: Record<string, string> = QUERY_VIEWS
+): string {
   if (text.length > QUERY_MAX_LENGTH) {
     throw new QueryRejected(`query is longer than ${QUERY_MAX_LENGTH} characters`);
   }
@@ -178,7 +218,7 @@ export function prepareQuery(text: string, forbidden: ReadonlySet<string>): stri
     }
   }
 
-  const views = Object.entries(QUERY_VIEWS)
+  const ctes = Object.entries(views)
     .map(([name, body]) => `${name} AS (${body})`)
     .join(",\n");
   // Drop a trailing semicolon; WITH RECURSIVE allows ordinary CTEs too, so the
@@ -187,9 +227,9 @@ export function prepareQuery(text: string, forbidden: ReadonlySet<string>): stri
   if (first.word === "with") {
     const second = tokens[1];
     const rest = second?.word === "recursive" ? body.slice(second.end) : body.slice(first.end);
-    return `WITH RECURSIVE ${views},\n${rest}`;
+    return `WITH RECURSIVE ${ctes},\n${rest}`;
   }
-  return `WITH RECURSIVE ${views}\n${body}`;
+  return `WITH RECURSIVE ${ctes}\n${body}`;
 }
 
 /**
@@ -212,23 +252,59 @@ class ReadDone extends Error {
 }
 
 /**
+ * A member's query budget: QUERY_MEMBER_PER_MINUTE over a rolling minute,
+ * counted in DO memory. It resets when the DO is evicted, which only ever
+ * forgives, and since the workspace is one DO the count is global.
+ */
+export class QueryRateLimiter {
+  private readonly calls = new Map<string, number[]>();
+
+  constructor(
+    private readonly perMinute = QUERY_MEMBER_PER_MINUTE,
+    private readonly now: () => number = Date.now
+  ) {}
+
+  /** Counts one query for userId, or throws QueryRateLimited when the budget is spent. */
+  take(userId: string): void {
+    const now = this.now();
+    const recent = (this.calls.get(userId) ?? []).filter((at) => at > now - 60_000);
+    if (recent.length >= this.perMinute) {
+      const wait = Math.max(1, Math.ceil((recent[0]! + 60_000 - now) / 1000));
+      this.calls.set(userId, recent);
+      throw new QueryRateLimited(
+        `too many queries: members may run ${this.perMinute} a minute; try again in ${wait}s`
+      );
+    }
+    recent.push(now);
+    this.calls.set(userId, recent);
+  }
+}
+
+/** Thrown when a member's budget is spent; the Worker maps it to a 429. */
+export class QueryRateLimited extends Error {}
+
+/**
  * Runs a caller's read-only query. `transaction` is the DO's transactionSync;
- * the callback always throws, so the transaction always rolls back.
+ * the callback always throws, so the transaction always rolls back. `visible`
+ * is the caller's visibleSpaceIds: null for an owner/admin, otherwise the
+ * views are filtered to those spaces and rows are capped lower.
  */
 export function runReadOnlyQuery(
   sql: SqlStorage,
   transaction: (fn: () => void) => void,
   text: string,
-  maxRows: number = QUERY_DEFAULT_ROWS
+  maxRows: number = QUERY_DEFAULT_ROWS,
+  visible: ReadonlySet<string> | null = null
 ): QueryResult {
-  const limit = Math.min(Math.max(Math.trunc(maxRows), 1), QUERY_MAX_ROWS);
+  const cap = visible === null ? QUERY_MAX_ROWS : QUERY_MEMBER_MAX_ROWS;
+  const limit = Math.min(Math.max(Math.trunc(maxRows), 1), cap);
   const forbidden = new Set(
     sql
       .exec<{ name: string }>(`SELECT name FROM sqlite_master WHERE type IN ('table', 'view')`)
       .toArray()
       .map((row) => row.name.toLowerCase())
   );
-  const statement = prepareQuery(text, forbidden);
+  const statement = prepareQuery(text, forbidden, queryViews(visible));
   try {
     transaction(() => {
       let cursor: SqlStorageCursor<Record<string, SqlStorageValue>>;

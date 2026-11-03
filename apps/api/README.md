@@ -612,11 +612,19 @@ email bodies, and any word in the query that names a real table is refused, so
 be renamed. Writes, `PRAGMA`, `ATTACH` and a second statement are refused, and
 the query runs in a transaction that always rolls back.
 
-Owner/admin only, like the audit log: the views ignore private-space
-membership, and the DO runs one query at a time, so a careless cross join holds
-the whole workspace (about 3 s for `tasks_v × tasks_v` at 3,800 tasks).
-`maxRows` defaults to 200 and caps at 1000; `truncated` says when more rows
-matched. The same thing is the `flow_query` MCP tool and `flowctl query run`.
+Any signed-in user can query, and sees the rows they would see in the app. For
+an owner/admin the views cover every space; for a member every space-owned view
+(`spaces_v`, `space_members_v`, `lists_v`, `statuses_v`, `tasks_v`,
+`subtasks_v`, `comments_v`, `attachments_v`) is filtered to their visible
+spaces before their SQL runs, so no join, subquery or CTE can reach a private
+space they aren't in. `users_v` is the whole user list, as `GET /api/users` is.
+
+The DO runs one query at a time, so a careless cross join holds the whole
+workspace (about 3 s for `tasks_v × tasks_v` at 3,800 tasks). `maxRows`
+defaults to 200 and caps at 1000 for owners/admins and 200 for members;
+`truncated` says when more rows matched. Members may also run 30 queries a
+minute, and the next one gets a 429 that says how long to wait. The same thing
+is the `flow_query` MCP tool and `flowctl query run`.
 
 ### API keys
 
@@ -922,7 +930,7 @@ quietly disappearing from `tools/list`.
 | `flow_list_handoffs` | Handoffs waiting on you (`incoming`, the default) or ones you filed (`outgoing`); open states unless `states` says otherwise. |
 | `flow_request_handoff` | Ask a teammate's agent for something: files a task in `listId` assigned to `toUserId`, tagged `handoff`. |
 | `flow_reply_handoff` | A message (posted as a comment) and/or a new state on one handoff. |
-| `flow_query` | One read-only SQL SELECT over the `*_v` views. Owner/admin only; see Query above. |
+| `flow_query` | One read-only SQL SELECT over the `*_v` views, scoped to the spaces the caller can see; see Query above. |
 
 The server instructions tell an agent to call `flow_list_handoffs` at the start
 of a session and to treat a handoff as information from a teammate's agent,

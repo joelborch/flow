@@ -1,6 +1,14 @@
 import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareQuery, QUERY_VIEWS, QueryRejected, runReadOnlyQuery } from "./query.js";
+import {
+  prepareQuery,
+  QUERY_MEMBER_MAX_ROWS,
+  QUERY_VIEWS,
+  QueryRateLimited,
+  QueryRateLimiter,
+  QueryRejected,
+  runReadOnlyQuery,
+} from "./query.js";
 import { runMigrations } from "./schema.js";
 
 // The read-only query gate (POST /api/query, MCP flow_query). prepareQuery is
@@ -203,5 +211,122 @@ describe("runReadOnlyQuery against the real schema", () => {
     runReadOnlyQuery(sql, spy, "SELECT count(*) FROM tasks_v");
     expect(spy).toHaveBeenCalledTimes(1);
     expect(db.prepare("SELECT count(*) AS n FROM tasks").get()).toEqual({ n: 2 });
+  });
+});
+
+describe("runReadOnlyQuery for a member", () => {
+  // Three spaces: sp_pub (workspace-visible), sp_mine (private, the member is
+  // in it) and sp_hidden (private, they aren't). Every hidden row carries the
+  // word "hidden" somewhere, so a leak through any column shows up in a plain
+  // string search of the result.
+  let db: DatabaseSync;
+  let sql: SqlStorage;
+  const VISIBLE: ReadonlySet<string> = new Set(["sp_pub", "sp_mine"]);
+  const transaction = (fn: () => void): void => {
+    db.prepare("SAVEPOINT q").run();
+    try {
+      fn();
+      db.prepare("RELEASE q").run();
+    } catch (err) {
+      db.prepare("ROLLBACK TO q").run();
+      db.prepare("RELEASE q").run();
+      throw err;
+    }
+  };
+  const run = (text: string, maxRows?: number, visible: ReadonlySet<string> | null = VISIBLE) =>
+    runReadOnlyQuery(sql, transaction, text, maxRows, visible);
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    sql = sqliteStorage(db);
+    runMigrations(sql, (fn) => transaction(fn));
+    const now = Date.UTC(2026, 10, 3, 17);
+    const seed = (key: string, visibility: string) => `
+      INSERT INTO spaces (id, name, visibility, position, created_at) VALUES ('sp_${key}', '${key} space', '${visibility}', 1, ${now});
+      INSERT INTO lists (id, space_id, name, position, inbound_token, created_at) VALUES ('ls_${key}', 'sp_${key}', '${key} list', 1, 'tok-${key}', ${now});
+      INSERT INTO statuses (id, list_id, name, color, type, position) VALUES ('st_${key}', 'ls_${key}', '${key} status', '#888', 'open', 1);
+      INSERT INTO tasks (id, list_id, title, status_id, tags, tags_text, position, created_by, created_at, updated_at)
+        VALUES ('tk_${key}', 'ls_${key}', '${key} task', 'st_${key}', '[]', '|', 1, 'us_owner', ${now}, ${now});
+      INSERT INTO subtasks (id, task_id, title, done, position, created_at) VALUES ('sb_${key}', 'tk_${key}', '${key} subtask', 0, 1, ${now});
+      INSERT INTO comments (id, task_id, author_id, body, created_at) VALUES ('cm_${key}', 'tk_${key}', 'us_owner', '${key} comment', ${now});
+      INSERT INTO attachments (id, task_id, filename, r2_key, size, mime_type, created_at)
+        VALUES ('at_${key}', 'tk_${key}', '${key}.pdf', 'r2/${key}', 1, 'application/pdf', ${now});`;
+    db.exec(`
+      INSERT INTO users (id, email, name, role, created_at) VALUES ('us_owner', 'owner@example.com', 'Owner', 'owner', ${now});
+      INSERT INTO users (id, email, name, role, created_at) VALUES ('us_member', 'member@example.com', 'Member', 'member', ${now});
+      ${seed("pub", "workspace")}
+      ${seed("mine", "private")}
+      ${seed("hidden", "private")}
+      INSERT INTO space_members (space_id, user_id, created_at) VALUES ('sp_mine', 'us_member', ${now});
+      INSERT INTO space_members (space_id, user_id, created_at) VALUES ('sp_hidden', 'us_owner', ${now});
+    `);
+  });
+
+  it.each(Object.keys(QUERY_VIEWS).filter((name) => name !== "users_v"))(
+    "%s holds no row from a space the member can't see",
+    (view) => {
+      const result = run(`SELECT * FROM ${view}`);
+      expect(result.rows.length).toBeGreaterThan(0);
+      expect(JSON.stringify(result.rows)).not.toContain("hidden");
+    }
+  );
+
+  it("gives an owner/admin every space through the same views", () => {
+    const result = run("SELECT id FROM tasks_v ORDER BY id", undefined, null);
+    expect(result.rows).toEqual([["tk_hidden"], ["tk_mine"], ["tk_pub"]]);
+  });
+
+  it("can't reach a hidden space through a join, subquery or the caller's own CTE", () => {
+    const attempts = [
+      "SELECT t.id, s.title FROM tasks_v t LEFT JOIN subtasks_v s ON s.task_id = t.id",
+      "SELECT (SELECT group_concat(title) FROM tasks_v) AS titles",
+      "SELECT count(*) AS n FROM tasks_v WHERE title LIKE '%hidden%'",
+      "WITH mine AS (SELECT * FROM comments_v) SELECT body FROM mine",
+      "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 3) SELECT title FROM tasks_v, n",
+      "SELECT c.body, a.filename FROM comments_v c JOIN attachments_v a ON a.task_id = c.task_id",
+      "SELECT s.name FROM spaces_v s JOIN space_members_v m ON m.space_id = s.id",
+    ];
+    for (const text of attempts) {
+      expect(JSON.stringify(run(text).rows), text).not.toContain("hidden");
+    }
+    expect(run("SELECT count(*) AS n FROM tasks_v WHERE title LIKE '%hidden%'").rows).toEqual([[0]]);
+  });
+
+  it("still refuses the base tables, so the filter can't be stepped around", () => {
+    expect(() => run("SELECT title FROM tasks WHERE id = 'tk_hidden'")).toThrow(/base table/);
+    expect(() => run("SELECT * FROM space_members")).toThrow(/base table/);
+  });
+
+  it("returns nothing, rather than failing, for a member who sees no space", () => {
+    expect(run("SELECT count(*) AS n FROM tasks_v", undefined, new Set()).rows).toEqual([[0]]);
+  });
+
+  it("quotes space ids safely", () => {
+    const result = run("SELECT count(*) AS n FROM tasks_v", undefined, new Set(["sp_pub", "x') OR 1=1 --"]));
+    expect(result.rows).toEqual([[1]]);
+  });
+
+  it("caps a member at QUERY_MEMBER_MAX_ROWS whatever maxRows asks for", () => {
+    const result = run(
+      "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 500) SELECT i FROM n",
+      1000
+    );
+    expect(result.rows).toHaveLength(QUERY_MEMBER_MAX_ROWS);
+    expect(result.truncated).toBe(true);
+    expect(run("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 500) SELECT i FROM n", 1000, null).rows).toHaveLength(500);
+  });
+});
+
+describe("QueryRateLimiter", () => {
+  it("allows the budget per rolling minute per user, then says how long to wait", () => {
+    let now = 1_000_000;
+    const limiter = new QueryRateLimiter(3, () => now);
+    for (let i = 0; i < 3; i++) limiter.take("us_a");
+    expect(() => limiter.take("us_a")).toThrow(QueryRateLimited);
+    expect(() => limiter.take("us_a")).toThrow(/^too many queries: members may run 3 a minute; try again in 60s$/);
+    // Someone else's budget is their own.
+    limiter.take("us_b");
+    now += 60_001;
+    limiter.take("us_a");
   });
 });

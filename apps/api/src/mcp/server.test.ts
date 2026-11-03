@@ -645,15 +645,15 @@ describe("flow_query", () => {
     const stub = fakeWorkspace({ runQuery: runQuery as unknown as RpcMock });
     const { body } = await callTool(stub, "flow_query", { sql: "SELECT id FROM tasks_v" });
     expect(toolPayload(body)).toMatchObject({ ...result, rowCount: 1 });
-    expect(runQuery).toHaveBeenCalledWith("SELECT id FROM tasks_v", 200);
+    expect(runQuery).toHaveBeenCalledWith("SELECT id FROM tasks_v", 200, auth.user.id);
   });
 
-  it("refuses a member — the views span spaces they cannot see", async () => {
+  it("runs for a member as that member, so the DO scopes the views to their spaces", async () => {
     const runQuery = vi.fn(async () => result);
     const stub = fakeWorkspace({ runQuery: runQuery as unknown as RpcMock });
-    const denied = await callTool(stub, "flow_query", { sql: "SELECT 1" }, memberAuth);
-    expect(toolError(denied.body)).toContain("owner or admin");
-    expect(runQuery).not.toHaveBeenCalled();
+    const { body } = await callTool(stub, "flow_query", { sql: "SELECT 1" }, memberAuth);
+    expect(toolPayload(body)).toMatchObject({ ...result, rowCount: 1 });
+    expect(runQuery).toHaveBeenCalledWith("SELECT 1", 200, memberAuth.user.id);
   });
 });
 

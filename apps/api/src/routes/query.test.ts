@@ -5,9 +5,9 @@ import type { AppEnv, AuthContext, Env } from "../env.js";
 import { onError } from "../errors.js";
 import { queryRoutes } from "./query.js";
 
-// POST /api/query reads every space and holds the DO while it runs, so it has
-// the audit log's owner/admin gate. The SQL gate itself is tested in
-// packages/core/src/query.test.ts; here the DO is a stub.
+// POST /api/query is open to every signed-in user and passes the caller's id to
+// the DO, which scopes the views and rate-limits members. The SQL gate and the
+// scoping are tested in packages/core/src/query.test.ts; here the DO is a stub.
 
 const userOf = (role: Role): User => ({
   id: `us_${role}`,
@@ -43,18 +43,11 @@ function setup(role: Role, runQuery = vi.fn(async () => ({ columns: ["n"], rows:
 }
 
 describe("POST /api/query", () => {
-  it("403s a member without reaching the DO", async () => {
-    const { post, runQuery } = setup("member");
-    const res = await post({ sql: "SELECT 1" });
-    expect(res.status).toBe(403);
-    expect(runQuery).not.toHaveBeenCalled();
-  });
-
-  it.each<Role>(["owner", "admin"])("runs for an %s, defaulting maxRows to 200", async (role) => {
+  it.each<Role>(["owner", "admin", "member"])("runs for an %s as that user, defaulting maxRows to 200", async (role) => {
     const { post, runQuery } = setup(role);
     const res = await post({ sql: "SELECT count(*) AS n FROM tasks_v" });
     expect(res.status).toBe(200);
-    expect(runQuery).toHaveBeenCalledWith("SELECT count(*) AS n FROM tasks_v", 200);
+    expect(runQuery).toHaveBeenCalledWith("SELECT count(*) AS n FROM tasks_v", 200, `us_${role}`);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).toMatchObject({ columns: ["n"], rows: [[2]], truncated: false, rowCount: 1 });
     expect(typeof body.ms).toBe("number");
@@ -64,6 +57,18 @@ describe("POST /api/query", () => {
     const { post } = setup("owner");
     expect((await post({})).status).toBe(422);
     expect((await post({ sql: "SELECT 1", maxRows: 5000 })).status).toBe(422);
+  });
+
+  it("passes a member's spent budget through as a 429", async () => {
+    const { post } = setup(
+      "member",
+      vi.fn(async () => {
+        throw new Error("too many queries: members may run 30 a minute; try again in 12s");
+      })
+    );
+    const res = await post({ sql: "SELECT 1" });
+    expect(res.status).toBe(429);
+    expect(((await res.json()) as { error: string }).error).toContain("try again in 12s");
   });
 
   it("passes a refusal from the DO through as a readable 422", async () => {

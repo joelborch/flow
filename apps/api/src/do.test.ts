@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { statusForDoError } from "./do.js";
 
 // The DO throws plain Errors with caller-facing messages; the RPC proxy turns
-// them into HTTP statuses. Missing entities are 404, everything else 422.
+// them into HTTP statuses. Missing entities are 404, a spent query budget is
+// 429, and everything else is 422.
 
 describe("statusForDoError", () => {
   it("maps the DO's missing-entity throws to 404", () => {
@@ -19,6 +20,11 @@ describe("statusForDoError", () => {
       statusForDoError('List ls_abc not found. Known lists: ls_1 ("Content Cycle").')
     ).toBe(404);
     expect(statusForDoError('Space sp_abc not found. Known spaces: none yet.')).toBe(404);
+  });
+
+  it("maps a member's spent query budget to 429", () => {
+    expect(statusForDoError("too many queries: members may run 30 a minute; try again in 12s")).toBe(429);
+    expect(statusForDoError("query failed: too many queries mentioned here")).toBe(422);
   });
 
   it("is case-insensitive", () => {

@@ -152,7 +152,7 @@ import {
   seedIfEmpty,
   seedJobs,
 } from "./schema.js";
-import { type QueryResult, runReadOnlyQuery } from "./query.js";
+import { QueryRateLimiter, type QueryResult, runReadOnlyQuery } from "./query.js";
 import { searchTasks as runSearch } from "./search.js";
 import { type SnoozedRow, WAKE_SWEEP_LIMIT, wakeCandidates, wakesOnComment } from "./snooze.js";
 import {
@@ -412,6 +412,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   private readonly sql: SqlStorage;
   /** Cached view of the armed alarm so mutations rarely await getAlarm(). */
   private armedAlarm: number | null = null;
+  /** Members' runQuery budget; in memory, so an eviction resets it. */
+  private readonly queryLimiter = new QueryRateLimiter();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -1952,11 +1954,14 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   }
 
   /**
-   * Read-only SQL over the QUERY_VIEWS (see ./query.ts). Workspace-wide like
-   * the audit log, so the route and the MCP tool are owner/admin only.
+   * Read-only SQL over the query views (see ./query.ts), as forUserId sees
+   * them: every space for an owner/admin, only their visible spaces for a
+   * member, who also gets a lower row cap and a per-minute budget.
    */
-  runQuery(text: string, maxRows?: number): QueryResult {
-    return runReadOnlyQuery(this.sql, (fn) => this.ctx.storage.transactionSync(fn), text, maxRows);
+  runQuery(text: string, maxRows: number | undefined, forUserId: string): QueryResult {
+    const visible = visibleSpaceIds(this.sql, forUserId);
+    if (visible !== null) this.queryLimiter.take(forUserId);
+    return runReadOnlyQuery(this.sql, (fn) => this.ctx.storage.transactionSync(fn), text, maxRows, visible);
   }
 
   /** Auth hot path: resolve a bearer token hash, stamping last_used_at. */
@@ -5336,4 +5341,12 @@ async function pruneOldBackups(bucket: R2Bucket, keep: number): Promise<number> 
 /** Re-exported so callers can reuse the fractional-ordering maths. */
 export { between as positionBetween, POSITION_STEP } from "./position.js";
 export { REPLAY_GAP_LIMIT } from "./sync-floor.js";
-export { QUERY_DEFAULT_ROWS, QUERY_MAX_ROWS, QUERY_VIEWS, QueryRejected, type QueryResult } from "./query.js";
+export {
+  QUERY_DEFAULT_ROWS,
+  QUERY_MAX_ROWS,
+  QUERY_MEMBER_MAX_ROWS,
+  QUERY_MEMBER_PER_MINUTE,
+  QUERY_VIEWS,
+  QueryRejected,
+  type QueryResult,
+} from "./query.js";

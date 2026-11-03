@@ -322,7 +322,7 @@ export interface WorkspaceApi extends WorkspaceRpc {
    * Read-only SQL over packages/core's QUERY_VIEWS. Refused SQL comes back as
    * an Error whose message starts with "query failed:" or names the problem.
    */
-  runQuery(text: string, maxRows?: number): Promise<QueryResult>;
+  runQuery(text: string, maxRows: number | undefined, forUserId: string): Promise<QueryResult>;
 
   // --- ops ------------------------------------------------------------------
   /**
@@ -410,8 +410,12 @@ const INTERNAL_ERROR_RE =
  */
 const NOT_FOUND_RE = /\bnot found\b/i;
 
+/** QueryRateLimiter's refusal ("too many queries: …"), a 429 the caller can wait out. */
+const RATE_LIMITED_RE = /^too many queries\b/i;
+
 /** Status for a domain error thrown inside the DO. Exported for tests. */
-export function statusForDoError(message: string): 404 | 422 {
+export function statusForDoError(message: string): 404 | 422 | 429 {
+  if (RATE_LIMITED_RE.test(message)) return 429;
   return NOT_FOUND_RE.test(message) ? 404 : 422;
 }
 
