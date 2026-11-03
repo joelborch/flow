@@ -256,6 +256,13 @@ export const GetAuditLogOut = z.object({
   entries: z.array(AuditEntryView),
 });
 
+export const QueryOut = z.object({
+  columns: z.array(z.string()),
+  rows: z.array(z.array(z.unknown())),
+  rowCount: z.number(),
+  truncated: z.boolean(),
+});
+
 export const ListHandoffsOut = z.object({
   direction: z.enum(["incoming", "outgoing"]),
   returned: z.number(),

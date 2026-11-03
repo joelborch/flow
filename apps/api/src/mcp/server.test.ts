@@ -319,6 +319,7 @@ describe("tools/list", () => {
       "flow_list_automations",
       "flow_get_audit_log",
       "flow_list_handoffs",
+      "flow_query",
     ];
     const IDEMPOTENT = [
       "flow_update_task",
@@ -633,6 +634,26 @@ describe("flow_get_audit_log", () => {
     const denied = await callTool(stub, "flow_get_audit_log", {}, memberAuth);
     expect(toolError(denied.body)).toContain("owner or admin");
     expect(getAuditLog).not.toHaveBeenCalled();
+  });
+});
+
+describe("flow_query", () => {
+  const result = { columns: ["id"], rows: [["tk_1"]], truncated: false };
+
+  it("returns the rows with a count", async () => {
+    const runQuery = vi.fn(async () => result);
+    const stub = fakeWorkspace({ runQuery: runQuery as unknown as RpcMock });
+    const { body } = await callTool(stub, "flow_query", { sql: "SELECT id FROM tasks_v" });
+    expect(toolPayload(body)).toMatchObject({ ...result, rowCount: 1 });
+    expect(runQuery).toHaveBeenCalledWith("SELECT id FROM tasks_v", 200, auth.user.id);
+  });
+
+  it("runs for a member as that member, so the DO scopes the views to their spaces", async () => {
+    const runQuery = vi.fn(async () => result);
+    const stub = fakeWorkspace({ runQuery: runQuery as unknown as RpcMock });
+    const { body } = await callTool(stub, "flow_query", { sql: "SELECT 1" }, memberAuth);
+    expect(toolPayload(body)).toMatchObject({ ...result, rowCount: 1 });
+    expect(runQuery).toHaveBeenCalledWith("SELECT 1", 200, memberAuth.user.id);
   });
 });
 

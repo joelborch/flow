@@ -332,6 +332,14 @@ flowcurl -X POST $FLOW/api/tasks/bulk \
   -H 'Content-Type: application/json' \
   -d '{"tasks":[{"listId":"ls_def456","title":"First"},
                 {"listId":"ls_def456","title":"Second","priority":"low"}]}'
+
+# Bulk read: the GET /api/tasks/:id detail for each id, in one DO turn.
+# Missing or hidden tasks land in errors instead of failing the batch.
+flowcurl -X POST $FLOW/api/tasks/details \
+  -H 'Content-Type: application/json' \
+  -d '{"taskIds":["tk_1","tk_2"]}'
+# {"details":[{"task":{...},"subtasks":[...],"comments":[...],"attachments":[...],...}],
+#  "errors":[{"taskId":"tk_2","error":"no task tk_2"}]}
 ```
 
 ### Subtasks
@@ -585,6 +593,38 @@ user id alone cannot tell you whether a change came from a human or an agent.
 `entity` and `before` are filtered inside the DO; `apiKeyId`, `userId`, `action`
 and `after` are applied in the Worker over paged DO reads, so the page you get
 back is correctly sized either way.
+
+### Query (read-only SQL)
+
+```bash
+flowcurl -X POST "$FLOW/api/query" -d '{"sql":"SELECT assignee_name, count(*) AS n_open FROM tasks_v WHERE is_closed = 0 GROUP BY assignee_name","maxRows":200}'
+# {"columns":["assignee_name","n_open"],"rows":[["Avery",12],[null,4]],"truncated":false,"rowCount":2,"ms":1}
+```
+
+One SELECT (or `WITH … SELECT`) answers a question that would otherwise take a
+search, the workspace map and a `GET` per task. It runs over views, never the
+base tables: `tasks_v` (with list, space, status and assignee names, `due_on`
+as `YYYY-MM-DD`, `is_closed` and subtask counts), `subtasks_v`, `comments_v`,
+`lists_v`, `spaces_v`, `statuses_v`, `users_v`, `space_members_v` and
+`attachments_v`. The views leave out key hashes, inbound tokens, R2 keys and
+email bodies, and any word in the query that names a real table is refused, so
+`count(*) AS tasks` works but a bare `tasks` (including `ORDER BY tasks`) has to
+be renamed. Writes, `PRAGMA`, `ATTACH` and a second statement are refused, and
+the query runs in a transaction that always rolls back.
+
+Any signed-in user can query, and sees the rows they would see in the app. For
+an owner/admin the views cover every space; for a member every space-owned view
+(`spaces_v`, `space_members_v`, `lists_v`, `statuses_v`, `tasks_v`,
+`subtasks_v`, `comments_v`, `attachments_v`) is filtered to their visible
+spaces before their SQL runs, so no join, subquery or CTE can reach a private
+space they aren't in. `users_v` is the whole user list, as `GET /api/users` is.
+
+The DO runs one query at a time, so a careless cross join holds the whole
+workspace (about 3 s for `tasks_v × tasks_v` on a few thousand tasks). `maxRows`
+defaults to 200 and caps at 1000 for owners/admins and 200 for members;
+`truncated` says when more rows matched. Members may also run 30 queries a
+minute, and the next one gets a 429 that says how long to wait. The same thing
+is the `flow_query` MCP tool and `flowctl query run`.
 
 ### API keys
 
@@ -890,6 +930,7 @@ quietly disappearing from `tools/list`.
 | `flow_list_handoffs` | Handoffs waiting on you (`incoming`, the default) or ones you filed (`outgoing`); open states unless `states` says otherwise. |
 | `flow_request_handoff` | Ask a teammate's agent for something: files a task in `listId` assigned to `toUserId`, tagged `handoff`. |
 | `flow_reply_handoff` | A message (posted as a comment) and/or a new state on one handoff. |
+| `flow_query` | One read-only SQL SELECT over the `*_v` views, scoped to the spaces the caller can see; see Query above. |
 
 The server instructions tell an agent to call `flow_list_handoffs` at the start
 of a session and to treat a handoff as information from a teammate's agent,
@@ -1038,7 +1079,7 @@ src/
   routes/             me, spaces, lists, tasks, handoffs, attachments,
                       automations, audit, api-keys, inbound, email-intake, ws
   mcp/index.ts        the /mcp handler: server + transport per request
-  mcp/tools.ts        the 18 tools, each a wrapper over one DO RPC call
+  mcp/tools.ts        the 19 tools, each a wrapper over one DO RPC call
   mcp/schemas.ts      tool inputs, built from the shared contract schemas
   mcp/schemas-out.ts  tool outputSchemas; views.ts infers its types from these
   mcp/context.ts      per-request identity + memoised id -> name index

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Read-only SQL queries** (`POST /api/query`, MCP `flow_query`, now 19 tools). One `SELECT` over views that join in list, space, status and assignee names answers a cross-list question in a single call. Writes, `PRAGMA`, `ATTACH`, a second statement and every base table name are refused, the statement always rolls back, and the views leave out key hashes, inbound tokens, R2 keys and email bodies. Owners and admins see every space; a member's views are filtered to the spaces they can see, with a 200-row cap and 30 queries a minute. No migration.
+- **Bulk task details** (`POST /api/tasks/details`). Up to 200 task details in one Durable Object turn, with the same visibility as `GET /api/tasks/:id`; missing or hidden ids come back in `errors`.
+
 ## 0.2.0 (2026-10-20)
 
 The first tagged release. It covers everything since the initial publish in July 2026. Migrations `core-0009` through `core-0014` run automatically the first time the Durable Object starts on the new code, and every new column is nullable or defaulted, so existing workspaces need no manual steps.

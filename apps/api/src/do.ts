@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 import type { z } from "zod";
 import type {
-  BackupStatus, EmailIntakeCheck, ImportBatch, ImportResult, IngestEmailInput, IngestEmailResult,
+  BackupStatus, EmailIntakeCheck, ImportBatch, ImportResult, IngestEmailInput, IngestEmailResult, QueryResult,
   Workspace,
 } from "@flow/core";
 import {
@@ -88,6 +88,11 @@ export interface WorkspaceApi extends WorkspaceRpc {
   getSnapshot(forUserId?: string): Promise<BoardSnapshot>;
   /** Throws "Space … is private" rather than returning a task the user can't see. */
   getTaskDetail(taskId: string, forUserId?: string): Promise<TaskDetail>;
+  /** Up to TASK_DETAILS_MAX tasks in one turn; missing or hidden ids land in `errors`. */
+  getTaskDetails(
+    taskIds: string[],
+    forUserId?: string
+  ): Promise<{ details: TaskDetail[]; errors: Array<{ taskId: string; error: string }> }>;
   searchTasks(input: SearchTasksInput, actor?: string | Actor): Promise<SearchTasksResult>;
   listUsers(): Promise<User[]>;
   listSubtasks(taskId: string): Promise<Subtask[]>;
@@ -312,6 +317,13 @@ export interface WorkspaceApi extends WorkspaceRpc {
     action?: string;
   }): Promise<{ entries: AuditEntry[]; nextBefore: number | null }>;
 
+  // --- query ----------------------------------------------------------------
+  /**
+   * Read-only SQL over packages/core's QUERY_VIEWS. Refused SQL comes back as
+   * an Error whose message starts with "query failed:" or names the problem.
+   */
+  runQuery(text: string, maxRows: number | undefined, forUserId: string): Promise<QueryResult>;
+
   // --- ops ------------------------------------------------------------------
   /**
    * Run the daily backup immediately — same code path as the scheduled job,
@@ -398,8 +410,12 @@ const INTERNAL_ERROR_RE =
  */
 const NOT_FOUND_RE = /\bnot found\b/i;
 
+/** QueryRateLimiter's refusal ("too many queries: …"), a 429 the caller can wait out. */
+const RATE_LIMITED_RE = /^too many queries\b/i;
+
 /** Status for a domain error thrown inside the DO. Exported for tests. */
-export function statusForDoError(message: string): 404 | 422 {
+export function statusForDoError(message: string): 404 | 422 | 429 {
+  if (RATE_LIMITED_RE.test(message)) return 429;
   return NOT_FOUND_RE.test(message) ? 404 : 422;
 }
 

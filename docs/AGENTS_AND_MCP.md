@@ -65,7 +65,7 @@ answers "what did this agent do", separately from what the human did themselves.
 
 Members can mint, list, and revoke keys that act as themselves. Minting a key that impersonates *someone else* is an escalation and requires owner/admin.
 
-## The 18 tools
+## The 19 tools
 
 Tool names are declared in `MCP_TOOLS` in `packages/shared/src/api.ts` and asserted at server construction, so a drifted name fails loudly instead of quietly vanishing from `tools/list`.
 
@@ -89,6 +89,7 @@ Tool names are declared in `MCP_TOOLS` in `packages/shared/src/api.ts` and asser
 | `flow_list_handoffs` | Handoffs waiting on you (`direction: "incoming"`, the default) or ones you filed (`"outgoing"`), open states by default. |
 | `flow_request_handoff` | File a request for a teammate's agent: `listId`, `toUserId`, `title`, `ask`, optional `returnFormat`, `contextTaskIds` and `dueDate`. |
 | `flow_reply_handoff` | Reply and/or move a handoff: `needs_input` to ask back, `done` with the answer, `declined` with the reason. |
+| `flow_query` | One read-only SQL `SELECT` (or `WITH … SELECT`) over the `*_v` views, scoped to the spaces the caller can see. Answers a cross-list question in one call; see [Querying with SQL](#querying-with-sql). |
 
 Every mutation calls the same DO RPC method the matching REST route calls — there is no separate MCP write path to keep in sync, and automations fire identically regardless of caller.
 
@@ -103,7 +104,7 @@ Every mutation calls the same DO RPC method the matching REST route calls — th
 
 ### Annotations and structured output
 
-Every tool carries an explicit `annotations` block, because a *missing* hint reads as "unknown" — a client deciding whether to auto-approve has to assume the worst of an unannotated tool. The seven reads are `readOnlyHint: true`; writes are `readOnlyHint: false, destructiveHint: false`, with `idempotentHint: true` on the ones that set a value rather than append one. `flow_upsert_automation` is the single `destructiveHint: true` tool: passing an existing `id` replaces the rule wholesale — trigger, conditions, and actions — so a partial payload silently drops what it omits. `openWorldHint` is `false` everywhere; every tool talks to the one workspace DO and nothing else.
+Every tool carries an explicit `annotations` block, because a *missing* hint reads as "unknown" — a client deciding whether to auto-approve has to assume the worst of an unannotated tool. The eight reads are `readOnlyHint: true`; writes are `readOnlyHint: false, destructiveHint: false`, with `idempotentHint: true` on the ones that set a value rather than append one. `flow_upsert_automation` is the single `destructiveHint: true` tool: passing an existing `id` replaces the rule wholesale — trigger, conditions, and actions — so a partial payload silently drops what it omits. `openWorldHint` is `false` everywhere; every tool talks to the one workspace DO and nothing else.
 
 Every tool also declares an `outputSchema` and returns `structuredContent` alongside the serialized text block, validated by the SDK on every call — so clients get typed results, and a view function that drifts from its declared shape is a test failure, not a wire surprise.
 
@@ -117,6 +118,27 @@ Reads default to the smaller answer, because context an agent spends on fields i
 | `flow_list_my_work` | same rows, 50 per page | the full row shape |
 | `flow_get_task` | 15 newest comments + `commentsOmitted` count | the whole thread |
 | `flow_get_workspace_map` | ids, names, status names, members as `{id, name}` | per-list `openTasks`, member emails and roles |
+
+## Querying with SQL
+
+A question like "what's due this week, with assignee names and subtask progress" otherwise takes a workspace map, a search and a `flow_get_task` per row. `flow_query` (REST: `POST /api/query`) answers it with one read-only SQLite statement over views that join the names in for you:
+
+```sql
+SELECT id, title, list_name, assignee_name, due_on, subtasks_done || '/' || subtask_count AS subtasks
+FROM tasks_v
+WHERE is_closed = 0 AND due_date < strftime('%s','now')*1000 + 7*86400000
+ORDER BY due_date
+```
+
+The views are `tasks_v`, `subtasks_v`, `comments_v`, `lists_v`, `spaces_v`, `statuses_v`, `users_v`, `space_members_v` and `attachments_v`. They leave out key hashes, inbound tokens, R2 keys and email bodies, and the base tables can't be named at all. A table name anywhere except right after `AS` is refused, so alias a count as `n_tasks`, not `tasks`.
+
+The gate is simple to reason about:
+
+- **Read-only.** One `SELECT` or `WITH … SELECT`. Writes, `PRAGMA`, `ATTACH` and a second statement are refused before execution, and the statement runs in a transaction that always rolls back.
+- **Scoped to the caller.** Owners and admins see every space. For a member, every space-owned view is built with a filter to the spaces they can see, so a join, subquery or the caller's own CTE can't reach a private space they aren't in. `users_v` is the whole member list, as `GET /api/users` already is.
+- **Bounded.** The workspace is one single-threaded Durable Object and a running query can't be interrupted, so a careless cross join holds everyone up. Results cap at `maxRows` (default 200; at most 1000 for owners/admins and 200 for members), `truncated` says when more matched, and members get 30 queries a rolling minute before a 429 says how long to wait.
+
+Queries never change anything. An agent uses the ids a query returns with the normal write tools, which run the same automations and audit trail as everything else.
 
 ## Agent handoffs
 

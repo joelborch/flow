@@ -9,6 +9,7 @@ import {
   type Delta,
   type ServerMsg,
 } from "@flow/shared";
+import { QUERY_MEMBER_PER_MINUTE } from "./query.js";
 
 // ---------------------------------------------------------------------------
 // Storage-level per-space permission tests against the real Workspace class.
@@ -43,13 +44,22 @@ vi.mock("cloudflare:workers", () => ({
 
 function sqliteStorage(db: DatabaseSync): SqlStorage {
   const exec = (query: string, ...params: unknown[]): unknown => {
-    const returnsRows = /^\s*SELECT/i.test(query) || /RETURNING/i.test(query);
+    const returnsRows = /^\s*(SELECT|WITH)/i.test(query) || /RETURNING/i.test(query);
     if (!returnsRows) {
       db.prepare(query).run(...(params as never[]));
       return { toArray: () => [], one: () => undefined };
     }
     const rows = db.prepare(query).all(...(params as never[]));
     return {
+      // raw() and columnNames are what runReadOnlyQuery reads.
+      raw: () => {
+        const arrays = db.prepare(query);
+        arrays.setReturnArrays(true);
+        return (arrays.all(...(params as never[])) as unknown[])[Symbol.iterator]();
+      },
+      get columnNames() {
+        return db.prepare(query).columns().map((c) => c.name);
+      },
       toArray: () => rows,
       one: () => {
         if (rows.length !== 1) throw new Error(`expected 1 row, got ${rows.length}`);
@@ -469,5 +479,42 @@ describe("createSpace: born private", () => {
     expect(createDeltasFor(ownerSock.frames)).toHaveLength(1);
     expect(createDeltasFor(memberASock.frames)).toHaveLength(1);
     expect(createDeltasFor(memberBSock.frames)).toHaveLength(0);
+  });
+});
+
+describe("runQuery", () => {
+  it("scopes the views to the caller's spaces and leaves owners unscoped", async () => {
+    const { ws, a, b, c } = await seededWorkspace();
+    const ids = (userId: string) =>
+      ws.runQuery("SELECT id FROM tasks_v", undefined, userId).rows.map((r) => r[0]).sort();
+
+    expect(ids(MEMBER_A)).toEqual([a.task.id, c.task.id].sort());
+    expect(ids(MEMBER_B)).toEqual([b.task.id, c.task.id].sort());
+    expect(ids(OWNER)).toEqual([a.task.id, b.task.id, c.task.id].sort());
+  });
+
+  it("rate-limits members but not owners", async () => {
+    const { ws } = await seededWorkspace();
+    for (let i = 0; i < QUERY_MEMBER_PER_MINUTE; i++) ws.runQuery("SELECT 1", undefined, MEMBER_A);
+    expect(() => ws.runQuery("SELECT 1", undefined, MEMBER_A)).toThrow(/^too many queries/);
+    // Member B's budget is separate, and the owner has none.
+    ws.runQuery("SELECT 1", undefined, MEMBER_B);
+    for (let i = 0; i <= QUERY_MEMBER_PER_MINUTE; i++) ws.runQuery("SELECT 1", undefined, OWNER);
+  });
+});
+
+describe("getTaskDetails", () => {
+  it("matches getTaskDetail for each task and reports hidden or missing ids", async () => {
+    const { ws, a, b, c } = await seededWorkspace();
+
+    const owner = ws.getTaskDetails([a.task.id, b.task.id, c.task.id], OWNER);
+    expect(owner.errors).toEqual([]);
+    expect(owner.details).toEqual([a, b, c].map((x) => ws.getTaskDetail(x.task.id, OWNER)));
+
+    const member = ws.getTaskDetails([a.task.id, b.task.id, "tk_missing"], MEMBER_A);
+    expect(member.details.map((d) => d.task.id)).toEqual([a.task.id]);
+    expect(member.errors.map((e) => e.taskId)).toEqual([b.task.id, "tk_missing"]);
+    expect(member.errors[0]!.error).toMatch(/private/i);
+    expect(JSON.stringify(member.details)).not.toContain(b.task.id);
   });
 });

@@ -11,6 +11,7 @@
  * what gets registered.
  */
 import { z } from "zod";
+import { QUERY_DEFAULT_ROWS, QUERY_MAX_ROWS } from "@flow/core/query";
 import {
   BulkUpdateInput,
   CreateCommentInput,
@@ -144,4 +145,10 @@ export const GetAuditLogArgs = z.object({
   before: Ts.optional(),
   after: Ts.optional(),
   limit: z.number().int().min(1).max(500).default(50),
+});
+
+/** `POST /api/query`'s body: one read-only SELECT over the *_v views. */
+export const QueryArgs = z.object({
+  sql: z.string().min(1),
+  maxRows: z.number().int().min(1).max(QUERY_MAX_ROWS).default(QUERY_DEFAULT_ROWS),
 });

@@ -152,6 +152,7 @@ import {
   seedIfEmpty,
   seedJobs,
 } from "./schema.js";
+import { QueryRateLimiter, type QueryResult, runReadOnlyQuery } from "./query.js";
 import { searchTasks as runSearch } from "./search.js";
 import { type SnoozedRow, WAKE_SWEEP_LIMIT, wakeCandidates, wakesOnComment } from "./snooze.js";
 import {
@@ -411,6 +412,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   private readonly sql: SqlStorage;
   /** Cached view of the armed alarm so mutations rarely await getAlarm(). */
   private armedAlarm: number | null = null;
+  /** Members' runQuery budget; in memory, so an eviction resets it. */
+  private readonly queryLimiter = new QueryRateLimiter();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -1666,6 +1669,29 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   }
 
   /**
+   * Many tasks' details in one DO turn, so a reader such as the monthly backup
+   * makes one RPC per page instead of one per task, and every detail in the
+   * batch comes from the same workspace state. A missing or hidden task becomes
+   * an entry in `errors` with getTaskDetail's message rather than failing the
+   * whole batch.
+   */
+  getTaskDetails(
+    taskIds: string[],
+    forUserId?: string
+  ): { details: TaskDetail[]; errors: Array<{ taskId: string; error: string }> } {
+    const details: TaskDetail[] = [];
+    const errors: Array<{ taskId: string; error: string }> = [];
+    for (const taskId of taskIds) {
+      try {
+        details.push(this.getTaskDetail(taskId, forUserId));
+      } catch (err) {
+        errors.push({ taskId, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return { details, errors };
+  }
+
+  /**
    * `actor` is optional for internal callers; when present, results are limited
    * to the spaces that user may see (including `total`, so paging stays honest).
    */
@@ -1925,6 +1951,17 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       entries: rows.map(toAuditEntry),
       nextBefore: rows.length === limit && last ? last.id : null,
     };
+  }
+
+  /**
+   * Read-only SQL over the query views (see ./query.ts), as forUserId sees
+   * them: every space for an owner/admin, only their visible spaces for a
+   * member, who also gets a lower row cap and a per-minute budget.
+   */
+  runQuery(text: string, maxRows: number | undefined, forUserId: string): QueryResult {
+    const visible = visibleSpaceIds(this.sql, forUserId);
+    if (visible !== null) this.queryLimiter.take(forUserId);
+    return runReadOnlyQuery(this.sql, (fn) => this.ctx.storage.transactionSync(fn), text, maxRows, visible);
   }
 
   /** Auth hot path: resolve a bearer token hash, stamping last_used_at. */
@@ -5304,3 +5341,12 @@ async function pruneOldBackups(bucket: R2Bucket, keep: number): Promise<number> 
 /** Re-exported so callers can reuse the fractional-ordering maths. */
 export { between as positionBetween, POSITION_STEP } from "./position.js";
 export { REPLAY_GAP_LIMIT } from "./sync-floor.js";
+export {
+  QUERY_DEFAULT_ROWS,
+  QUERY_MAX_ROWS,
+  QUERY_MEMBER_MAX_ROWS,
+  QUERY_MEMBER_PER_MINUTE,
+  QUERY_VIEWS,
+  QueryRejected,
+  type QueryResult,
+} from "./query.js";

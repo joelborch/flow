@@ -119,6 +119,22 @@ taskRoutes.post("/tasks/bulk", async (c) => {
   return c.json({ results }, 201);
 });
 
+/** Most ids one POST /api/tasks/details call reads. */
+export const TASK_DETAILS_MAX = 200;
+
+// Bulk read of GET /api/tasks/:taskId. The monthly backup used to fetch every
+// task one at a time (thousands of requests in a minute); this reads a whole
+// search page in one DO turn, with the same per-space visibility.
+taskRoutes.post("/tasks/details", async (c) => {
+  const auth = requireAuth(c);
+  const body = parseOrThrow(
+    z.object({ taskIds: z.array(Id).min(1).max(TASK_DETAILS_MAX) }),
+    await readJson(c)
+  );
+  const taskIds = [...new Set(body.taskIds)];
+  return c.json(await workspace(c.env).getTaskDetails(taskIds, auth.user.id));
+});
+
 // ---------------------------------------------------------------------------
 // Task CRUD
 // ---------------------------------------------------------------------------
