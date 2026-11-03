@@ -3,9 +3,29 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/joelborch/flow)
 
-**Agent-first project management you self-host on Cloudflare.** A drop-in replacement for the ClickUp/Asana/Linear slice most teams actually use — spaces, lists, boards, tasks, subtasks, comments, attachments, automations — built so that AI agents are first-class users, not an afterthought bolted onto a REST API.
+**A task manager your AI agents can actually use.** Flow is self-hosted project management on Cloudflare, covering the slice of ClickUp, Asana or Linear most teams use: spaces, lists, boards, tasks, subtasks, comments, attachments and automations. Agents are first-class users. They get a built-in MCP server, keys that act as a real person, and read-only SQL over the whole workspace.
 
-**[Try the read-only demo](https://flow-demo.joel-a67.workers.dev)** (sample data, nothing to install), or deploy your own copy with the button above.
+That last part is the difference you feel. Ask an agent "what's due this week, with who owns it and how far along the subtasks are" and, on most task managers, it pages through searches and fetches every task one call at a time. Flow answers it with one `flow_query`:
+
+```sql
+SELECT title, assignee_name, due_on, subtasks_done || '/' || subtask_count AS progress
+FROM tasks_v
+WHERE is_closed = 0 AND due_date < strftime('%s','now')*1000 + 7*86400000
+ORDER BY due_date
+```
+
+On a real workspace of a few thousand tasks, that question took 62 API calls and 14 seconds the usual way. One query took about 0.2 seconds over the network. The query is read-only, it can't reach a base table, and it only sees the spaces the caller is allowed to see.
+
+### Try it with your agent
+
+The [sandbox](https://flow-sandbox.joel-a67.workers.dev) is a live workspace with a public key. It resets every hour, so don't put anything real in it.
+
+```bash
+claude mcp add --transport http flow-sandbox https://flow-sandbox.joel-a67.workers.dev/mcp \
+  --header "Authorization: Bearer flow_sandbox_public_key_for_trying_flow"
+```
+
+Then ask Claude "what's overdue in Flow, and who owns it?" You can also [click through the read-only web demo](https://flow-demo.joel-a67.workers.dev), or deploy your own copy with the button above.
 
 <p align="center">
   <picture>
@@ -20,7 +40,7 @@ One Cloudflare Worker serves the SPA, the REST API, an MCP server, and WebSocket
 
 Task managers are slow, expensive per seat, and hostile to agents. Flow inverts all three:
 
-- **Agent-first.** A built-in MCP server at `/mcp` exposes 19 tools with proper annotations and structured output. Every tool calls the same Durable Object RPC method the UI and REST routes call, so a task created by Claude fires exactly the automations a task created by a human does. API keys impersonate real users, and the audit trail records which key did what — you always know whether a change came from a person or their agent.
+- **Agent-first.** A built-in MCP server at `/mcp` exposes 19 tools with proper annotations and structured output, including `flow_query` for read-only SQL. Every tool calls the same Durable Object RPC method the UI and REST routes call, so a task created by Claude fires exactly the automations a task created by a human does. API keys impersonate real users, and the audit trail records which key did what — you always know whether a change came from a person or their agent.
 - **Fast in a way SaaS can't be.** The whole workspace lives in one Durable Object's SQLite, so reads are single-digit-millisecond, in-process queries — no network hop to a database. The client gets one snapshot, then applies deltas over a WebSocket forever; there is no "refetch the board" path anywhere in the codebase. Mutations are optimistic in the UI, and a localStorage boot cache paints the last known board before the bundle has even finished loading.
 - **Yours.** Your tasks live in your Cloudflare account, in SQLite you can query, with an audit log of every mutation. No seat pricing, no data egress negotiation, no vendor deciding which API endpoints agents are allowed to use.
 
@@ -32,6 +52,7 @@ Task managers are slow, expensive per seat, and hostile to agents. Flow inverts 
 - **My Work** — everything assigned to you, subtasks included, bucketed by due date, plus a rail of work you've assigned out
 - **Real-time sync** — delta protocol with a monotonic `seq`, replay on reconnect, hibernating WebSockets so idle connections cost nothing
 - **MCP server** — streamable HTTP at `/mcp`, 19 tools, structured output, per-tool annotations, error messages written so agents can self-correct
+- **Read-only SQL** — `POST /api/query` and `flow_query` run one `SELECT` over views with the names already joined in, scoped to the caller's spaces, so a cross-list question is one call instead of dozens
 - **REST API** — the full surface, curl-friendly, with per-item results on bulk operations (up to 200 at a time)
 - **Automations** — trigger → conditions → actions rules evaluated inline in the mutation turn (depth-capped at 5), with a per-run log; outbound webhooks (HMAC-signed) and email go through a queue
 - **Email notifications** — assigned-to-me, comment-on-my-task, status changes, per-user preferences, sent via Cloudflare Email Sending with a dry-run gate that defaults to on
