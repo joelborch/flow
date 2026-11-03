@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 import type { z } from "zod";
 import type {
-  BackupStatus, EmailIntakeCheck, ImportBatch, ImportResult, IngestEmailInput, IngestEmailResult,
+  BackupStatus, EmailIntakeCheck, ImportBatch, ImportResult, IngestEmailInput, IngestEmailResult, QueryResult,
   Workspace,
 } from "@flow/core";
 import {
@@ -311,6 +311,13 @@ export interface WorkspaceApi extends WorkspaceRpc {
     userId?: string;
     action?: string;
   }): Promise<{ entries: AuditEntry[]; nextBefore: number | null }>;
+
+  // --- query ----------------------------------------------------------------
+  /**
+   * Read-only SQL over packages/core's QUERY_VIEWS. Refused SQL comes back as
+   * an Error whose message starts with "query failed:" or names the problem.
+   */
+  runQuery(text: string, maxRows?: number): Promise<QueryResult>;
 
   // --- ops ------------------------------------------------------------------
   /**

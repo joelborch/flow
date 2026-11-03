@@ -152,6 +152,7 @@ import {
   seedIfEmpty,
   seedJobs,
 } from "./schema.js";
+import { type QueryResult, runReadOnlyQuery } from "./query.js";
 import { searchTasks as runSearch } from "./search.js";
 import { type SnoozedRow, WAKE_SWEEP_LIMIT, wakeCandidates, wakesOnComment } from "./snooze.js";
 import {
@@ -1925,6 +1926,14 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       entries: rows.map(toAuditEntry),
       nextBefore: rows.length === limit && last ? last.id : null,
     };
+  }
+
+  /**
+   * Read-only SQL over the QUERY_VIEWS (see ./query.ts). Workspace-wide like
+   * the audit log, so the route and the MCP tool are owner/admin only.
+   */
+  runQuery(text: string, maxRows?: number): QueryResult {
+    return runReadOnlyQuery(this.sql, (fn) => this.ctx.storage.transactionSync(fn), text, maxRows);
   }
 
   /** Auth hot path: resolve a bearer token hash, stamping last_used_at. */
@@ -5304,3 +5313,4 @@ async function pruneOldBackups(bucket: R2Bucket, keep: number): Promise<number> 
 /** Re-exported so callers can reuse the fractional-ordering maths. */
 export { between as positionBetween, POSITION_STEP } from "./position.js";
 export { REPLAY_GAP_LIMIT } from "./sync-floor.js";
+export { QUERY_DEFAULT_ROWS, QUERY_MAX_ROWS, QUERY_VIEWS, QueryRejected, type QueryResult } from "./query.js";

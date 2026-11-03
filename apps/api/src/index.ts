@@ -14,6 +14,7 @@ import { automationRoutes } from "./routes/automations.js";
 import { emailIntakeRoutes } from "./routes/email-intake.js";
 import { handoffRoutes } from "./routes/handoffs.js";
 import { importRoutes } from "./routes/import.js";
+import { queryRoutes } from "./routes/query.js";
 import { inboundRoutes } from "./routes/inbound.js";
 import { listRoutes } from "./routes/lists.js";
 import { meRoutes } from "./routes/me.js";
@@ -81,6 +82,7 @@ app.route("/api", apiKeyRoutes);
 app.route("/api", inboundRoutes);
 app.route("/api", emailIntakeRoutes);
 app.route("/api", importRoutes);
+app.route("/api", queryRoutes);
 
 // --- MCP -------------------------------------------------------------------
 // Streamable HTTP: one endpoint, all methods. Auth has

@@ -25,6 +25,7 @@ import {
   ListHandoffsArgs,
   ListMyWorkArgs,
   MoveTaskArgs,
+  QueryArgs,
   ReplyHandoffArgs,
   RequestHandoffArgs,
   SearchTasksArgs,
@@ -45,6 +46,7 @@ import {
   ListHandoffsOut,
   ListMyWorkOut,
   MoveTaskOut,
+  QueryOut,
   ReplyHandoffOut,
   RequestHandoffOut,
   SearchTasksOut,
@@ -656,6 +658,24 @@ export function registerFlowTools(server: McpServer, ctx: ToolContext): void {
           handoff: handoffView(asHandoff(result.task), names),
           comment: result.comment === null ? null : commentView(result.comment, names),
         };
+      })
+  );
+
+  server.registerTool(
+    claim("flow_query"),
+    {
+      title: "Query with SQL",
+      description:
+        "Answer a cross-cutting question in one call with a single read-only SQLite SELECT (or WITH … SELECT). Prefer it over chains of search/get calls when a question spans lists, people or dates. Only these views exist: tasks_v (id, title, description, list_id, list_name, space_id, space_name, status, status_type open|custom|closed, assignee_id, assignee_name, assignee_email, priority, due_date ms, due_on YYYY-MM-DD, start_date, tags JSON, tags_text '|a|b|' for LIKE '%|tag|%', snoozed_until, blocked_note, closed_at, is_closed, assigned_by, assigned_at, handoff_state, handoff_requested_by, created_by, created_at, updated_at, subtask_count, subtasks_done), subtasks_v (id, task_id, task_title, title, done, note, assignee_id, assignee_name, due_date, due_on, assigned_by, created_at), comments_v (id, task_id, author_id, author_name, body, via, email_to, email_status, created_at), lists_v (id, name, space_id, space_name, archived), spaces_v (id, name, visibility, archived), statuses_v (id, list_id, name, type, position), users_v (id, name, email, role, deactivated), space_members_v, attachments_v. Times are epoch ms; now is strftime('%s','now')*1000. Results are capped at maxRows (truncated says so). Owner/admin only; it sees every space. One query holds the whole workspace while it runs, so filter and LIMIT rather than scanning everything.",
+      inputSchema: QueryArgs.shape,
+      outputSchema: QueryOut.shape,
+      annotations: READ,
+    },
+    ({ sql, maxRows }) =>
+      guard(async () => {
+        requireAdminRole(ctx);
+        const result = await ctx.ws.runQuery(sql, maxRows);
+        return { ...result, rowCount: result.rows.length };
       })
   );
 

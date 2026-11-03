@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./automation": "./src/automation/index.ts",
     "./id": "./src/id.ts",
-    "./email-intake": "./src/email-intake.ts"
+    "./email-intake": "./src/email-intake.ts",
+    "./query": "./src/query.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
