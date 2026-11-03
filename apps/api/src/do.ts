@@ -412,8 +412,11 @@ const INTERNAL_ERROR_RE =
  */
 const NOT_FOUND_RE = /\bnot found\b/i;
 
-/** QueryRateLimiter's refusal ("too many queries: …"), a 429 the caller can wait out. */
-const RATE_LIMITED_RE = /^too many queries\b/i;
+/**
+ * A spent budget the caller can wait out, so a 429: QueryRateLimiter's
+ * "too many queries: …" and the sandbox's "too many changes in the sandbox: …".
+ */
+const RATE_LIMITED_RE = /^too many (queries|changes in the sandbox)\b/i;
 
 /** Status for a domain error thrown inside the DO. Exported for tests. */
 export function statusForDoError(message: string): 404 | 422 | 429 {

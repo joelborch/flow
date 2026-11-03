@@ -22,9 +22,12 @@
     "producers": [{ "binding": "SIDE_EFFECTS", "queue": "flow-sandbox-side-effects" }],
     "consumers": [{ "queue": "flow-sandbox-side-effects", "max_retries": 0 }]
   },
-  // 120 requests a minute per IP across /api and /mcp.
+  // 120 requests a minute per IP, and 600 in total, across /api and /mcp.
+  // Both are counted per Cloudflare location; the exact, global cap is the
+  // shared write budget inside the DO.
   "ratelimits": [
-    { "name": "SANDBOX_RATE_LIMIT", "namespace_id": "4101", "simple": { "limit": 120, "period": 60 } }
+    { "name": "SANDBOX_RATE_LIMIT", "namespace_id": "4101", "simple": { "limit": 120, "period": 60 } },
+    { "name": "SANDBOX_TOTAL_LIMIT", "namespace_id": "4102", "simple": { "limit": 600, "period": 60 } }
   ],
   // Top of every hour: wipe the hours just gone and seed the new one.
   "triggers": { "crons": ["0 * * * *"] },

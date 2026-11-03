@@ -153,6 +153,7 @@ import {
   seedJobs,
 } from "./schema.js";
 import { QueryRateLimiter, type QueryResult, runReadOnlyQuery } from "./query.js";
+import { SandboxWriteBudget } from "./sandbox-seed.js";
 import { searchTasks as runSearch } from "./search.js";
 import { type SnoozedRow, WAKE_SWEEP_LIMIT, wakeCandidates, wakesOnComment } from "./snooze.js";
 import {
@@ -188,7 +189,14 @@ import {
 } from "./visibility.js";
 
 export type { ImportBatch, ImportResult, ImportCounts } from "./import.js";
-export { SANDBOX_KEY_NAME, SANDBOX_MEMBER_ID, sandboxSeed } from "./sandbox-seed.js";
+export {
+  SANDBOX_KEY_NAME,
+  SANDBOX_MEMBER_ID,
+  SANDBOX_WRITES_PER_MINUTE,
+  SandboxBusy,
+  SandboxWriteBudget,
+  sandboxSeed,
+} from "./sandbox-seed.js";
 export type {
   EmailIngestAttachment, EmailIntakeCheck, IngestEmailInput, IngestEmailResult,
 } from "./email-intake.js";
@@ -422,6 +430,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   private armedAlarm: number | null = null;
   /** Members' runQuery budget; in memory, so an eviction resets it. */
   private readonly queryLimiter = new QueryRateLimiter();
+  /** Sandbox only: one write budget every visitor shares (see SandboxWriteBudget). */
+  private readonly sandboxWrites = new SandboxWriteBudget();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -801,6 +811,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   // =========================================================================
 
   private runTurn<T>(actor: Actor, fn: (t: Turn) => T, silent = false): T {
+    // Before anything is written, so a refused turn changes nothing.
+    if (this.env.SANDBOX === "true") this.sandboxWrites.take();
     const t = new Turn(this.sql, actor, Date.now(), silent, (entity, entityId, taskId) =>
       this.spaceIdForDelta(entity, entityId, taskId)
     );

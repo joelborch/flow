@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { SANDBOX_MEMBER_ID } from "@flow/core";
-import sandbox, { ensureSeeded, wipeOldWorkspaces } from "./sandbox.js";
+import sandbox from "./sandbox.js";
+import { SANDBOX_MAX_BODY_BYTES, SANDBOX_MAX_ITEMS, ensureSeeded, oversizedWrite, wipeOldWorkspaces } from "./sandbox-core.js";
 import { SANDBOX_PERIOD_MS, workspaceName, type Env } from "./env.js";
 
-// The public sandbox wrapper (src/sandbox.ts). The DO is a stub keyed by
+// The public sandbox wrapper (src/sandbox.ts and src/sandbox-core.ts). The DO is a stub keyed by
 // workspace name, so these check which workspace each call reaches as well as
 // what it does. The seed itself is tested against the real Workspace in
 // packages/core/src/sandbox-seed.test.ts.
@@ -41,17 +42,19 @@ function setup(overrides: Partial<Env> = {}) {
     return stubs.get(name)!;
   };
   const limit = vi.fn(async () => ({ success: true }));
+  const total = vi.fn(async () => ({ success: true }));
   const env = {
     SANDBOX: "true",
     SANDBOX_TOKEN: TOKEN,
     SANDBOX_RATE_LIMIT: { limit },
+    SANDBOX_TOTAL_LIMIT: { limit: total },
     WORKSPACE: {
       idFromName: (name: string) => name,
       get: (name: string) => stubFor(name),
     },
     ...overrides,
   } as unknown as Env;
-  return { env, stubFor, limit };
+  return { env, stubFor, limit, total };
 }
 
 const ctx = { waitUntil: () => undefined, passThroughOnException: () => undefined } as unknown as ExecutionContext;
@@ -90,6 +93,50 @@ describe("sandbox fetch", () => {
     const res = await call(env, "/mcp", { method: "POST", headers: { "cf-connecting-ip": "203.0.113.9" } });
     expect(res.status).toBe(429);
     expect(limit).toHaveBeenCalledWith({ key: "203.0.113.9" });
+  });
+
+  it("has a total limit on top of the per-IP one", async () => {
+    const { env, total } = setup();
+    total.mockResolvedValueOnce({ success: false });
+    const res = await call(env, "/api/me");
+    expect(res.status).toBe(429);
+    expect(total).toHaveBeenCalledWith({ key: "all" });
+  });
+
+  it("refuses a bulk write with more than the item cap, over REST and MCP", async () => {
+    const { env } = setup();
+    const tasks = Array.from({ length: SANDBOX_MAX_ITEMS + 1 }, (_, i) => ({ listId: "ls_sb_content", title: `t${i}` }));
+    const rest = await call(env, "/api/tasks/bulk", { method: "POST", body: JSON.stringify({ tasks }) });
+    expect(rest.status).toBe(413);
+    expect(((await rest.json()) as { error: string }).error).toContain("at most 10 items");
+    const mcp = await call(env, "/mcp", {
+      method: "POST",
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "flow_bulk_create_tasks", arguments: { tasks } } }),
+    });
+    expect(mcp.status).toBe(413);
+  });
+
+  it("refuses arrays nested anywhere, like inline subtasks, and oversized bodies", async () => {
+    const subtasks = Array.from({ length: SANDBOX_MAX_ITEMS + 1 }, (_, i) => ({ title: `s${i}` }));
+    const nested = new Request("https://sandbox.example.com/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({ listId: "ls_sb_content", title: "x", subtasks }),
+    });
+    expect(await oversizedWrite(nested)).toContain("at most 10 items");
+    const big = new Request("https://sandbox.example.com/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({ listId: "ls_sb_content", title: "x", description: "a".repeat(SANDBOX_MAX_BODY_BYTES) }),
+    });
+    expect(await oversizedWrite(big)).toContain("bytes");
+  });
+
+  it("lets ordinary writes and reads through", async () => {
+    const ok = new Request("https://sandbox.example.com/api/tasks/bulk", {
+      method: "POST",
+      body: JSON.stringify({ tasks: Array.from({ length: SANDBOX_MAX_ITEMS }, (_, i) => ({ title: `t${i}`, tags: ["a", "b"] })) }),
+    });
+    expect(await oversizedWrite(ok)).toBeNull();
+    expect(await oversizedWrite(new Request("https://sandbox.example.com/api/tasks/search?q=x"))).toBeNull();
   });
 
   it("refuses attachment uploads before they reach the app", async () => {

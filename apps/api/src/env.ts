@@ -63,6 +63,8 @@ export type Env = CoreEnv & {
   SANDBOX_TOKEN?: string;
   /** Per-IP request limit in front of the sandbox (a Workers rate limiting binding). */
   SANDBOX_RATE_LIMIT?: RateLimit;
+  /** The sandbox's total request limit, counted per Cloudflare location. */
+  SANDBOX_TOTAL_LIMIT?: RateLimit;
 };
 
 /** Single workspace by design: one fixed DO instance holds everything. */

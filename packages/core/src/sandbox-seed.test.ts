@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { SANDBOX_MEMBER_ID, sandboxSeed } from "./sandbox-seed.js";
+import { CreateTaskInput } from "@flow/shared";
+import { SANDBOX_MEMBER_ID, SANDBOX_WRITES_PER_MINUTE, SandboxBusy, SandboxWriteBudget, sandboxSeed } from "./sandbox-seed.js";
 
 // The public sandbox's starting workspace and the two DO behaviours only the
 // sandbox uses: no recurring jobs, and wipeSandbox. Same harness as
@@ -125,5 +126,38 @@ describe("sandbox mode in the DO", () => {
     const normal = await freshWorkspace({});
     await expect(normal.ws.wipeSandbox()).rejects.toThrow(/only runs on the sandbox/);
     expect(normal.deleteAll).not.toHaveBeenCalled();
+  });
+});
+
+describe("the sandbox's shared write budget", () => {
+  it("allows the budget per rolling minute, then says how long to wait", () => {
+    let now = 1_000_000;
+    const budget = new SandboxWriteBudget(2, () => now);
+    budget.take();
+    budget.take();
+    expect(() => budget.take()).toThrow(SandboxBusy);
+    expect(() => budget.take()).toThrow(/^too many changes in the sandbox: everyone shares 2 a minute; try again in 60s$/);
+    now += 60_001;
+    budget.take();
+  });
+
+  it("refuses the write past the budget in a sandbox DO, without writing it, and never limits a normal one", async () => {
+    const sandbox = await freshWorkspace({ SANDBOX: "true" });
+    const owner = ownerOf(sandbox.ws);
+    // The seed goes through importBatch, which isn't a mutation turn, so the
+    // whole budget is left for visitors.
+    sandbox.ws.importBatch(sandboxSeed(owner.id), owner.id);
+    const create = (ws: typeof sandbox.ws, i: number) =>
+      ws.createTask(CreateTaskInput.parse({ listId: "ls_sb_content", title: `extra ${i}` }), SANDBOX_MEMBER_ID);
+    for (let i = 0; i < SANDBOX_WRITES_PER_MINUTE; i++) create(sandbox.ws, i);
+    const count = () => (sandbox.db.prepare("SELECT count(*) AS n FROM tasks").get() as { n: number }).n;
+    const before = count();
+    expect(() => create(sandbox.ws, 99)).toThrow(/^too many changes in the sandbox/);
+    expect(count()).toBe(before);
+
+    const normal = await freshWorkspace({});
+    const nOwner = ownerOf(normal.ws);
+    normal.ws.importBatch(sandboxSeed(nOwner.id), nOwner.id);
+    for (let i = 0; i <= SANDBOX_WRITES_PER_MINUTE + 5; i++) create(normal.ws, i);
   });
 });

@@ -14,6 +14,39 @@ import type { ImportBatch } from "./import.js";
 export const SANDBOX_MEMBER_ID = "us_sandbox_agent";
 export const SANDBOX_KEY_NAME = "public sandbox key";
 
+/**
+ * Mutations the whole sandbox may make per rolling minute, across every
+ * visitor. Rows written are what a public write key can run up, and the
+ * Worker already caps each write at a handful of items, so counting turns
+ * here bounds rows too. One DO serves the hour, so this count is global.
+ */
+export const SANDBOX_WRITES_PER_MINUTE = 30;
+
+/** Thrown when the sandbox's shared write budget is spent; the Worker maps it to a 429. */
+export class SandboxBusy extends Error {}
+
+/** The shared budget: a rolling minute of mutation timestamps, in DO memory. */
+export class SandboxWriteBudget {
+  private recent: number[] = [];
+
+  constructor(
+    private readonly perMinute = SANDBOX_WRITES_PER_MINUTE,
+    private readonly now: () => number = Date.now
+  ) {}
+
+  take(): void {
+    const now = this.now();
+    this.recent = this.recent.filter((at) => at > now - 60_000);
+    if (this.recent.length >= this.perMinute) {
+      const wait = Math.max(1, Math.ceil((this.recent[0]! + 60_000 - now) / 1000));
+      throw new SandboxBusy(
+        `too many changes in the sandbox: everyone shares ${this.perMinute} a minute; try again in ${wait}s`
+      );
+    }
+    this.recent.push(now);
+  }
+}
+
 const DAY = 86_400_000;
 
 interface SeedTask {
