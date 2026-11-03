@@ -5,6 +5,7 @@
 ### Added
 
 - **Read-only SQL queries** (`POST /api/query`, MCP `flow_query`, now 19 tools). One `SELECT` over views that join in list, space, status and assignee names answers a cross-list question in a single call. Writes, `PRAGMA`, `ATTACH`, a second statement and every base table name are refused, the statement always rolls back, and the views leave out key hashes, inbound tokens, R2 keys and email bodies. Owners and admins see every space; a member's views are filtered to the spaces they can see, with a 200-row cap and 30 queries a minute. No migration.
+- **Public sandbox** (`sandbox/wrangler.jsonc`, `pnpm deploy:sandbox`). A live workspace anyone can point an agent at with a published key. The key acts as a member, so the app's normal permissions fence it in. Each hour gets a fresh workspace seeded with sample data, and the hour before it is wiped. Uploads, email and webhooks are off, and requests are rate-limited per IP. Self-hosted deployments are unaffected: without `SANDBOX="true"` the workspace is always `main`.
 - **Bulk task details** (`POST /api/tasks/details`). Up to 200 task details in one Durable Object turn, with the same visibility as `GET /api/tasks/:id`; missing or hidden ids come back in `errors`.
 
 ## 0.2.0 (2026-10-20)

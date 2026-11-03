@@ -37,6 +37,9 @@ regexes = [
   # Explicit example tokens used in docs and READMEs.
   '''flow_EXAMPLE[A-Za-z0-9_-]*''',
   '''inb_EXAMPLE[A-Za-z0-9_-]*''',
+  # The public sandbox's key: published on purpose (sandbox/wrangler.jsonc),
+  # and only valid against that sandbox. Exact string, so nothing else rides on it.
+  '''flow_sandbox_public_key_for_trying_flow''',
   # Obvious placeholder fillers.
   '''flow_x{20,}''',
   '''inb_x{10,}''',

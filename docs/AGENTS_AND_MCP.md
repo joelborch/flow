@@ -15,7 +15,14 @@ The transport is **stateless**: a fresh `McpServer` and transport are built per 
 
 ### Connecting clients
 
-Mint a key first (`POST /api/api-keys`, or Settings → API Keys in the UI — any member can mint one that acts as themselves; the token is shown once).
+To try it before deploying anything, connect to the public sandbox, a live workspace that resets every hour. Its key is published on [its front page](https://flow-sandbox.joel-a67.workers.dev):
+
+```bash
+claude mcp add --transport http flow-sandbox https://flow-sandbox.joel-a67.workers.dev/mcp \
+  --header "Authorization: Bearer flow_sandbox_public_key_for_trying_flow"
+```
+
+For your own deployment, mint a key first (`POST /api/api-keys`, or Settings → API Keys in the UI — any member can mint one that acts as themselves; the token is shown once).
 
 **Claude Code:**
 

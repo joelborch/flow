@@ -43,7 +43,7 @@ import type {
   User,
   WorkspaceRpc,
 } from "@flow/shared";
-import { WORKSPACE_NAME, type Env } from "./env.js";
+import { workspaceName, type Env } from "./env.js";
 import { ApiError } from "./errors.js";
 
 /**
@@ -323,6 +323,8 @@ export interface WorkspaceApi extends WorkspaceRpc {
    * an Error whose message starts with "query failed:" or names the problem.
    */
   runQuery(text: string, maxRows: number | undefined, forUserId: string): Promise<QueryResult>;
+  /** Sandbox only: deletes the workspace's alarm and every row. Refuses unless SANDBOX is "true". */
+  wipeSandbox(): Promise<{ ok: true }>;
 
   // --- ops ------------------------------------------------------------------
   /**
@@ -410,8 +412,11 @@ const INTERNAL_ERROR_RE =
  */
 const NOT_FOUND_RE = /\bnot found\b/i;
 
-/** QueryRateLimiter's refusal ("too many queries: …"), a 429 the caller can wait out. */
-const RATE_LIMITED_RE = /^too many queries\b/i;
+/**
+ * A spent budget the caller can wait out, so a 429: QueryRateLimiter's
+ * "too many queries: …" and the sandbox's "too many changes in the sandbox: …".
+ */
+const RATE_LIMITED_RE = /^too many (queries|changes in the sandbox)\b/i;
 
 /** Status for a domain error thrown inside the DO. Exported for tests. */
 export function statusForDoError(message: string): 404 | 422 | 429 {
@@ -420,7 +425,7 @@ export function statusForDoError(message: string): 404 | 422 | 429 {
 }
 
 export function workspace(env: Env): WorkspaceApi {
-  const id = env.WORKSPACE.idFromName(WORKSPACE_NAME);
+  const id = env.WORKSPACE.idFromName(workspaceName(env));
   const stub = env.WORKSPACE.get(id) as unknown as WorkspaceApi;
   // Wrap every RPC so a domain error thrown inside the DO reaches the caller
   // as a readable 422 instead of being flattened to "internal error". Agents
@@ -449,7 +454,7 @@ export function workspace(env: Env): WorkspaceApi {
 
 /** Raw stub for the /ws upgrade, which goes through the DO's fetch handler. */
 export function workspaceStub(env: Env): DurableObjectStub<Workspace> {
-  return env.WORKSPACE.get(env.WORKSPACE.idFromName(WORKSPACE_NAME));
+  return env.WORKSPACE.get(env.WORKSPACE.idFromName(workspaceName(env)));
 }
 
 // ---------------------------------------------------------------------------
