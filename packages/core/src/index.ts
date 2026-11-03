@@ -188,6 +188,7 @@ import {
 } from "./visibility.js";
 
 export type { ImportBatch, ImportResult, ImportCounts } from "./import.js";
+export { SANDBOX_KEY_NAME, SANDBOX_MEMBER_ID, sandboxSeed } from "./sandbox-seed.js";
 export type {
   EmailIngestAttachment, EmailIntakeCheck, IngestEmailInput, IngestEmailResult,
 } from "./email-intake.js";
@@ -213,6 +214,13 @@ export interface Env {
   EMAIL_DRY_RUN?: string;
   /** "true" lets a person email a comment back to a ticket's requester. Off when unset. */
   EMAIL_INTAKE_REPLY?: string;
+  /**
+   * "true" on the public sandbox Worker (sandbox/wrangler.jsonc). Each sandbox
+   * workspace lives for an hour and is then wiped, so it schedules no recurring
+   * jobs: an alarm would wake the dead workspace for nothing, and a backup would
+   * write to R2 on the visitor's behalf.
+   */
+  SANDBOX?: string;
 }
 
 // Queues' per-message (128KB) and per-sendBatch (100 msgs / 256KB) limits:
@@ -440,10 +448,10 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
           bumpResyncFloor(this.sql, this.maxSeq());
         }
         seedIfEmpty(this.sql);
-        seedJobs(this.sql);
+        if (env.SANDBOX !== "true") seedJobs(this.sql);
         await this.armAlarm();
       });
-    } else if (seedJobs(this.sql) > 0) {
+    } else if (env.SANDBOX !== "true" && seedJobs(this.sql) > 0) {
       // A job kind added after this workspace last migrated (seedJobs used to
       // run only on an empty scheduled_jobs table, which left new kinds dead
       // on existing workspaces). Re-arm so the new job's run_at is honored.
@@ -1951,6 +1959,21 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       entries: rows.map(toAuditEntry),
       nextBefore: rows.length === limit && last ? last.id : null,
     };
+  }
+
+  /**
+   * Deletes this workspace outright: its alarm, then every row. Only the
+   * sandbox Worker calls it, on the previous hour's workspace once visitors
+   * have moved on to a fresh one, and it refuses anywhere SANDBOX isn't on, so
+   * a stray call can never empty a real workspace.
+   */
+  async wipeSandbox(): Promise<{ ok: true }> {
+    if (this.env.SANDBOX !== "true") {
+      throw new Error("wipeSandbox only runs on the sandbox Worker (SANDBOX=\"true\").");
+    }
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+    return { ok: true };
   }
 
   /**

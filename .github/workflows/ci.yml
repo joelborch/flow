@@ -51,6 +51,10 @@ jobs:
       - name: One-click config dry-run deploy
         run: node scripts/deploy-worker.mjs --dry-run
 
+      - name: Sandbox config dry-run deploy
+        working-directory: apps/api
+        run: npx wrangler deploy --dry-run --config ../../sandbox/wrangler.jsonc
+
       - name: Wrangler dry-run deploy
         working-directory: apps/api
         run: |

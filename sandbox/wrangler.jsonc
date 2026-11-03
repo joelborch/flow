@@ -1,0 +1,43 @@
+// The public sandbox: the real Flow Worker behind apps/api/src/sandbox.ts,
+// with a published member key and a fresh workspace every hour. See the
+// comment at the top of that file for what it turns off and why. Deploy with
+// `pnpm deploy:sandbox`; it has its own bucket and queue, so it can't touch a
+// real Flow on the same account.
+{
+  "$schema": "../apps/api/node_modules/wrangler/config-schema.json",
+  "name": "flow-sandbox",
+  "main": "../apps/api/src/sandbox.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "WORKSPACE", "class_name": "Workspace" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Workspace"] }],
+  // Bound because the app expects it; sandbox.ts refuses every upload.
+  "r2_buckets": [{ "binding": "ATTACHMENTS", "bucket_name": "flow-sandbox-attachments" }],
+  // Produced into by automations and notifications, and drained without
+  // delivering by sandbox.ts's queue handler.
+  "queues": {
+    "producers": [{ "binding": "SIDE_EFFECTS", "queue": "flow-sandbox-side-effects" }],
+    "consumers": [{ "queue": "flow-sandbox-side-effects", "max_retries": 0 }]
+  },
+  // 120 requests a minute per IP across /api and /mcp.
+  "ratelimits": [
+    { "name": "SANDBOX_RATE_LIMIT", "namespace_id": "4101", "simple": { "limit": 120, "period": 60 } }
+  ],
+  // Top of every hour: wipe the hours just gone and seed the new one.
+  "triggers": { "crons": ["0 * * * *"] },
+  "vars": {
+    "SANDBOX": "true",
+    // Public on purpose: it's printed on the sandbox's front page.
+    "SANDBOX_TOKEN": "flow_sandbox_public_key_for_trying_flow",
+    "EMAIL_DRY_RUN": "true",
+    "APP_HOSTNAME": "flow-sandbox.joel-a67.workers.dev",
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": "",
+    "OWNER_EMAIL": "avery@example.com",
+    "EMAIL_INTAKE_REPLY": "false"
+  },
+  "observability": { "enabled": true }
+}

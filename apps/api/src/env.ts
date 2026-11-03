@@ -54,10 +54,31 @@ export type Env = CoreEnv & {
    * exactly the string "true". Anything else (including unset) fails closed.
    */
   DEV_NO_AUTH?: string;
+  /**
+   * The public sandbox only (sandbox/wrangler.jsonc). "true" gives every hour
+   * its own throwaway workspace (see workspaceName), and SANDBOX_TOKEN is the
+   * published key that acts as the sandbox's demo member there.
+   */
+  SANDBOX?: string;
+  SANDBOX_TOKEN?: string;
+  /** Per-IP request limit in front of the sandbox (a Workers rate limiting binding). */
+  SANDBOX_RATE_LIMIT?: RateLimit;
 };
 
 /** Single workspace by design: one fixed DO instance holds everything. */
 export const WORKSPACE_NAME = "main";
+
+/** How long a sandbox workspace lives before visitors move to a fresh one. */
+export const SANDBOX_PERIOD_MS = 3_600_000;
+
+/**
+ * The DO instance a request talks to: always "main", except on the sandbox,
+ * where each hour gets a new, empty one ("sandbox-<hour>"). Starting the hour
+ * on a fresh instance is the reset; the cron then wipes the old one.
+ */
+export function workspaceName(env: { SANDBOX?: string }, now: number = Date.now()): string {
+  return env.SANDBOX === "true" ? `sandbox-${Math.floor(now / SANDBOX_PERIOD_MS)}` : WORKSPACE_NAME;
+}
 
 /** Header the Worker uses to hand the resolved user id to the DO on /ws. */
 export const WS_USER_HEADER = "X-Flow-User-Id";
