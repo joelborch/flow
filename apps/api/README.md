@@ -620,7 +620,7 @@ spaces before their SQL runs, so no join, subquery or CTE can reach a private
 space they aren't in. `users_v` is the whole user list, as `GET /api/users` is.
 
 The DO runs one query at a time, so a careless cross join holds the whole
-workspace (about 3 s for `tasks_v × tasks_v` at 3,800 tasks). `maxRows`
+workspace (about 3 s for `tasks_v × tasks_v` on a few thousand tasks). `maxRows`
 defaults to 200 and caps at 1000 for owners/admins and 200 for members;
 `truncated` says when more rows matched. Members may also run 30 queries a
 minute, and the next one gets a 429 that says how long to wait. The same thing

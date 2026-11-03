@@ -12,7 +12,7 @@ alias flowcurl='curl -sS -H "Authorization: Bearer $TOKEN"'
 
 **Auth.** Every route requires either a `flow_` bearer token or a Cloudflare Access JWT, except `GET /api/health` (public) and `POST /api/inbound/:listId` (authenticated per-list by its own `inb_` token). "Admin" below means the owner or admin role. Reads and writes are additionally filtered by [per-space visibility](ARCHITECTURE.md#per-space-visibility).
 
-**Errors.** Always `{"error": "<one readable sentence>"}`. Validation failures are 422 with every Zod issue flattened into the one line. Domain errors keep the DO's own message (`Unknown status "Blocked" for list ls_x. Valid statuses (in order): ...`) — 404 when it names a missing entity, 422 otherwise. 401 no/bad credential, 403 authenticated but not permitted, 413 attachment over 100 MB, 416 unsatisfiable Range, 500 logged and never leaked.
+**Errors.** Always `{"error": "<one readable sentence>"}`. Validation failures are 422 with every Zod issue flattened into the one line. Domain errors keep the DO's own message (`Unknown status "Blocked" for list ls_x. Valid statuses (in order): ...`) — 404 when it names a missing entity, 422 otherwise. 401 no/bad credential, 403 authenticated but not permitted, 413 attachment over 100 MB, 416 unsatisfiable Range, 429 a member's query budget is spent, 500 logged and never leaked.
 
 ---
 
@@ -157,12 +157,13 @@ Returns concise `TaskRow` shapes, not full tasks; page with `cursor` until it's 
 
 ## Bulk
 
-Both forms report **per item**, so one bad entry never forces a blind retry of the whole batch. Up to 200 items.
+Every form reports **per item**, so one bad entry never forces a blind retry of the whole batch. Up to 200 items.
 
 | Method + path | Auth | What |
 |---|---|---|
 | `PATCH /api/tasks/bulk` | any | `{updates: [UpdateTaskInput, ...]}` |
 | `POST /api/tasks/bulk` | any | `{tasks: [CreateTaskInput, ...]}` → 201 |
+| `POST /api/tasks/details` | any | `{taskIds: [...]}` → `{details, errors}`: the `GET /api/tasks/:id` detail for each id in one DO turn. Duplicates are read once; missing ids and tasks in spaces you can't see land in `errors` instead of failing the batch. |
 
 ```bash
 flowcurl -X PATCH $FLOW/api/tasks/bulk -H 'Content-Type: application/json' \
@@ -170,6 +171,28 @@ flowcurl -X PATCH $FLOW/api/tasks/bulk -H 'Content-Type: application/json' \
 # {"results":[{"taskId":"tk_1","ok":true,"error":null},
 #             {"taskId":"tk_2","ok":false,"error":"no task tk_2"}]}
 ```
+
+```bash
+# Bulk read, for exports and agents that would otherwise GET every task
+flowcurl -X POST $FLOW/api/tasks/details -H 'Content-Type: application/json' \
+  -d '{"taskIds":["tk_1","tk_2"]}'
+# {"details":[{"task":{...},"subtasks":[...],"comments":[...],"attachments":[...]}],
+#  "errors":[{"taskId":"tk_2","error":"no task tk_2"}]}
+```
+
+## Query (read-only SQL)
+
+| Method + path | Auth | What |
+|---|---|---|
+| `POST /api/query` | any | `{sql, maxRows?}` → `{columns, rows, truncated, rowCount, ms}`. One read-only `SELECT` over the `*_v` views, scoped to the spaces the caller can see. |
+
+```bash
+flowcurl -X POST $FLOW/api/query -H 'Content-Type: application/json' \
+  -d '{"sql":"SELECT assignee_name, count(*) AS n_open FROM tasks_v WHERE is_closed = 0 GROUP BY assignee_name"}'
+# {"columns":["assignee_name","n_open"],"rows":[["Avery",12],[null,4]],"truncated":false,"rowCount":2,"ms":1}
+```
+
+`maxRows` defaults to 200 and caps at 1000 for owners/admins and 200 for members, who also get 30 queries a rolling minute (then a 429 saying how long to wait). A refused or failing query is a 422 with the reason. The views, the gate and the scoping are described in [Agents and MCP](AGENTS_AND_MCP.md#querying-with-sql). It's the same thing as the `flow_query` MCP tool.
 
 ## Subtasks
 
