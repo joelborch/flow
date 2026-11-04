@@ -158,6 +158,27 @@ describe("input caps", () => {
       }).success
     ).toBe(true);
   });
+
+  // zod >=4.6 measures strings in code points, not UTF-16 units, so an emoji
+  // counts as one character against every cap. Callers that trim with
+  // `.length` (email intake, import) stay within the caps, since a string's
+  // UTF-16 length is never smaller than its code-point count.
+  it("counts an emoji as one character against the caps", () => {
+    const emoji = "😀";
+    expect(emoji).toHaveLength(2);
+    expect(
+      CreateTaskInput.safeParse({ listId: "ls_1", title: emoji.repeat(LIMITS.titleMax) }).success
+    ).toBe(true);
+    expect(
+      CreateTaskInput.safeParse({ listId: "ls_1", title: emoji.repeat(LIMITS.titleMax + 1) }).success
+    ).toBe(false);
+    expect(CreateTaskInput.safeParse({ listId: "ls_1", title: emoji }).success).toBe(true);
+  });
+
+  it("keeps a title trimmed to the cap by UTF-16 length within the cap", () => {
+    const trimmed = "😀".repeat(LIMITS.titleMax).slice(0, LIMITS.titleMax);
+    expect(CreateTaskInput.safeParse({ listId: "ls_1", title: trimmed }).success).toBe(true);
+  });
 });
 
 describe("truncateImportTitle", () => {
