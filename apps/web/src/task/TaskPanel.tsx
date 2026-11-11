@@ -30,7 +30,7 @@ export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => 
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
-  const panelRef = useRef<HTMLElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   useDialogFocus(panelRef);
 
   // --- load ---------------------------------------------------------------
@@ -150,7 +150,7 @@ export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => 
         aria-hidden="true"
       />
 
-      <aside
+      <div
         ref={panelRef}
         tabIndex={-1}
         role="dialog"
@@ -304,7 +304,7 @@ export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => 
             </span>
           </div>
         )}
-      </aside>
+      </div>
     </div>
   );
 }

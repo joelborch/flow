@@ -4,7 +4,7 @@ import { useLayoutEffect } from "preact/hooks";
 import type { RefObject } from "preact";
 
 export function useAutogrow(
-  ref: RefObject<HTMLTextAreaElement>,
+  ref: RefObject<HTMLTextAreaElement | null>,
   value: string,
   opts: { min?: number; max?: number } = {}
 ): void {
