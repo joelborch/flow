@@ -97,7 +97,7 @@ export function Card({ task }: { task: StoreTask }) {
   useEffect(() => cancelHover, []);
 
   return (
-    <article
+    <div
       data-task-id={task.id}
       onPointerDown={(ev) => onCardPointerDown(ev, task.id, task.listId)}
       onPointerEnter={(ev) => {
@@ -186,6 +186,6 @@ export function Card({ task }: { task: StoreTask }) {
           </span>
         </div>
       ) : null}
-    </article>
+    </div>
   );
 }

@@ -35,7 +35,7 @@ function focusableIn(container: HTMLElement): HTMLElement[] {
  * own (an input, say) via an effect declared before this hook runs, this
  * hook sees that element already focused and leaves it alone.
  */
-export function useDialogFocus(containerRef: RefObject<HTMLElement>, open = true): void {
+export function useDialogFocus(containerRef: RefObject<HTMLElement | null>, open = true): void {
   const restoreRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
