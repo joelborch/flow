@@ -162,9 +162,12 @@ below.
 
 ## Per-space permissions
 
-A space is `visibility: "workspace"` (the default, and what every existing space
-is) or `"private"`. Owners and admins see every space; a member sees the
-workspace-visible ones plus the private ones they are in (`space_members`).
+A newly created space defaults to `visibility: "private"`; its creator is
+added as its first member. Pass `visibility: "workspace"` to make a new space
+visible to every member. The `"workspace"` default on the stored `Space` entity
+is a compatibility fallback for existing rows that have no visibility value.
+Owners and admins see every space; a member sees workspace-visible ones plus
+the private ones they are in (`space_members`).
 Everything under a space — lists, tasks, subtasks, comments, attachments —
 inherits that decision; there is no per-list override. The rule itself lives in
 `src/visibility.ts` as `canSeeSpace`, and the three enforcement shapes all call
@@ -456,11 +459,12 @@ and nothing else — no spaces, no lists; imports or the UI create those.
 | Workspace Owner | owner@placeholder.flow | owner |
 
 The seed is static SQL with no access to env, so the owner starts with a
-placeholder address flagged `needs_email_update`. After deploying, set
-`OWNER_EMAIL`, sign in through Access (or `DEV_NO_AUTH=true` locally), and set
-the real address with `upsertUser`, which clears the flag once the address is
-no longer `@placeholder.flow`. Notifications are skipped for placeholder
-emails, so nothing is sent until then.
+placeholder address flagged `needs_email_update`. Set `OWNER_EMAIL` before the
+owner's first sign-in through Access (or use `DEV_NO_AUTH=true` locally). That
+sign-in claims the seeded owner for the configured address; `claimOwner` calls
+`upsertUser`, which clears the flag once the address is no longer
+`@placeholder.flow`. Notifications are skipped for placeholder emails, so
+nothing is sent until then.
 
 ## IDs
 
