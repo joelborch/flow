@@ -1,7 +1,7 @@
 // Board filter state. Client-side only — it narrows the tasks already loaded.
 // Full-text search across the workspace goes through /api/tasks/search later.
 import { computed, signal, type ReadonlySignal } from "@preact/signals";
-import { isSnoozed } from "../lib/fmt.js";
+import { isSnoozed, visibleTags } from "../lib/fmt.js";
 import { me, type StoreTask } from "../store/index.js";
 
 /** Empty = every status shows. */
@@ -52,7 +52,11 @@ export const cardFilter: ReadonlySignal<(task: StoreTask) => boolean> = computed
   if (!q && !assignee) return () => true;
   return (task: StoreTask) => {
     if (assignee && task.assigneeId !== assignee) return false;
-    if (q && !task.title.toLowerCase().includes(q)) return false;
+    if (
+      q &&
+      !task.title.toLowerCase().includes(q) &&
+      !visibleTags(task.tags).some((tag) => tag.toLowerCase().includes(q))
+    ) return false;
     return true;
   };
 });
