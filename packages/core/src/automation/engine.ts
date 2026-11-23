@@ -64,10 +64,6 @@ interface RuleColumns {
 /**
  * All enabled rules, oldest first (rule order is action order when two rules
  * match the same delta).
- *
- * The DO stores each rule's sub-objects as separate JSON TEXT columns
- * (scope/trigger/conditions/actions); a single `json` column holding the whole
- * AutomationRule is accepted as a fallback so either layout works.
  */
 export function loadEnabledRules(sql: SqlStorage): AutomationRule[] {
   const raw = readRuleObjects(sql);
@@ -102,16 +98,9 @@ function readRuleObjects(sql: SqlStorage): unknown[] {
         createdAt: r.created_at,
         updatedAt: r.updated_at,
       }));
-  } catch (columnarErr) {
-    try {
-      return sql
-        .exec<{ json: string }>("SELECT json FROM automation_rules ORDER BY id")
-        .toArray()
-        .map((r) => parseJson(r.json));
-    } catch {
-      console.error("automation: cannot read automation_rules", columnarErr);
-      return [];
-    }
+  } catch (err) {
+    console.error("automation: cannot read automation_rules", err);
+    return [];
   }
 }
 

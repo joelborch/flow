@@ -169,7 +169,7 @@ write answer with 422 and the sentence
 Space sp_abc123 is private; ask an owner/admin for access.
 ```
 
-Automations and `POST /api/import/batch` run as system actors and are exempt, so
+Automations run as system actors and are exempt, so
 a rule scoped to a private space still fires for the member whose task tripped
 it.
 
@@ -733,22 +733,6 @@ flowcurl -X POST $FLOW/api/tasks/tk_ghi789/comments \
   -d '{"body":"Done, here it is: https://example.com/page","emailToRequester":true}'
 # {"id":"cm_...","emailTo":"front.desk@example.org","emailStatus":"sending",...}
 ```
-
-### Import
-
-Admin-only, and used by `apps/importer` during the ClickUp migration.
-`POST /api/import/batch` upserts by id-then-clickupId inside the DO, firing no
-automations and no per-row deltas, so re-running a load is safe. Import is
-deliberately more lenient than the interactive API: a title over the 500-char
-cap is truncated to 2000 characters rather than rejected, because a migration
-must not drop history.
-
-`POST /api/import/attachments` has the Worker fetch `sourceUrl` and stream it
-into R2. Because that makes the Worker issue a request on the caller's behalf,
-`sourceUrl` must be **https** on a host ending in `.clickup.com` or
-`.clickup-attachments.com`; anything else is a 400 naming the allowlist. The
-filename is sanitised before it reaches the R2 key, exactly as on the
-interactive upload path.
 
 ### MCP
 

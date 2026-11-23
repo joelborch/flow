@@ -40,7 +40,7 @@ Every PR must pass, in this order:
 
 ```sh
 pnpm typecheck                  # tsc --noEmit in every package, strict mode
-pnpm -r test                    # vitest across core, api, importer
+pnpm -r test                    # vitest across core, api, web
 pnpm --filter @flow/web build   # the web bundle must actually build
 ```
 
@@ -51,8 +51,7 @@ bundling errors that typecheck can't see.
 Tests are colocated with the code they test (`foo.ts` → `foo.test.ts`). New
 behavior in `packages/core` or `apps/api` needs a test; the automation engine
 has a `testkit.ts` in `packages/core/src/automation/` for building rule/task
-fixtures, and the importer keeps sample ClickUp payloads in
-`apps/importer/fixtures/`.
+fixtures.
 
 ## Code style
 
@@ -99,12 +98,8 @@ points:
 - **New automation actions or triggers** — `packages/shared/src/automations.ts`
   defines the discriminated unions, `packages/core/src/automation/` evaluates
   them; adding a kind is a well-worn path with existing tests to copy.
-- **New importer sources** — `apps/importer` currently imports from ClickUp
-  via an extract → transform → load pipeline with checkpoints; an Asana or
-  Trello extractor that emits the same intermediate shape reuses transform and
-  load for free.
-- **New MCP tools** — if an agent workflow you run needs a capability the 18
-  existing tools don't cover, propose it in an issue; tool names live in
+- **New MCP tools** — if an agent workflow you run needs a capability the existing
+  tools don't cover, propose it in an issue; tool names live in
   `packages/shared/src/api.ts` and implementations in `apps/api/src/mcp/`.
   See [docs/AGENTS_AND_MCP.md](docs/AGENTS_AND_MCP.md).
 - Board UX polish in `apps/web` — keyboard navigation, filter chips, small

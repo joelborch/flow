@@ -247,16 +247,6 @@ export const CreateSpaceInput = z.object({
 export type CreateSpaceInput = z.infer<typeof CreateSpaceInput>;
 
 /**
- * Flip a space between workspace-wide and private. Owner/admin only, enforced
- * both on the route and inside the DO.
- */
-export const UpdateSpaceVisibilityInput = z.object({
-  spaceId: Id,
-  visibility: SpaceVisibility,
-});
-export type UpdateSpaceVisibilityInput = z.infer<typeof UpdateSpaceVisibilityInput>;
-
-/**
  * Replace a private space's member list wholesale — `userIds` is the complete
  * set afterwards, not a delta. Only meaningful for `visibility: "private"`
  * spaces; membership on a workspace-visible space is stored but changes nothing.

@@ -24,10 +24,9 @@ job when changing it is to keep both.
 | `packages/core` | `@flow/core` | The `Workspace` Durable Object: SQLite schema, all mutations, delta log, WS fanout, fractional positioning, search, visibility filtering, snooze, notifications, and the automation engine (`src/automation/`). Most unit tests live here. |
 | `apps/api` | `@flow/api` | The Hono Worker: auth (Cloudflare Access JWT + `flow_` bearer keys), REST routes in `src/routes/`, MCP server at `/mcp` in `src/mcp/`, WS upgrade at `/ws`, queue consumer for webhooks/email in `src/side-effects/`, `wrangler.jsonc`. Serves the built web app as static assets. |
 | `apps/web` | `@flow/web` | Preact + `@preact/signals` + Tailwind v4 SPA. `src/store/` holds the signal state, delta application, optimistic mutations, and the WS client; `src/board/`, `src/task/`, `src/shell/`, `src/settings/` are UI. |
-| `apps/importer` | `@flow/importer` | Local-only (tsx, never deployed) extract → transform → load pipeline for migrating from ClickUp, with checkpoints and fixtures. |
 
 Dependency direction is strict: `shared` ← `core` ← `api`, and `shared` ←
-`web` / `importer`. Nothing imports upward.
+`web`. Nothing imports upward.
 
 ## Ground rules
 
@@ -104,7 +103,7 @@ users feel.
 ```sh
 pnpm install                       # once, at repo root
 pnpm typecheck                     # every package, strict — must be clean
-pnpm -r test                       # vitest: core, api, importer
+pnpm -r test                       # vitest: core, api, web
 pnpm --filter @flow/web build      # the SPA must build, not just typecheck
 ```
 
@@ -172,13 +171,10 @@ event:
 ## Test conventions
 
 - **vitest everywhere**, colocated: `foo.ts` → `foo.test.ts` in the same
-  directory. No separate `__tests__` trees except `apps/importer/test/`.
+  directory.
 - The automation engine ships a fixture builder in
   `packages/core/src/automation/testkit.ts` — use it instead of hand-building
   rule/task objects.
-- Importer tests run against recorded ClickUp payloads in
-  `apps/importer/fixtures/`; new importer sources should add equivalent
-  fixtures rather than hitting live APIs in tests.
 - Tests assert behavior through the public surface (RPC methods, routes,
   schemas), not by inspecting SQLite rows, so refactors of storage internals
   don't churn the suite.
@@ -186,8 +182,8 @@ event:
 ## PR expectations
 
 - One behavior change per PR; keep refactors separate.
-- The description names the layers touched (shared / core / api / web / mcp /
-  importer), states whether the shared contract changed and why the change is
+- The description names the layers touched (shared / core / api / web / mcp),
+  states whether the shared contract changed and why the change is
   compatible, and lists the validation commands you ran.
 - If you couldn't run a gate (e.g., no network for `pnpm install`), say so
   explicitly rather than implying green.

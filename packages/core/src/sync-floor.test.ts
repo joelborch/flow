@@ -4,7 +4,7 @@ import { runMigrations } from "./schema.js";
 import { REPLAY_GAP_LIMIT, bumpResyncFloor, needsSnapshot, resyncFloor } from "./sync-floor.js";
 
 // ---------------------------------------------------------------------------
-// The resync floor exists because three mutations — importBatch,
+// The resync floor exists because delta-less mutations — seedSandbox,
 // setSpaceMembers, setSpaceVisibility — change board state without writing to
 // the `changes` log. A client offline at that moment reconnects with an old
 // sinceSeq, sees no seq gap, replays deltas only, and never learns about the
@@ -96,10 +96,10 @@ describe("needsSnapshot", () => {
     expect(needsSnapshot({ ...base, sinceSeq: 100 })).toBe(false);
   });
 
-  it("snapshots when sinceSeq predates the floor — the import case", () => {
-    // importBatch at maxSeq 100 sets floor 100 and writes zero deltas: a
-    // client holding any pre-import seq must get the snapshot, because a
-    // replay would deliver nothing and silently skip the imported rows.
+  it("snapshots when sinceSeq predates the floor — the delta-less resync case", () => {
+    // A floor at maxSeq 100 writes zero deltas: a client holding any pre-floor
+    // seq must get the snapshot, because a replay would deliver nothing and
+    // silently skip the updated state.
     expect(needsSnapshot({ ...base, sinceSeq: 90, floor: 100 })).toBe(true);
   });
 

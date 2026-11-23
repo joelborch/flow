@@ -23,7 +23,7 @@
 //   - Requests are rate-limited per IP and in total. Cloudflare counts these
 //     per location rather than globally, which is why the write budget lives
 //     in the DO instead.
-import { SANDBOX_KEY_NAME, SANDBOX_MEMBER_ID, sandboxSeed } from "@flow/core";
+import { SANDBOX_KEY_NAME, SANDBOX_MEMBER_ID } from "@flow/core";
 import type { WorkspaceApi } from "./do.js";
 import { SANDBOX_PERIOD_MS, workspaceName, type Env } from "./env.js";
 import { hashToken } from "./tokens.js";
@@ -71,7 +71,7 @@ async function seed(env: Env, name: string, now: number): Promise<void> {
   if (await ws.resolveApiKey(tokenHash)) return;
   const owner = (await ws.listUsers()).find((u) => u.role === "owner");
   if (!owner) throw new Error("sandbox workspace has no owner to seed as");
-  await ws.importBatch(sandboxSeed(owner.id, now), owner.id);
+  await ws.seedSandbox(now);
   try {
     await ws.createApiKey({ userId: SANDBOX_MEMBER_ID, name: SANDBOX_KEY_NAME, tokenHash }, owner.id);
   } catch (err) {

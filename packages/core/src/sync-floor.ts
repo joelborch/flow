@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // Resync floor.
 //
-// The constraint this exists for: three mutations change board state without
-// writing anything to the `changes` log — `importBatch` (thousands of rows,
-// one `resync` frame), `setSpaceMembers` and `setSpaceVisibility` (a member's
-// gained/lost subtree cannot be expressed as a patch). A currently-connected
+// The constraint this exists for: delta-less mutations (`seedSandbox`,
+// `setSpaceMembers` and `setSpaceVisibility`) change board state without
+// writing anything to the `changes` log (e.g. a member's gained/lost subtree
+// cannot be expressed as a patch). A currently-connected
 // client is told to resync, but a client that is OFFLINE at that moment keeps
 // its old `sinceSeq`, reconnects later, sees no seq gap, replays deltas only —
 // and never learns about the delta-less change. Worse, the stale board is then

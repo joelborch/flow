@@ -613,22 +613,3 @@ describe("listHandoffs", () => {
     expect(h.list(BOB)).toEqual([]);
   });
 });
-
-// ---------------------------------------------------------------------------
-
-describe("importBatch with handoffs in the schema", () => {
-  it("imports tasks with no handoff and comments marked via import", async () => {
-    const h = await seeded();
-    const result = h.ws.importBatch(
-      {
-        tasks: [{ id: "tk_imported", clickupId: "cu_1", listId: h.requests.id, title: "From ClickUp" }],
-        comments: [{ id: "cm_imported", clickupId: "cu_c1", taskId: "tk_imported", authorId: ALICE, body: "old note" }],
-      },
-      "import"
-    );
-    expect(result.errors).toEqual([]);
-    expect(h.ws.getTaskDetail("tk_imported").task.handoff).toBeNull();
-    expect(h.ws.getSnapshot().tasks.find((t) => t.id === "tk_imported")?.handoff).toBeNull();
-    expect(h.ws.listComments("tk_imported")).toMatchObject([{ id: "cm_imported", via: "import" }]);
-  });
-});

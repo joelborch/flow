@@ -1,11 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { CreateTaskInput } from "@flow/shared";
-import { SANDBOX_MEMBER_ID, SANDBOX_WRITES_PER_MINUTE, SandboxBusy, SandboxWriteBudget, sandboxSeed } from "./sandbox-seed.js";
+import { SANDBOX_MEMBER_ID, SANDBOX_WRITES_PER_MINUTE, SandboxBusy, SandboxWriteBudget } from "./sandbox-seed.js";
 
-// The public sandbox's starting workspace and the two DO behaviours only the
-// sandbox uses: no recurring jobs, and wipeSandbox. Same harness as
-// import-batch.test.ts: the real Workspace against node:sqlite.
+// The public sandbox's starting workspace and the three DO behaviours only the
+// sandbox uses: direct seeding, no recurring jobs, and wipeSandbox.
 
 vi.mock("cloudflare:workers", () => ({
   DurableObject: class {
@@ -76,31 +75,49 @@ async function freshWorkspace(env: Record<string, unknown>) {
 const ownerOf = (ws: Awaited<ReturnType<typeof freshWorkspace>>["ws"]) =>
   ws.listUsers().find((u) => u.role === "owner")!;
 
-describe("sandboxSeed", () => {
-  it("imports cleanly, and a second seeding of the same workspace changes nothing", async () => {
-    const { ws } = await freshWorkspace({ SANDBOX: "true" });
-    const owner = ownerOf(ws);
-    const first = ws.importBatch(sandboxSeed(owner.id), owner.id);
-    expect(first.errors).toEqual([]);
-    expect(first.created.tasks).toBeGreaterThan(10);
-    const second = ws.importBatch(sandboxSeed(owner.id), owner.id);
-    expect(second.errors).toEqual([]);
-    expect(second.created).toEqual({ users: 0, spaces: 0, lists: 0, tasks: 0, subtasks: 0, comments: 0 });
+describe("seedSandbox", () => {
+  it("seeds cleanly, and a second seeding of the same workspace adds no duplicates", async () => {
+    const { ws, db } = await freshWorkspace({ SANDBOX: "true" });
+    const count = (table: string) =>
+      (db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
+
+    expect(ws.seedSandbox(1_700_000_000_000)).toEqual({ ok: true });
+    const firstCounts = {
+      users: count("users"),
+      spaces: count("spaces"),
+      lists: count("lists"),
+      tasks: count("tasks"),
+      subtasks: count("subtasks"),
+      comments: count("comments"),
+    };
+    expect(firstCounts.tasks).toBeGreaterThan(10);
+
+    expect(ws.seedSandbox(1_700_000_000_000)).toEqual({ ok: true });
+    expect({
+      users: count("users"),
+      spaces: count("spaces"),
+      lists: count("lists"),
+      tasks: count("tasks"),
+      subtasks: count("subtasks"),
+      comments: count("comments"),
+    }).toEqual(firstCounts);
   });
 
-  it("renames the placeholder owner instead of adding a second one", async () => {
+  it("renames the placeholder owner instead of adding a second one, and refuses outside the sandbox", async () => {
     const { ws } = await freshWorkspace({ SANDBOX: "true" });
     const owner = ownerOf(ws);
-    ws.importBatch(sandboxSeed(owner.id), owner.id);
+    ws.seedSandbox();
     const owners = ws.listUsers().filter((u) => u.role === "owner");
     expect(owners).toHaveLength(1);
     expect(owners[0]).toMatchObject({ id: owner.id, name: "Avery Chen", email: "avery@example.com" });
+
+    const normal = await freshWorkspace({});
+    expect(() => normal.ws.seedSandbox()).toThrow(/only runs on the sandbox/);
   });
 
   it("gives the sandbox member the shared spaces and never the private one", async () => {
     const { ws } = await freshWorkspace({ SANDBOX: "true" });
-    const owner = ownerOf(ws);
-    ws.importBatch(sandboxSeed(owner.id), owner.id);
+    ws.seedSandbox();
     const snap = ws.getSnapshot(SANDBOX_MEMBER_ID);
     expect(snap.spaces.map((s) => s.name).sort()).toEqual(["Marketing", "Operations"]);
     expect(JSON.stringify(snap)).not.toContain("hiring plan");
@@ -143,21 +160,21 @@ describe("the sandbox's shared write budget", () => {
 
   it("refuses the write past the budget in a sandbox DO, without writing it, and never limits a normal one", async () => {
     const sandbox = await freshWorkspace({ SANDBOX: "true" });
-    const owner = ownerOf(sandbox.ws);
-    // The seed goes through importBatch, which isn't a mutation turn, so the
-    // whole budget is left for visitors.
-    sandbox.ws.importBatch(sandboxSeed(owner.id), owner.id);
-    const create = (ws: typeof sandbox.ws, i: number) =>
-      ws.createTask(CreateTaskInput.parse({ listId: "ls_sb_content", title: `extra ${i}` }), SANDBOX_MEMBER_ID);
-    for (let i = 0; i < SANDBOX_WRITES_PER_MINUTE; i++) create(sandbox.ws, i);
+    // Direct seeding bypasses mutation turns, so the whole budget is left for visitors.
+    sandbox.ws.seedSandbox();
+    const create = (ws: typeof sandbox.ws, listId: string, i: number) =>
+      ws.createTask(CreateTaskInput.parse({ listId, title: `extra ${i}` }), SANDBOX_MEMBER_ID);
+    for (let i = 0; i < SANDBOX_WRITES_PER_MINUTE; i++) create(sandbox.ws, "ls_sb_content", i);
     const count = () => (sandbox.db.prepare("SELECT count(*) AS n FROM tasks").get() as { n: number }).n;
     const before = count();
-    expect(() => create(sandbox.ws, 99)).toThrow(/^too many changes in the sandbox/);
+    expect(() => create(sandbox.ws, "ls_sb_content", 99)).toThrow(/^too many changes in the sandbox/);
     expect(count()).toBe(before);
 
     const normal = await freshWorkspace({});
     const nOwner = ownerOf(normal.ws);
-    normal.ws.importBatch(sandboxSeed(nOwner.id), nOwner.id);
-    for (let i = 0; i <= SANDBOX_WRITES_PER_MINUTE + 5; i++) create(normal.ws, i);
+    normal.ws.upsertUser({ id: SANDBOX_MEMBER_ID, email: "agent@example.com", name: "Agent", role: "member" }, nOwner.id);
+    const sp = normal.ws.createSpace({ name: "Work", visibility: "workspace" }, nOwner.id);
+    const li = normal.ws.createList({ spaceId: sp.id, name: "Tasks" }, nOwner.id);
+    for (let i = 0; i <= SANDBOX_WRITES_PER_MINUTE + 5; i++) create(normal.ws, li.id, i);
   });
 });

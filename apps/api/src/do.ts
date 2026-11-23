@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 import type { z } from "zod";
 import type {
-  BackupStatus, EmailIntakeCheck, ImportBatch, ImportResult, IngestEmailInput, IngestEmailResult, QueryResult,
+  BackupStatus, EmailIntakeCheck, IngestEmailInput, IngestEmailResult, QueryResult,
   Workspace,
 } from "@flow/core";
 import {
@@ -265,9 +265,8 @@ export interface WorkspaceApi extends WorkspaceRpc {
    */
   getWorkspaceMap(forUserId?: string): Promise<ReturnType<Workspace["getWorkspaceMap"]>>;
 
-  // --- import ---------------------------------------------------------------
-  /** Upserts by id-then-clickupId; never fires automations or per-row deltas. */
-  importBatch(batch: ImportBatch, actor: string | Actor): Promise<ImportResult>;
+  // --- sandbox --------------------------------------------------------------
+  seedSandbox(now?: number): Promise<{ ok: true }>;
 
   // --- automations ----------------------------------------------------------
   upsertAutomation(input: UpsertAutomationInput, actor: string | Actor): Promise<AutomationRule>;

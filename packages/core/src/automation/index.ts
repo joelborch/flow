@@ -7,7 +7,6 @@ export * from "./template.js";
 export * from "./match.js";
 export * from "./migrations.js";
 export * from "./schedule.js";
-export * from "./seeds.js";
 export {
   AUTOMATION_MAX_DEPTH,
   evaluateAutomations,
