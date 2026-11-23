@@ -38,7 +38,7 @@ function liveEnv(send = vi.fn().mockResolvedValue(undefined), over: Record<strin
     send,
     env: {
       EMAIL_DRY_RUN: "false",
-      EMAIL_FROM: "flow@acme.test",
+      EMAIL_FROM: "flow@mail.acme-ops.com",
       APP_HOSTNAME: "flow.example.com",
       EMAIL_INTAKE_DOMAIN: "help.example.com",
       SEND_EMAIL: { send },
@@ -90,7 +90,7 @@ describe("deliverEmailReply", () => {
     expect(send).toHaveBeenCalledTimes(1);
     const message = send.mock.calls[0]![0];
     expect(message).toMatchObject({
-      from: { email: "flow@acme.test", name: DEFAULT_EMAIL_FROM.name },
+      from: { email: "flow@mail.acme-ops.com", name: DEFAULT_EMAIL_FROM.name },
       to: "pat@clinic.example",
       replyTo: "support@help.example.com",
       subject: "Re: Printer jammed",
@@ -107,13 +107,13 @@ describe("deliverEmailReply", () => {
 
   it("uses EMAIL_REQUESTER_FROM_NAME when configured while keeping EMAIL_FROM", async () => {
     const { env, send } = liveEnv(undefined, {
-      EMAIL_FROM: "flow@acme.test",
+      EMAIL_FROM: "flow@mail.acme-ops.com",
       EMAIL_FROM_NAME: "Flow",
       EMAIL_REQUESTER_FROM_NAME: "Acme Support",
     });
     await deliverEmailReply(reply(), env);
     expect(send.mock.calls[0]![0]).toMatchObject({
-      from: { email: "flow@acme.test", name: "Acme Support" },
+      from: { email: "flow@mail.acme-ops.com", name: "Acme Support" },
     });
   });
 

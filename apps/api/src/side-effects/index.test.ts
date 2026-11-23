@@ -90,7 +90,7 @@ describe("email side effects", () => {
       },
       {
         EMAIL_DRY_RUN: "false",
-        EMAIL_FROM: "flow@acme.test",
+        EMAIL_FROM: "flow@mail.acme-ops.com",
         SEND_EMAIL: { send } as unknown as SendEmail,
       }
     );
@@ -119,7 +119,7 @@ describe("email side effects", () => {
       {
         EMAIL_DRY_RUN: "false",
         APP_HOSTNAME: "flow.example.com",
-        EMAIL_FROM: "flow@acme.test",
+        EMAIL_FROM: "flow@mail.acme-ops.com",
         EMAIL_BRAND_NAME: "Acme Corp",
         SEND_EMAIL: { send } as unknown as SendEmail,
       }
@@ -151,7 +151,7 @@ describe("email side effects", () => {
       {
         EMAIL_DRY_RUN: "false",
         APP_HOSTNAME: "flow.example.com",
-        EMAIL_FROM: "flow@acme.test",
+        EMAIL_FROM: "flow@mail.acme-ops.com",
         SEND_EMAIL: { send } as unknown as SendEmail,
       }
     );
@@ -175,7 +175,7 @@ describe("email side effects", () => {
       {
         EMAIL_DRY_RUN: "false",
         APP_HOSTNAME: "flow.example.com",
-        EMAIL_FROM: "flow@acme.test",
+        EMAIL_FROM: "flow@mail.acme-ops.com",
         SEND_EMAIL: { send } as unknown as SendEmail,
       }
     );
@@ -200,7 +200,7 @@ describe("email side effects", () => {
       {
         EMAIL_DRY_RUN: "false",
         APP_HOSTNAME: "flow.example.com",
-        EMAIL_FROM: "flow@acme.test",
+        EMAIL_FROM: "flow@mail.acme-ops.com",
         SEND_EMAIL: { send } as unknown as SendEmail,
       }
     );
@@ -211,9 +211,24 @@ describe("email side effects", () => {
   });
 
   it("refuses individual live sends when EMAIL_FROM is unset or a placeholder, without blocking dry-run", async () => {
-    expect(isPlaceholderEmail("flow@mail.example.com")).toBe(true);
-    expect(isPlaceholderEmail("ops@example.com")).toBe(true);
-    expect(isPlaceholderEmail("flow@acme.test")).toBe(false);
+    for (const bad of [
+      "flow@mail.example.com",
+      "ops@example.com",
+      "flow@yourdomain.com",
+      "ops@mail.yourdomain.com",
+      "flow@your-domain.com",
+      "flow@localhost",
+      "flow@sub.localhost",
+      "flow@mail.local",
+      "flow@acme.test",
+      "flow@acme.invalid",
+      "owner@placeholder.flow",
+      "flow@mail",
+      "flow@<your-domain>",
+    ]) {
+      expect(isPlaceholderEmail(bad), bad).toBe(true);
+    }
+    expect(isPlaceholderEmail("flow@mail.acme-ops.com")).toBe(false);
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const send = vi.fn().mockResolvedValue(undefined);
@@ -238,7 +253,17 @@ describe("email side effects", () => {
     expect(send).not.toHaveBeenCalled();
 
     // Live sends fail when EMAIL_FROM is unset or placeholder.
-    for (const badFrom of [undefined, "", "   ", "flow@mail.example.com", "ops@example.com"]) {
+    for (const badFrom of [
+      undefined,
+      "",
+      "   ",
+      "flow@mail.example.com",
+      "ops@example.com",
+      "flow@yourdomain.com",
+      "flow@localhost",
+      "flow@acme.test",
+      "flow@<your-domain>",
+    ]) {
       await expect(
         deliverEmail(payload, {
           EMAIL_DRY_RUN: "false",
@@ -533,7 +558,7 @@ describe("handleSideEffectBatch: retry vs. permanent failure", () => {
     // EMAIL_DRY_RUN is "true" in fakeEnv, so force a failure by flipping it
     // off with a valid sender but no SEND_EMAIL binding — deliverEmail throws.
     (env as unknown as { EMAIL_DRY_RUN: string; EMAIL_FROM: string }).EMAIL_DRY_RUN = "false";
-    (env as unknown as { EMAIL_FROM: string }).EMAIL_FROM = "flow@acme.test";
+    (env as unknown as { EMAIL_FROM: string }).EMAIL_FROM = "flow@mail.acme-ops.com";
 
     await handleSideEffectBatch(fakeBatch([msg]), env);
 
