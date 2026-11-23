@@ -15,7 +15,17 @@ const task = await stub.createTask({ listId, title: "Ship it" }, actor);
 
 | File | Role |
 | --- | --- |
-| `src/index.ts` | The `Workspace` DO: RPC surface, mutation turns, WS handlers, alarm |
+| `src/index.ts` | The `Workspace` DO facade and public `@flow/core` exports |
+| `src/db-helpers.ts` | `Env`, `WorkspaceHost`, SQL column lists, write guards, and leaf helpers |
+| `src/ws.ts` | WebSocket Hibernation API, delta broadcast filtering, replay, and resync |
+| `src/notify-drain.ts` | Mutation turn lifecycle, automation/notification drains, queue flush |
+| `src/automation-apply.ts` | `AutomationContext` adapter, inline action execution, automation CRUD |
+| `src/reads.ts` | Board snapshot, workspace map, task details, search, audit log, query |
+| `src/task-mutations.ts` | Task, subtask, comment, and attachment writes |
+| `src/workspace-mutations.ts` | Space, list, user, API key, and sandbox writes |
+| `src/handoffs-store.ts` | Handoff storage operations (`requestHandoff`, `replyHandoff`, `listHandoffs`) |
+| `src/email-intake-store.ts` | Email intake config storage and one-turn message ingestion |
+| `src/alarm.ts` | Scheduled jobs (`alarm()`, backups, retention pruning, due-date/snooze sweeps) |
 | `src/schema.ts` | Tables, indexes, FTS5 triggers, migration runner (`core-0001..0017`), seed |
 | `src/turn.ts` | `Turn`: one mutation = rows + deltas + audit, committed together |
 | `src/rows.ts` | SQL row shapes and mappings to `@flow/shared` entities |
