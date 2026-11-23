@@ -1,17 +1,19 @@
-// One-click deploy config for the "Deploy to Cloudflare" button and root-config
-// self-hosting (`pnpm run build && pnpm --filter @flow/api exec wrangler deploy
-// --config ../../wrangler.jsonc`, or on macOS `pnpm run deploy -- --config
-// wrangler.jsonc`). `pnpm run deploy` uses apps/api/wrangler.jsonc by default
-// and requires macOS approval; it does not fall back to this file.
+// One-click deploy config for the "Deploy to Cloudflare" button and self-hosters
+// deploying into their own Cloudflare account (`pnpm run build && pnpm --filter
+// @flow/api exec wrangler deploy --config ../../wrangler.jsonc`, never against
+// this checkout's production Worker — Joel's production uses macOS-guarded
+// `pnpm run deploy` with gitignored apps/api/wrangler.jsonc and never falls back
+// to this file).
 //
-// Serves Flow from a *.workers.dev hostname with sign-in not yet configured:
-// the app shows the remaining setup steps until ACCESS_TEAM_DOMAIN, ACCESS_AUD
-// and OWNER_EMAIL are set in the Worker's Settings → Variables. For a custom
-// domain, email sending and the rest, copy apps/api/wrangler.example.jsonc to
-// apps/api/wrangler.jsonc instead; see docs/SELF_HOSTING.md.
+// Names the Worker "flow-selfhost-example" so a self-hoster deploying from this
+// template never collides with an existing "flow" Worker. Serves Flow from a
+// *.workers.dev hostname with sign-in unconfigured until ACCESS_TEAM_DOMAIN,
+// ACCESS_AUD and OWNER_EMAIL are set in the Worker's Settings → Variables; for
+// a custom domain and email sending, copy apps/api/wrangler.example.jsonc to
+// apps/api/wrangler.jsonc instead (see docs/SELF_HOSTING.md).
 {
   "$schema": "./apps/api/node_modules/wrangler/config-schema.json",
-  "name": "flow",
+  "name": "flow-selfhost-example",
   "main": "apps/api/src/index.ts",
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],

@@ -775,7 +775,7 @@ function makeEnv(dryRun: string | undefined = "true"): Env {
     ASSETS: {} as Env["ASSETS"],
     SEND_EMAIL: { send } as unknown as SendEmail,
     EMAIL_DRY_RUN: dryRun as string,
-    EMAIL_FROM: "flow@acme.test",
+    EMAIL_FROM: "flow@mail.acme-ops.com",
     EMAIL_INTAKE_ACK: "true",
     APP_HOSTNAME: "flow.example.com",
     ACCESS_TEAM_DOMAIN: "example.cloudflareaccess.com",
@@ -1030,7 +1030,7 @@ describe("handleEmail — new ticket", () => {
     expect(send).toHaveBeenCalledOnce();
     const sent = send.mock.calls[0]![0];
     expect(sent).toMatchObject({
-      from: { email: "flow@acme.test", name: DEFAULT_EMAIL_FROM.name },
+      from: { email: "flow@mail.acme-ops.com", name: DEFAULT_EMAIL_FROM.name },
       to: "jane@example.com",
       replyTo: INTAKE_ADDRESS,
       subject: ACK_SUBJECT,

@@ -118,24 +118,24 @@ The Durable Object needs nothing pre-created — the `migrations` block in `wran
 
 ## 4. Deploy
 
-On **macOS** (guarded deploy with clean `origin/main` check, test suite, resolved config + account display, and native macOS dialog confirmation):
+On **macOS** (guarded production deploy with clean `origin/main` check, test suite, resolved config + account display, and native macOS dialog confirmation):
 
 ```bash
 cd ../..           # repo root
-pnpm run deploy    # deploys apps/api/wrangler.jsonc (pass -- --config wrangler.jsonc for root config)
+pnpm run deploy    # deploys gitignored apps/api/wrangler.jsonc only (pass -- --config wrangler.jsonc to deploy the root template)
 ```
 
-On **Linux / Windows** (non-Mac self-hosters), `pnpm run deploy` refuses because native macOS `/usr/bin/osascript` human-presence confirmation is required. Build and deploy with Wrangler directly:
+For **self-hosters off macOS** (Linux / Windows deploying into **their own** Cloudflare account — never run raw Wrangler commands against this checkout's production Worker), `pnpm run deploy` refuses because native macOS `/usr/bin/osascript` human-presence confirmation is required. Self-hosters off macOS build and deploy into their own account with Wrangler directly:
 
 ```bash
 cd ../..
-pnpm --filter @flow/web build
-pnpm --filter @flow/api exec wrangler deploy
-# Or for the committed root one-click config:
+# Using your own gitignored apps/api/wrangler.jsonc:
+pnpm --filter @flow/web build && pnpm --filter @flow/api exec wrangler deploy
+# Or for the committed root template (named "flow-selfhost-example"):
 pnpm run build && pnpm --filter @flow/api exec wrangler deploy --config ../../wrangler.jsonc
 ```
 
-For the **Deploy to Cloudflare** button (Cloudflare Workers Builds runs on Linux), set **Build command** to `pnpm run build` and **Deploy command** to `pnpm --filter @flow/api exec wrangler deploy --config ../../wrangler.jsonc` — do not use `pnpm run deploy`.
+For the **Deploy to Cloudflare** button (Cloudflare Workers Builds runs on Linux against the root `flow-selfhost-example` config), set **Build command** to `pnpm run build` and **Deploy command** to `pnpm --filter @flow/api exec wrangler deploy --config ../../wrangler.jsonc` inside your own account — do not use `pnpm run deploy`.
 
 Because `routes` uses `"custom_domain": true`, wrangler creates the `flow.example.com` DNS record and certificate on your zone automatically. Verify liveness (this endpoint is public by design, so uptime checks don't need a credential):
 
@@ -175,7 +175,7 @@ Policy: action **Allow**, include your team — an email domain rule (`Emails en
 **Copy the AUD.** Open the allow app's **Overview** tab and copy the *Application Audience (AUD) Tag* — a 64-char hex string. Put it in `wrangler.jsonc` as `ACCESS_AUD`, set `ACCESS_TEAM_DOMAIN` to your team domain (visible under Zero Trust → Settings → Custom Pages, it looks like `your-team.cloudflareaccess.com`), and redeploy:
 
 ```bash
-pnpm run deploy    # macOS guarded deploy; off macOS: pnpm --filter @flow/web build && pnpm --filter @flow/api exec wrangler deploy
+pnpm run deploy    # macOS guarded deploy; off macOS self-hosters in their own account: pnpm --filter @flow/web build && pnpm --filter @flow/api exec wrangler deploy
 ```
 
 Now visit `https://flow.example.com` in a browser: Access should challenge you, and after login you should land on your board as the seeded owner. Remember: Access authenticating you is necessary but not sufficient — your email must also exist as a workspace user (step 1), or you'll get `403 you@example.com is not a member of this workspace`.
