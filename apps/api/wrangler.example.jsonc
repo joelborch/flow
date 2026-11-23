@@ -63,16 +63,17 @@
     // Fallback identity: dev auth (DEV_NO_AUTH), and inbound webhooks when no
     // "gleap"/"gleap-inbound" api key exists. Must match a workspace user.
     "OWNER_EMAIL": "owner@example.com",
-    // Sender for automation and notification email. In production (Access
-    // configured or EMAIL_DRY_RUN = "false"), all four vars below are required
-    // and the Worker fails closed at startup if any is missing or EMAIL_FROM
-    // still uses mail.example.com.
+    // Sender for automation and notification email. Must be a verified address
+    // off placeholder domains when EMAIL_DRY_RUN is "false" (otherwise individual
+    // live sends are refused and logged as failed without blocking requests).
     "EMAIL_FROM": "flow@mail.example.com",
     "EMAIL_FROM_NAME": "Flow",
-    // Wordmark shown in the branded email header.
+    // Wordmark shown in the branded email header. Falls back to
+    // EMAIL_FROM_NAME, then "Flow", when unset.
     "EMAIL_BRAND_NAME": "Flow",
-    // Display name on acknowledgements and replies sent to ticket requesters.
-    "EMAIL_REQUESTER_FROM_NAME": "Flow Support",
+    // Optional display name on acknowledgements and replies sent to ticket
+    // requesters (defaults to EMAIL_BRAND_NAME when unset).
+    // "EMAIL_REQUESTER_FROM_NAME": "Flow Support",
     // Optional Cloudflare Access Managed OAuth on /mcp/oauth only:
     // "MCP_ACCESS_OAUTH_ENABLED": "true",
     // "MCP_ACCESS_AUD": "",

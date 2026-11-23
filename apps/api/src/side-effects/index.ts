@@ -41,6 +41,42 @@ export const DEFAULT_EMAIL_FROM = { email: "flow@mail.example.com", name: "Flow"
 export const WEBHOOK_TIMEOUT_MS = 7_000;
 export const SIGNATURE_HEADER = "X-Flow-Signature";
 
+const PLACEHOLDER_EMAIL_DOMAINS = ["example.com", "example.net", "example.org", "example"] as const;
+
+export class EmailConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EmailConfigError";
+  }
+}
+
+/** True when `email` is empty, malformed, or on an RFC 2606 / `.example` placeholder domain. */
+export function isPlaceholderEmail(email: string): boolean {
+  const trimmed = email.trim().toLowerCase();
+  const at = trimmed.lastIndexOf("@");
+  if (at <= 0 || at === trimmed.length - 1) return true;
+  const domain = trimmed.slice(at + 1);
+  return PLACEHOLDER_EMAIL_DOMAINS.some((p) => domain === p || domain.endsWith(`.${p}`));
+}
+
+/**
+ * Refuse an individual live send (`EMAIL_DRY_RUN === "false"`) when `EMAIL_FROM`
+ * is unset or uses a placeholder domain. No-op when dry-run is on; Access vars
+ * are intentionally ignored and `EMAIL_REQUESTER_FROM_NAME` stays optional.
+ */
+export function assertLiveEmailSender(env: Pick<SideEffectEnv, "EMAIL_DRY_RUN" | "EMAIL_FROM">): void {
+  if (env.EMAIL_DRY_RUN !== "false") return;
+  const sender = env.EMAIL_FROM?.trim() ?? "";
+  if (!sender) {
+    throw new EmailConfigError("EMAIL_DRY_RUN is off but EMAIL_FROM is not set");
+  }
+  if (isPlaceholderEmail(sender)) {
+    throw new EmailConfigError(
+      `EMAIL_DRY_RUN is off but EMAIL_FROM "${sender}" uses a placeholder domain`
+    );
+  }
+}
+
 /**
  * Structural, so apps/api's Env (EMAIL_DRY_RUN/APP_HOSTNAME plus the DO, R2 and
  * Queue bindings) is assignable without either side importing the other.
@@ -124,6 +160,16 @@ export async function handleSideEffectBatch(batch: MessageBatch, env: Env): Prom
 
       if (payload.kind === "gleap-screenshot") {
         msg.retry({ delaySeconds: gleapRetryDelay(msg.attempts) });
+        continue;
+      }
+
+      if (err instanceof EmailConfigError) {
+        if (payload.kind === "email-reply") {
+          await reportEmailReply(env, payload.commentId, "failed");
+        } else if (payload.kind === "email") {
+          await recordPermanentFailure(env, payload, err);
+        }
+        msg.ack();
         continue;
       }
 
@@ -415,6 +461,7 @@ export async function deliverEmail(
     return;
   }
 
+  assertLiveEmailSender(env);
   const binding = env.SEND_EMAIL;
   if (!binding) {
     throw new Error(
@@ -480,6 +527,7 @@ export async function deliverEmailReply(
     return;
   }
 
+  assertLiveEmailSender(env);
   const binding = env.SEND_EMAIL;
   if (!binding) {
     throw new Error('EMAIL_DRY_RUN is off but the SEND_EMAIL binding is missing from wrangler.jsonc');
