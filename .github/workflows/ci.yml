@@ -37,7 +37,7 @@ jobs:
         run: pnpm typecheck
 
       - name: Test
-        run: pnpm -r test
+        run: pnpm test
 
       - name: Build web
         run: pnpm --filter @flow/web build
@@ -49,7 +49,12 @@ jobs:
       # button deploys; checked before the step below creates
       # apps/api/wrangler.jsonc, so the one-click path is what runs.
       - name: One-click config dry-run deploy
-        run: node scripts/deploy-worker.mjs --dry-run
+        working-directory: apps/api
+        run: npx wrangler deploy --dry-run --config ../../wrangler.jsonc
+
+      - name: Demo config dry-run deploy
+        working-directory: apps/api
+        run: npx wrangler deploy --dry-run --config ../../demo/wrangler.jsonc
 
       - name: Sandbox config dry-run deploy
         working-directory: apps/api

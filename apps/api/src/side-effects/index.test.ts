@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  EmailConfigError,
   WebhookDeliveryError,
+  assertLiveEmailSender,
   deliverEmail,
   deliverWebhook,
   deliveryRetryDelay,
   handleDeadLetterBatch,
   handleSideEffectBatch,
+  isPlaceholderEmail,
   isRetryableWebhookStatus,
   markdownToHtml,
   parsePayload,
@@ -85,7 +88,11 @@ describe("email side effects", () => {
         ruleId: "ar_1",
         taskId: "tk_1",
       },
-      { EMAIL_DRY_RUN: "false", SEND_EMAIL: { send } as unknown as SendEmail }
+      {
+        EMAIL_DRY_RUN: "false",
+        EMAIL_FROM: "flow@acme.test",
+        SEND_EMAIL: { send } as unknown as SendEmail,
+      }
     );
     expect(send).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -112,6 +119,7 @@ describe("email side effects", () => {
       {
         EMAIL_DRY_RUN: "false",
         APP_HOSTNAME: "flow.example.com",
+        EMAIL_FROM: "flow@acme.test",
         EMAIL_BRAND_NAME: "Acme Corp",
         SEND_EMAIL: { send } as unknown as SendEmail,
       }
@@ -143,6 +151,7 @@ describe("email side effects", () => {
       {
         EMAIL_DRY_RUN: "false",
         APP_HOSTNAME: "flow.example.com",
+        EMAIL_FROM: "flow@acme.test",
         SEND_EMAIL: { send } as unknown as SendEmail,
       }
     );
@@ -166,6 +175,7 @@ describe("email side effects", () => {
       {
         EMAIL_DRY_RUN: "false",
         APP_HOSTNAME: "flow.example.com",
+        EMAIL_FROM: "flow@acme.test",
         SEND_EMAIL: { send } as unknown as SendEmail,
       }
     );
@@ -190,6 +200,7 @@ describe("email side effects", () => {
       {
         EMAIL_DRY_RUN: "false",
         APP_HOSTNAME: "flow.example.com",
+        EMAIL_FROM: "flow@acme.test",
         SEND_EMAIL: { send } as unknown as SendEmail,
       }
     );
@@ -197,6 +208,48 @@ describe("email side effects", () => {
     expect(html).toContain('href="https://flow.example.com"');
     expect(html).toContain("Sent by Flow");
     expect(html).toContain('<a href="https://flow.example.com/t/tk_9"');
+  });
+
+  it("refuses individual live sends when EMAIL_FROM is unset or a placeholder, without blocking dry-run", async () => {
+    expect(isPlaceholderEmail("flow@mail.example.com")).toBe(true);
+    expect(isPlaceholderEmail("ops@example.com")).toBe(true);
+    expect(isPlaceholderEmail("flow@acme.test")).toBe(false);
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const send = vi.fn().mockResolvedValue(undefined);
+    const payload = {
+      kind: "email" as const,
+      to: ["client@example.com"],
+      cc: [],
+      bcc: [],
+      subject: "S",
+      body: "Body.",
+      ruleId: "ar_1",
+      taskId: "tk_1",
+    };
+
+    // Dry-run does nothing and never throws even without EMAIL_FROM.
+    await expect(
+      deliverEmail(payload, { EMAIL_DRY_RUN: "true", SEND_EMAIL: { send } as unknown as SendEmail })
+    ).resolves.toBeUndefined();
+    await expect(
+      deliverEmail(payload, { EMAIL_FROM: "flow@mail.example.com", SEND_EMAIL: { send } as unknown as SendEmail })
+    ).resolves.toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+
+    // Live sends fail when EMAIL_FROM is unset or placeholder.
+    for (const badFrom of [undefined, "", "   ", "flow@mail.example.com", "ops@example.com"]) {
+      await expect(
+        deliverEmail(payload, {
+          EMAIL_DRY_RUN: "false",
+          EMAIL_FROM: badFrom,
+          SEND_EMAIL: { send } as unknown as SendEmail,
+        })
+      ).rejects.toBeInstanceOf(EmailConfigError);
+    }
+    expect(() => assertLiveEmailSender({ EMAIL_DRY_RUN: "true" })).not.toThrow();
+    expect(send).not.toHaveBeenCalled();
+    logSpy.mockRestore();
   });
 });
 
@@ -478,14 +531,53 @@ describe("handleSideEffectBatch: retry vs. permanent failure", () => {
       4
     );
     // EMAIL_DRY_RUN is "true" in fakeEnv, so force a failure by flipping it
-    // off without a SEND_EMAIL binding — deliverEmail throws in that case.
-    (env as unknown as { EMAIL_DRY_RUN: string }).EMAIL_DRY_RUN = "false";
+    // off with a valid sender but no SEND_EMAIL binding — deliverEmail throws.
+    (env as unknown as { EMAIL_DRY_RUN: string; EMAIL_FROM: string }).EMAIL_DRY_RUN = "false";
+    (env as unknown as { EMAIL_FROM: string }).EMAIL_FROM = "flow@acme.test";
 
     await handleSideEffectBatch(fakeBatch([msg]), env);
 
     expect(msg.ack).not.toHaveBeenCalled();
     expect(msg.retry).toHaveBeenCalledWith({ delaySeconds: deliveryRetryDelay(4) });
     expect(recordDeliveryFailure).not.toHaveBeenCalled();
+  });
+
+  it("refuses and records a live email when EMAIL_FROM is a placeholder, acking without breaking later batch items", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("ok", { status: 200 })));
+    const { env, recordDeliveryFailure } = fakeEnv();
+    (env as unknown as { EMAIL_DRY_RUN: string; EMAIL_FROM: string }).EMAIL_DRY_RUN = "false";
+    (env as unknown as { EMAIL_FROM: string }).EMAIL_FROM = "flow@mail.example.com";
+
+    const badEmail = fakeMessage({
+      kind: "email",
+      to: ["client@example.com"],
+      subject: "S",
+      body: "B",
+      ruleId: "ar_bad",
+      taskId: "tk_bad",
+    });
+    const okWebhook = fakeMessage({
+      kind: "webhook",
+      url: "https://example.com/hook",
+      body: { event: "task.updated" },
+      ruleId: "ar_hook",
+      taskId: "tk_hook",
+    });
+
+    await handleSideEffectBatch(fakeBatch([badEmail, okWebhook]), env);
+
+    expect(badEmail.ack).toHaveBeenCalledOnce();
+    expect(badEmail.retry).not.toHaveBeenCalled();
+    expect(okWebhook.ack).toHaveBeenCalledOnce();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("side-effects: email failed"),
+      expect.stringContaining("placeholder domain")
+    );
+    expect(recordDeliveryFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ ruleId: "ar_bad", taskId: "tk_bad", kind: "email" })
+    );
+    errorSpy.mockRestore();
   });
 });
 
