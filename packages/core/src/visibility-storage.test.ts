@@ -444,14 +444,8 @@ describe("getTaskDetails", () => {
 
 describe("setSpaceVisibility and setSpaceMembers", () => {
   it("audits space.set_visibility with { visibility }, resyncs all members, and keeps 'Changing a space\\'s members' error text", async () => {
-    const { ws } = await seededWorkspace();
     const sockA = fakeSocket(MEMBER_A);
     const sockB = fakeSocket(MEMBER_B);
-    const space = ws.createSpace(CreateSpaceInput.parse({ name: "Gamma", visibility: "workspace" }), OWNER);
-    ws.setSpaceVisibility({ spaceId: space.id, visibility: "private" }, OWNER);
-    ws.setSpaceMembers({ spaceId: space.id, userIds: [MEMBER_A] }, OWNER);
-
-    // Connect both sockets AFTER setup by grabbing the stored ctx via freshWorkspace pattern.
     const h = await freshWorkspace();
     h.ws.upsertUser({ id: OWNER, email: "owner@example.com", name: "Owner", role: "owner" }, OWNER);
     h.ws.upsertUser({ id: MEMBER_A, email: "a@example.com", name: "Member A", role: "member" }, OWNER);
