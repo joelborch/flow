@@ -60,17 +60,32 @@ export interface Env {
   ATTACHMENTS: R2Bucket;
   SIDE_EFFECTS: Queue;
   ASSETS: Fetcher;
+  /**
+   * Both come from wrangler `vars` and are read by the automation engine
+   * (`{{task.url}}` and the send_email dry-run flag). Optional here so a test
+   * harness can omit them; apps/api narrows them to required strings.
+   */
   APP_HOSTNAME?: string;
   EMAIL_DRY_RUN?: string;
+  /** "true" lets a person email a comment back to a ticket's requester. Off when unset. */
   EMAIL_INTAKE_REPLY?: string;
+  /**
+   * "true" on the public sandbox Worker (sandbox/wrangler.jsonc). Each sandbox
+   * workspace lives for an hour and is then wiped, so it schedules no recurring
+   * jobs: an alarm would wake the dead workspace for nothing, and a backup would
+   * write to R2 on the visitor's behalf.
+   */
   SANDBOX?: string;
 }
 
+/** Last outcome of the daily backup, as persisted in `job_status`. */
 export interface BackupStatus {
   lastSuccessAt: number | null;
+  /** R2 key, row count and gzipped bytes of the last successful backup. */
   lastSuccess: { key: string; rows: number; bytes: number } | null;
   lastFailureAt: number | null;
   lastFailureError: string | null;
+  /** No successful backup within BACKUP_STALE_MS (or ever). */
   stale: boolean;
 }
 
@@ -86,10 +101,15 @@ export interface UpsertUserInput {
 export interface CreateApiKeyInput {
   userId: string;
   name: string;
+  /** sha256 hex of the bearer token. The plaintext never reaches the DO. */
   tokenHash: string;
 }
 
 export interface CreateAttachmentInput {
+  /**
+   * Optional caller-assigned id. The api Worker mints it before uploading
+   * because the R2 key embeds it; when omitted the DO generates one.
+   */
   id?: string;
   taskId: string;
   filename: string;
@@ -105,6 +125,8 @@ export interface SetAttachmentDriveStorageInput {
   driveDestination: "shared" | "private";
 }
 
+// Zod schemas carry defaults, so the *output* type is what the DO receives.
+// Deriving these from the schemas keeps packages/shared the only definition.
 export type ParsedListInput = ReturnType<typeof CreateListInput.parse>;
 export type ParsedSpaceInput = ReturnType<typeof CreateSpaceInput.parse>;
 export type ParsedSubtaskInput = ReturnType<typeof CreateSubtaskInput.parse>;
@@ -112,31 +134,73 @@ export type ParsedToggleInput = ReturnType<typeof ToggleSubtaskInput.parse>;
 export type ParsedCommentInput = ReturnType<typeof CreateCommentInput.parse>;
 
 export const DAY_MS = 86_400_000;
+/** Closed tasks older than this drop out of the board snapshot. */
 export const SNAPSHOT_CLOSED_WINDOW_MS = 60 * DAY_MS;
+// REPLAY_GAP_LIMIT lives in ./sync-floor.ts with the rest of the
+// snapshot-vs-replay decision; re-exported below to keep the surface stable.
+/** Rows kept by the prune_changes job. */
 export const CHANGES_RETENTION = 50_000;
+/**
+ * Run-log rows kept by the same job. Capped by count rather than age because
+ * `automation_runs` is indexed on (rule_id, at) and (task_id, at), so a bare
+ * date-range delete would be a full scan; `id` is the rowid, so this is not.
+ */
 export const AUTOMATION_RUNS_RETENTION = 20_000;
+/** Objects kept under `backups/` in R2 — one per day, so 30 is ~a month. */
 export const BACKUP_RETENTION = 30;
+/**
+ * Audit rows older than this are deleted by the same daily job. Unlike
+ * automation_runs this one can be age-based: `idx_audit_at` covers `at`, so
+ * the oldest-first range read is an index walk, not a table scan.
+ */
 export const AUDIT_RETENTION_DAYS = 365;
+/**
+ * Rows per audit DELETE, and DELETEs per daily run. A first run over a big
+ * backlog stops at 100k rows and leaves the rest for tomorrow instead of
+ * turning one alarm into an unbounded one.
+ */
 export const AUDIT_PRUNE_BATCH = 5_000;
 export const AUDIT_PRUNE_MAX_BATCHES = 20;
+/** /api/health reports the backup stale when its last success is older than this. */
 export const BACKUP_STALE_MS = 36 * 3_600_000;
+/**
+ * Header the api Worker uses to hand the authenticated user id to the DO on the
+ * `/ws` upgrade (`WS_USER_HEADER` in apps/api/src/env.ts — same string, and the
+ * two packages cannot import from each other). The Worker strips any
+ * client-supplied copy first, which is what makes it safe to trust.
+ */
 export const WS_USER_HEADER = "X-Flow-User-Id";
+/** The window both email rate limits count over. */
 export const EMAIL_RATE_WINDOW_MS = 3_600_000;
+/**
+ * How many of a message's In-Reply-To/References ids threading looks up. The
+ * Worker caps the list too, but one turn must never run an unbounded number of
+ * queries on what a sender put in a header.
+ */
 export const EMAIL_THREAD_REFERENCE_LIMIT = 20;
 
+/** core-0013-handoffs; mapped to `Task.handoff` by `toHandoff` in ./rows.ts. */
 export const HANDOFF_COLUMNS = `handoff_requested_by, handoff_state, handoff_return, handoff_context,
   handoff_state_changed_at`;
 export const TASK_COLUMNS = `id, list_id, title, description, status_id, assignee_id, assigned_by, assigned_at,
   waiting_on, priority, due_date, start_date, snoozed_until, blocked_note, tags, position,
   created_by, created_at, updated_at, closed_at, clickup_id,
   ${HANDOFF_COLUMNS}`;
+/**
+ * The snapshot projection: board-render columns only, with the description
+ * collapsed to a boolean in SQL. Keep it in step with `SnapshotTask` in
+ * packages/shared/src/events.ts and `toSnapshotTask` in ./rows.ts.
+ */
 export const SNAPSHOT_TASK_COLUMNS = `id, list_id, title, status_id, assignee_id, assigned_by, assigned_at, waiting_on, priority,
   due_date, tags, position, created_at, updated_at, snoozed_until, blocked_note,
   ${HANDOFF_COLUMNS}, (description != '') AS has_description`;
+/** Every space read goes through this, so `visibility` can never be forgotten. */
 export const SPACE_COLUMNS = `id, name, color, position, archived, visibility, created_at, clickup_id`;
 export const LIST_COLUMNS = `id, space_id, name, position, archived, inbound_token, created_at, clickup_id`;
 export const EMAIL_INTAKE_COLUMNS = `list_id, alias, allowed_senders, created_at, updated_at`;
+/** Every api key read goes through this; can_email_requesters is core-0014-email-replies. */
 export const API_KEY_COLUMNS = `id, user_id, name, token_hash, created_at, last_used_at, revoked_at, can_email_requesters`;
+/** Every comment read goes through this; `email_*` is core-0014-email-replies. */
 export const COMMENT_COLUMNS = `id, task_id, author_id, body, created_at, via, email_to, email_status`;
 export const USER_COLUMNS = `id, email, name, role, deactivated, created_at, needs_email_update, clickup_id`;
 export const SUBTASK_COLUMNS = `id, task_id, title, done, assignee_id, assigned_by, assigned_at,
@@ -161,6 +225,8 @@ export const TASK_DIFF_KEYS = [
   "tags",
   "position",
   "closedAt",
+  // An object: diffOf compares it by value, so an unchanged handoff emits
+  // nothing and a changed one ships whole.
   "handoff",
 ] as const;
 
@@ -206,6 +272,9 @@ export function safeJson(text: string): unknown {
   }
 }
 
+// --- module-local helpers ---------------------------------------------------
+
+/** The pre-mutation values for exactly the keys a patch touched. */
 export function prevOf(
   before: Record<string, unknown>,
   patch: Record<string, unknown>
@@ -215,11 +284,16 @@ export function prevOf(
   return out;
 }
 
+/**
+ * A user is emailable only with a real address: non-empty and not one of the
+ * `@placeholder.flow` seed addresses, since sending to those would bounce.
+ */
 export function hasRealEmail(email: string): boolean {
   const e = email.trim().toLowerCase();
   return e.length > 0 && !e.endsWith(`@${PLACEHOLDER_EMAIL_DOMAIN}`);
 }
 
+/** A handoff as the five HANDOFF_COLUMNS values, in that order; all null for none. */
 export function handoffValues(
   handoff: Handoff | null
 ): [string | null, string | null, string | null, string | null, number | null] {
@@ -233,6 +307,11 @@ export function handoffValues(
   ];
 }
 
+/**
+ * The DO re-validates handoff inputs with the contract's own schemas, as
+ * setEmailIntake does: the routes have already parsed them, but this is the
+ * only writer and the error should name the field for any other caller.
+ */
 export function contractInput<T>(
   result:
     | { success: true; data: T }
@@ -245,6 +324,7 @@ export function contractInput<T>(
   throw new Error(`Invalid ${what}: ${field}${issue?.message ?? "rejected by the schema"}`);
 }
 
+/** Trim, drop empties, de-duplicate case-insensitively, keep first casing. */
 export function normalizeTags(tags: readonly string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -266,6 +346,8 @@ export function systemUserId(sql: SqlStorage): string {
   return row?.id ?? "us_system";
 }
 
+/** Attribute only deliberate human/API assignment choices. A rule, import,
+ * or webhook can route work, but it must not appear as personal delegation. */
 export function humanAssigner(t: Turn, assigneeId: string | null): string | null {
   if (assigneeId === null || t.automationRuleId !== null) return null;
   if (t.actor.via === "automation" || t.actor.via === "import" || t.actor.via === "webhook") {
@@ -311,6 +393,18 @@ export function spaceIdForChild(
   );
 }
 
+// =========================================================================
+// Per-space permissions
+//
+// One rule, applied in three shapes: reads filter, writes throw, and the
+// broadcast drops. Everything below a space inherits the space's decision, so
+// all three start by resolving the entity to a space id.
+// =========================================================================
+
+/**
+ * The space a delta belongs to, for the per-connection broadcast filter.
+ * `user` deltas go to everyone; `automation_rule` deltas gate on role.
+ */
 export function spaceIdForDelta(
   sql: SqlStorage,
   entity: Delta["entity"],
@@ -338,6 +432,7 @@ export function spaceIdForDelta(
   }
 }
 
+/** The write guard's verdict without the throw: the error message, or null when allowed. */
 export function spaceWriteRefusal(sql: SqlStorage, actor: Actor, spaceId: string | null): string | null {
   if (spaceId === null || isSystemActor(actor)) return null;
   const row = sql
@@ -353,6 +448,15 @@ export function spaceWriteRefusal(sql: SqlStorage, actor: Actor, spaceId: string
   return allowed ? null : privateSpaceError(spaceId);
 }
 
+/**
+ * The write guard. Throws the descriptive error when the actor cannot see the
+ * space the mutation lands in.
+ *
+ * A null `spaceId` means the entity resolved to nothing — the row is missing,
+ * and the caller's own `requireX` produces the better "not found" message a
+ * moment later, so this stays out of the way. System actors (automations,
+ * import) are exempt by design.
+ */
 export function assertSpaceWritable(sql: SqlStorage, actor: Actor, spaceId: string | null): void {
   const refusal = spaceWriteRefusal(sql, actor, spaceId);
   if (refusal !== null) throw new Error(refusal);
@@ -366,6 +470,12 @@ export function assertListWritable(sql: SqlStorage, actor: Actor, listId: string
   assertSpaceWritable(sql, actor, spaceIdForList(sql, listId));
 }
 
+/**
+ * Defence in depth for the two membership mutations. The routes already gate
+ * them with `requireAdmin`, but these change who can see what, so the DO — the
+ * only writer — checks the actor's stored role itself rather than trusting
+ * that every future caller remembers to.
+ */
 export function requirePrivileged(sql: SqlStorage, actor: Actor, action: string): void {
   if (isSystemActor(actor)) return;
   const role = roleOf(sql, actor.userId);
@@ -480,6 +590,10 @@ export function requireSpace(sql: SqlStorage, spaceId: string): Space {
   return toSpace(row);
 }
 
+// =========================================================================
+// Row helpers
+// =========================================================================
+
 export function emailIntakeForList(sql: SqlStorage, listId: string): EmailIntake | null {
   const row = sql
     .exec<EmailIntakeRow>(`SELECT ${EMAIL_INTAKE_COLUMNS} FROM email_intakes WHERE list_id = ?`, listId)
@@ -487,6 +601,14 @@ export function emailIntakeForList(sql: SqlStorage, listId: string): EmailIntake
   return row ? toEmailIntake(row) : null;
 }
 
+/**
+ * Where an emailed comment on this task would go, or null when it can't
+ * have one: replies are off, the task wasn't opened by email, or the alias it
+ * came in on no longer exists to take the requester's answer. An unverified
+ * sender is answered too: intake only files mail whose envelope sender is on
+ * the list's allowlist, and the reply goes to that address, so someone
+ * forging it never sees the reply; its real owner does.
+ */
 export function emailReplyTarget(host: WorkspaceHost, task: Task): EmailReplyTarget | null {
   if (host.env.EMAIL_INTAKE_REPLY !== "true") return null;
   const rows = host.sql
@@ -502,6 +624,7 @@ export function emailReplyTarget(host: WorkspaceHost, task: Task): EmailReplyTar
     host.sql.exec("SELECT 1 AS ok FROM email_intakes WHERE alias = ?", opener.alias).toArray().length > 0;
   if (!live) return null;
   const real = rows.map((r) => r.message_id).filter((m) => !m.startsWith(SYNTHETIC_ID_PREFIX));
+  // Like the Worker's header cap: the thread's first id and its newest ones.
   const references =
     real.length > EMAIL_REPLY_REFERENCE_LIMIT
       ? [real[0]!, ...real.slice(real.length - (EMAIL_REPLY_REFERENCE_LIMIT - 1))]
@@ -514,6 +637,17 @@ export function emailReplyTarget(host: WorkspaceHost, task: Task): EmailReplyTar
   };
 }
 
+/**
+ * Correct the "queued" automation_runs row a webhook/email action wrote at
+ * enqueue time (runAction in the automation engine always logs `ok: true`
+ * before delivery is attempted, since delivery happens out-of-band in the
+ * queue consumer). Called by the side-effects consumer for a permanent
+ * (non-retryable) failure, and by the flow-dlq consumer once retries are
+ * exhausted. Writes a plain bookkeeping row directly — this runs outside any
+ * mutation turn, so there is no delta to broadcast and no audit trail entry,
+ * same as writeRunLog. Never throws: a failure here must not crash the queue
+ * consumer that called it.
+ */
 export function recordDeliveryFailure(
   sql: SqlStorage,
   input: { ruleId: string; taskId: string; kind: "webhook" | "email"; detail: string }
@@ -542,6 +676,11 @@ export function recordDeliveryFailure(
   return { ok: true };
 }
 
+/**
+ * The queue consumer's report on an emailed comment: "sent" once the mail
+ * service accepted it, "failed" once delivery gave up. Only a comment still
+ * "sending" moves, so a late or repeated report can't flip a settled one.
+ */
 export function markEmailReply(
   host: WorkspaceHost,
   commentId: string,
@@ -578,6 +717,7 @@ export function listAttachments(sql: SqlStorage, taskId: string): Attachment[] {
     .map(toAttachment);
 }
 
+/** Single attachment row — the api Worker needs r2Key to stream a download. */
 export function getAttachment(sql: SqlStorage, attachmentId: string): Attachment | null {
   const row = sql
     .exec<AttachmentRow>(`SELECT ${ATTACHMENT_COLUMNS} FROM attachments WHERE id = ?`, attachmentId)

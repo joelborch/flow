@@ -32,6 +32,17 @@ import { type Turn, toActor } from "./turn.js";
 const permanentEmailError = (detail: string): Error =>
   new Error(`${EMAIL_INGEST_PERMANENT_ERROR}: ${detail}`);
 
+// =========================================================================
+// Email intake (see ./email-intake.ts)
+//
+// The api Worker's email() handler runs checkEmailIntake before it parses or
+// uploads anything, then hands the formatted message to ingestEmail. The
+// pre-check is advisory: ingestEmail repeats every check inside its own turn
+// and writes the task or comment together with the email_messages row that
+// turns a redelivery into a no-op.
+// =========================================================================
+
+/** Every list's intake, by alias. Holds sender allowlists: the Worker admin-gates it. */
 export function listEmailIntakes(sql: SqlStorage): EmailIntake[] {
   return sql
     .exec<EmailIntakeRow>(`SELECT ${EMAIL_INTAKE_COLUMNS} FROM email_intakes ORDER BY alias`)
@@ -39,6 +50,14 @@ export function listEmailIntakes(sql: SqlStorage): EmailIntake[] {
     .map(toEmailIntake);
 }
 
+/**
+ * Create or replace (`input`) or remove (`null`) one list's intake.
+ *
+ * Owner/admin only, checked here as well as on the route: an intake lets
+ * people outside the workspace write into it, so the sole writer does not
+ * take the caller's word for it. Intakes are not in the snapshot, so this
+ * writes an audit row and no delta.
+ */
 export function setEmailIntake(
   host: WorkspaceHost,
   listId: string,
@@ -57,6 +76,8 @@ export function setEmailIntake(
       return null;
     }
 
+    // The route has already parsed this; parsing again here normalizes
+    // (trim, lowercase) for any other caller with the contract's own rules.
     const parsed = SetEmailIntakeSchema.safeParse(input);
     if (!parsed.success) {
       throw new Error(parsed.error.issues[0]?.message ?? "Invalid email intake.");
@@ -64,6 +85,8 @@ export function setEmailIntake(
     const alias = parsed.data.alias;
     const allowedSenders = [...new Set(parsed.data.allowedSenders)];
 
+    // Checked in code so the caller gets the holder's name, not a constraint
+    // code; the UNIQUE on email_intakes.alias is the backstop.
     const holder = sql
       .exec<{ list_id: string; name: string | null }>(
         `SELECT e.list_id AS list_id, l.name AS name
@@ -106,6 +129,7 @@ export function setEmailIntake(
   });
 }
 
+/** Read-only and cheap: the Worker's pre-check before it parses or uploads. */
 export function checkEmailIntake(
   sql: SqlStorage,
   input: { alias: string; sender: string; messageId: string }
@@ -119,6 +143,15 @@ export function checkEmailIntake(
   );
 }
 
+/**
+ * Route one parsed message in one turn: a comment on the ticket it replies
+ * to, or a new ticket in the intake's list, plus its attachments and the
+ * email_messages row that dedupes it. The Worker's pre-check ran before an
+ * await, so every refusal is re-derived here and returned the same way.
+ *
+ * Conditions a retry can never fix throw with EMAIL_INGEST_PERMANENT_ERROR
+ * as the message prefix, so the Worker rejects instead of asking for a retry.
+ */
 export function ingestEmail(
   host: WorkspaceHost,
   input: IngestEmailInput,
@@ -128,6 +161,8 @@ export function ingestEmail(
     const { sql } = host;
     const alias = input.alias.trim().toLowerCase();
     const sender = input.sender.trim().toLowerCase();
+    // Only an explicit true vouches for the sender; a caller that leaves the
+    // flag out gets the unverified treatment, never the trusted one.
     const authenticated = input.authenticated === true;
     const messageId = normalizeMessageId(input.messageId);
     if (messageId === null) {
@@ -138,10 +173,17 @@ export function ingestEmail(
     const listId = check.listId;
     const message = { messageId, listId, alias, sender, authenticated };
 
+    // Everything that can refuse is checked before the first write: a throw
+    // after it would leave a ticket with no dedupe row, and the redelivery
+    // would open a second one.
     requireFreshAttachmentIds(sql, input.attachments);
     const thread = emailThreadTask(sql, listId, input.referenceIds);
     if (thread !== null) {
+      // An unauthenticated reply still threads: the Worker marks the comment
+      // text itself, and the ticket was opened by someone this list admits.
       requireEmailWritable(sql, t.actor, "task", thread.id);
+      // A reply is only ever a comment: it never reopens, moves or retags
+      // the ticket, even a closed one.
       const comment = applyCommentCreate(host, t, { taskId: thread.id, body: input.commentBody });
       for (const a of input.attachments) applyAttachmentCreate(host, t, { ...a, taskId: thread.id });
       recordEmailMessage(sql, t, { ...message, taskId: thread.id, commentId: comment.id });
@@ -159,6 +201,8 @@ export function ingestEmail(
     recordEmailMessage(sql, t, { ...message, taskId: task.id, commentId: null });
     return { status: "created", taskId: task.id, listId: task.listId };
   });
+  // As in runTaskTurn: an automation in the same turn may have moved the
+  // task, and the caller should hear where it actually landed.
   if (result.status === "created" || result.status === "commented") {
     const row = taskRow(host.sql, result.taskId);
     if (row !== null) return { ...result, listId: row.list_id };
@@ -166,6 +210,15 @@ export function ingestEmail(
   return result;
 }
 
+/**
+ * The contract's refusals in its fixed order, then ok. Reads only.
+ *
+ * Dedupe is per (Message-ID, intake list), so one email addressed to two
+ * intakes files once in each. It runs before the rate limits so a
+ * redelivery is always recognized as one. Then two hourly budgets: the
+ * sender's own, and the list's across every sender, since an "@domain"
+ * entry admits any number of local parts each with a fresh sender budget.
+ */
 function runEmailIntakeCheck(
   sql: SqlStorage,
   alias: string,
@@ -182,6 +235,8 @@ function runEmailIntakeCheck(
       alias
     )
     .toArray()[0];
+  // `list_archived` is null when the list row is gone. Either way the
+  // sender hears the same thing as for an alias that never existed.
   if (!intake || intake.list_archived !== 0) return { status: "unknown_alias" };
   if (!senderAllowed(sender, toEmailIntake(intake).allowedSenders)) {
     return { status: "sender_not_allowed" };
@@ -207,6 +262,14 @@ function runEmailIntakeCheck(
   return { status: "ok", listId };
 }
 
+/**
+ * The ticket a reply belongs to: the first of its first
+ * EMAIL_THREAD_REFERENCE_LIMIT referenced messages that this same list filed
+ * and whose task still exists. Matching on the list rather than the alias
+ * means one intake can't append to another's tickets, and an alias that is
+ * removed and later given to another list can't carry that list's mail onto
+ * the tickets the alias opened before.
+ */
 function emailThreadTask(
   sql: SqlStorage,
   listId: string,
@@ -228,6 +291,7 @@ function emailThreadTask(
   return null;
 }
 
+/** The space write guard for ingestEmail: a refusal there is permanent, so it says so. */
 function requireEmailWritable(
   sql: SqlStorage,
   actor: Actor,
@@ -241,6 +305,7 @@ function requireEmailWritable(
   }
 }
 
+/** The Worker mints attachment ids; a reused one would fail mid-turn, so refuse it up front. */
 function requireFreshAttachmentIds(
   sql: SqlStorage,
   attachments: readonly EmailIngestAttachment[]
@@ -255,6 +320,7 @@ function requireFreshAttachmentIds(
   }
 }
 
+/** The dedupe row, written last in the turn that filed the message. */
 function recordEmailMessage(
   sql: SqlStorage,
   t: Turn,
@@ -280,6 +346,8 @@ function recordEmailMessage(
     t.now,
     m.authenticated ? 1 : 0
   );
+  // The task/comment audit rows name the actor the Worker passed; this one
+  // records who actually wrote in, and whether Cloudflare vouched for them.
   t.audit("email.ingest", m.taskId, {
     listId: m.listId,
     alias: m.alias,

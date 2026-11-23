@@ -24,6 +24,8 @@ export function automationContext(host: WorkspaceHost, t: Turn, depth: number): 
   return {
     sql,
     now: t.now,
+    // Same fallback as sendNotification: APP_HOSTNAME is required config,
+    // "localhost" is a neutral stand-in that can never leak traffic.
     appHostname: env.APP_HOSTNAME ?? "localhost",
     depth,
     emailDryRun: env.EMAIL_DRY_RUN !== "false",
@@ -35,6 +37,7 @@ export function automationContext(host: WorkspaceHost, t: Turn, depth: number): 
   };
 }
 
+/** Everything the engine needs about one task, resolved by name not id. */
 export function loadTaskFacts(sql: SqlStorage, taskId: string): TaskFacts | null {
   const row = taskRow(sql, taskId);
   if (row === null) return null;
@@ -77,6 +80,19 @@ export function loadTaskFacts(sql: SqlStorage, taskId: string): TaskFacts | null
   };
 }
 
+/**
+ * Re-entry point for automation actions. Mutations land in the SAME turn as
+ * the trigger, so the client receives one coherent batch of deltas, and the
+ * deltas they produce are stamped with `depth` — which is how the cap holds.
+ *
+ * `depth` is the engine's `ctx.depth + 1`: the depth at which this action
+ * executes. Outbound actions (call_webhook, send_email) never arrive here —
+ * the engine queues those itself.
+ *
+ * Template strings (`{{task.title}}` etc.) are the engine's responsibility:
+ * whatever text arrives on a create_task/create_subtask action is used
+ * verbatim.
+ */
 export function applyAction(
   host: WorkspaceHost,
   t: Turn,
@@ -95,6 +111,9 @@ export function applyAction(
   const outer = t.depth;
   const outerRule = t.automationRuleId;
   t.depth = depth;
+  // Everything audited between here and the `finally` was decided by this
+  // rule, so it is attributed to the automation rather than to t.actor's
+  // plain API call. Saved and restored because rules nest.
   t.automationRuleId = ruleId ?? outerRule;
   try {
     switch (action.kind) {
@@ -201,6 +220,8 @@ export function applyAction(
         break;
       case "call_webhook":
       case "send_email":
+        // Outbound I/O never happens inline; the engine enqueues these
+        // directly, so reaching here means a rule was mis-routed.
         console.error("applyAction received an outbound action", action.kind);
         break;
     }
@@ -210,6 +231,11 @@ export function applyAction(
   }
 }
 
+/**
+ * Feed every delta produced in this turn to the automation engine, including
+ * deltas the automations themselves produced (depth-stamped, capped at
+ * AUTOMATION_MAX_DEPTH). A rule that throws never fails the user's mutation.
+ */
 export function drainAutomations(host: WorkspaceHost, t: Turn): void {
   if (t.silent) return;
   const HARD_CAP = 5_000;
@@ -221,6 +247,10 @@ export function drainAutomations(host: WorkspaceHost, t: Turn): void {
     if (entry.evaluated) continue;
     entry.evaluated = true;
     if (++evaluated > HARD_CAP) {
+      // Deltas at or past the cap are still handed over: the engine recognises
+      // the depth itself and writes a clean "depth cap" automation_runs entry
+      // instead of silently dropping the chain. It takes no actions, so the
+      // loop still terminates.
       console.error("automation fan-out cap reached; stopping evaluation for this turn");
       break;
     }
@@ -232,6 +262,13 @@ export function drainAutomations(host: WorkspaceHost, t: Turn): void {
   }
 }
 
+/**
+ * Automation run log, newest first.
+ *
+ * `before` is a keyset cursor (the previous page's smallest `id`), matching
+ * how getAuditLog pages: an offset would skip or repeat rows as new runs land
+ * between requests.
+ */
 export function listAutomationRuns(
   sql: SqlStorage,
   filter: { ruleId?: string; taskId?: string; before?: number; limit?: number } = {}

@@ -55,6 +55,14 @@ import { getStatus, listStatuses, openStatus, resolveStatusName } from "./status
 import { type Turn, diffOf, toActor } from "./turn.js";
 import { requireAssignee } from "./users.js";
 
+// =========================================================================
+// Task mutations
+// =========================================================================
+
+/**
+ * The handoff a status move implies for a handoff task closed or reopened
+ * without going through replyHandoff, or undefined to leave it as it is.
+ */
 function impliedHandoff(t: Turn, before: Task, nowClosed: boolean): Handoff | undefined {
   if (before.handoff === null) return undefined;
   const next = handoffStateForStatusMove(before.handoff.state, before.closedAt !== null, nowClosed);
@@ -68,6 +76,10 @@ export function createTask(host: WorkspaceHost, input: CreateTaskInput, actor: s
   });
 }
 
+/**
+ * `handoff` is internal (requestHandoff): CreateTaskInput has no handoff
+ * field, so no client can file one except through that RPC.
+ */
 export function applyTaskCreate(
   host: WorkspaceHost,
   t: Turn,
@@ -81,6 +93,8 @@ export function applyTaskCreate(
       ? openStatus(sql, listRow.id)
       : resolveStatusName(sql, listRow.id, input.status);
 
+  // Unknown ids used to land in the row unchecked (assignee_id has no FK), so
+  // the task silently pointed at nobody. Validate before anything is written.
   requireAssignee(sql, input.assigneeId);
   requireAssignee(sql, input.waitingOn, "waitingOn");
   for (const sub of input.subtasks ?? []) requireAssignee(sql, sub.assigneeId);
@@ -106,6 +120,7 @@ export function applyTaskCreate(
     priority: input.priority ?? null,
     dueDate: input.dueDate ?? null,
     startDate: input.startDate ?? null,
+    // A brand-new task is never born asleep; snoozing is an explicit update.
     snoozedUntil: null,
     blockedNote: null,
     tags,
@@ -122,6 +137,7 @@ export function applyTaskCreate(
   t.emit("create", "task", taskId, task as unknown as Record<string, unknown>);
   t.audit("task.create", taskId, { listId: task.listId, title: task.title });
 
+  // Inline subtasks: each gets its own delta so clients patch incrementally.
   for (const sub of input.subtasks ?? []) {
     applySubtaskCreate(host, t, {
       taskId,
@@ -140,6 +156,11 @@ export function updateTask(host: WorkspaceHost, input: UpdateTaskInput, actor: s
   });
 }
 
+/**
+ * `handoff` is internal (replyHandoff), for the same reason as on
+ * applyTaskCreate: UpdateTaskInput cannot carry it. It lands in the same
+ * UPDATE as any status move, so a handoff closing its task is one delta.
+ */
 export function applyTaskUpdate(
   host: WorkspaceHost,
   t: Turn,
@@ -150,6 +171,8 @@ export function applyTaskUpdate(
   const { sql } = host;
   const row = requireTaskRow(sql, input.taskId);
   const before = toTask(row);
+  // replyHandoff passes the handoff it decided on; any other status change
+  // to a handoff task may imply one (see handoffStateForStatusMove).
   let handoff = explicitHandoff;
 
   const p = sqlPatch();
@@ -164,10 +187,14 @@ export function applyTaskUpdate(
     p.set("assigned_at", assignedBy === null ? null : t.now);
   }
   if (input.waitingOn !== undefined) requireAssignee(sql, input.waitingOn, "waitingOn");
+  // Whether the task ends this update closed; the status block below updates it.
   let endsClosed = before.closedAt !== null;
   p.setNullable(input.priority, before.priority, "priority");
   p.setNullable(input.dueDate, before.dueDate, "due_date");
   p.setNullable(input.startDate, before.startDate, "start_date");
+  // Snooze and its note are ordinary nullable fields: null clears them, and
+  // they ride the normal changed-fields delta. Nothing here touches the
+  // status — a task wakes up exactly where it went to sleep.
   p.setNullable(input.snoozedUntil, before.snoozedUntil, "snoozed_until");
   p.setNullable(input.blockedNote, before.blockedNote, "blocked_note");
   if (input.tags !== undefined) {
@@ -181,14 +208,24 @@ export function applyTaskUpdate(
     const status = resolveStatusName(sql, before.listId, input.status);
     if (status.id !== before.statusId) {
       p.set("status_id", status.id);
+      // Closed-type membership is what drives closedAt, both directions.
       if (status.type === "closed" && before.closedAt === null) p.set("closed_at", t.now);
       else if (status.type !== "closed" && before.closedAt !== null) p.set("closed_at", null);
       endsClosed = status.type === "closed";
+      // The task joins the end of its new column.
       p.set("position", nextTaskPosition(sql, before.listId, status.id));
       if (handoff === undefined) handoff = impliedHandoff(t, before, status.type === "closed");
     }
   }
 
+  // A closed task is nobody's turn: closing clears it, and a turn can't be
+  // set on a closed task, so a reopened task never comes back pointing at
+  // whoever held it last.
+  //
+  // Otherwise an explicit waitingOn wins. Without one, a handoff whose state
+  // or recipient just changed puts the turn where that state says, and
+  // reassigning an ordinary task clears a turn left on someone else, so the
+  // new owner starts with it.
   const finalAssigneeId = input.assigneeId !== undefined ? (input.assigneeId ?? null) : before.assigneeId;
   const finalHandoff = handoff ?? before.handoff;
   const assigneeChanged = finalAssigneeId !== before.assigneeId;
@@ -204,6 +241,9 @@ export function applyTaskUpdate(
   const nextWaitingOn = endsClosed ? null : wantedWaitingOn;
   if (nextWaitingOn !== before.waitingOn) p.set("waiting_on", nextWaitingOn);
 
+  // A turn note says what the next person needs to do, so it only makes
+  // sense on a change that hands the turn to someone. Checked before any
+  // write, because a throw does not roll back what the turn already wrote.
   if (input.turnNote !== undefined && (nextWaitingOn === null || nextWaitingOn === before.waitingOn)) {
     throw new Error(
       nextWaitingOn === null
@@ -232,14 +272,20 @@ export function applyTaskUpdate(
     TASK_DIFF_KEYS
   );
   patch.updatedAt = after.updatedAt;
+  // `prev` lets status_changed / assignee_changed / tag_added rules see what
+  // the value used to be; a Delta's data holds changed fields only.
   t.emit("update", "task", after.id, patch, { prev: prevOf(before as unknown as Record<string, unknown>, patch) });
   t.audit(action, after.id, patch);
+  // The note is an ordinary comment, so it shows in the thread for everyone;
+  // notifyForDelta quotes it in the turn email instead of sending a second one.
   if (input.turnNote !== undefined) applyCommentCreate(host, t, { taskId: after.id, body: input.turnNote });
   return after;
 }
 
 export function moveTask(host: WorkspaceHost, input: MoveTaskInput, actor: string | Actor): Task {
   return host.runTaskTurn(toActor(actor), (t) => {
+    // Both ends: you may not drag a task out of a space you cannot see, and
+    // you may not smuggle one into a private space you are not a member of.
     assertTaskWritable(host.sql, t.actor, input.taskId);
     if (input.listId !== undefined) assertListWritable(host.sql, t.actor, input.listId);
     return applyTaskMove(host, t, input, "task.move");
@@ -258,6 +304,7 @@ export function applyTaskMove(
   const targetListId = input.listId ?? before.listId;
   if (input.listId !== undefined) requireListRow(sql, input.listId);
 
+  // Statuses are per-list, so a cross-list move must re-resolve the status.
   let status: Status;
   if (input.status !== undefined) {
     status = resolveStatusName(sql, targetListId, input.status);
@@ -275,6 +322,9 @@ export function applyTaskMove(
   if (input.position !== undefined) {
     position = input.position;
   } else {
+    // Clients omit `position` when their own midpoint would underflow, so
+    // renumber the target column first and only then append. Either way the
+    // Task returned below carries the authoritative final position.
     if (columnHasCollapsed(sql, targetListId, status.id)) {
       rebalanceTaskColumn(sql, targetListId, status.id);
     }
@@ -307,6 +357,8 @@ export function applyTaskMove(
     before.id
   );
 
+  // A client-supplied midpoint can collapse after enough inserts; renumber
+  // the column once and re-read rather than let ordering go non-deterministic.
   const neighbours = sql
     .exec<{ prev: number | null; next: number | null }>(
       `SELECT (SELECT MAX(position) FROM tasks WHERE list_id = ? AND status_id = ? AND position < ?) AS prev,
@@ -336,6 +388,10 @@ export function applyTaskMove(
   return after;
 }
 
+/**
+ * Per-item results: one bad row never rolls back the good ones, and the
+ * caller can retry exactly the failures.
+ */
 export function bulkUpdate(
   host: WorkspaceHost,
   input: BulkUpdateInput,
@@ -345,6 +401,8 @@ export function bulkUpdate(
     const results: BulkResult["results"] = [];
     for (const update of input.updates) {
       try {
+        // Per item, like every other bulk failure: one task in a space the
+        // caller cannot see fails that row and leaves the rest of the batch.
         assertTaskWritable(host.sql, t.actor, update.taskId);
         const task = applyTaskUpdate(host, t, update, "task.bulk_update");
         results.push({ taskId: task.id, ok: true, error: null });
@@ -360,6 +418,7 @@ export function bulkUpdate(
   });
 }
 
+/** Returns the r2Keys of any deleted attachments so the caller can clean up R2. */
 export function deleteTask(
   host: WorkspaceHost,
   taskId: string,
@@ -370,10 +429,16 @@ export function deleteTask(
     const row = requireTaskRow(sql, taskId);
     const spaceId = spaceIdForTask(sql, taskId);
     assertSpaceWritable(sql, t.actor, spaceId);
+    // Subtasks are in the snapshot, so they need their own delete deltas.
+    // Comments and attachments are lazy-loaded per task and need none.
     const subtaskIds = sql
       .exec<{ id: string }>("SELECT id FROM subtasks WHERE task_id = ?", taskId)
       .toArray()
       .map((r) => r.id);
+    // The attachments row is about to be the only record of these R2 keys,
+    // so park them in pending_object_deletes before dropping the row: the
+    // caller's waitUntil (or the backup job's sweep, if that never runs)
+    // deletes the objects and clears the rows afterward.
     const r2Keys = sql
       .exec<{ r2_key: string }>("SELECT r2_key FROM attachments WHERE task_id = ?", taskId)
       .toArray()
@@ -385,9 +450,12 @@ export function deleteTask(
     sql.exec("DELETE FROM subtasks WHERE task_id = ?", taskId);
     sql.exec("DELETE FROM comments WHERE task_id = ?", taskId);
     sql.exec("DELETE FROM attachments WHERE task_id = ?", taskId);
+    // The engine's due-date fired-guard would otherwise keep dead rows.
     sql.exec("DELETE FROM automation_due_fires WHERE task_id = ?", taskId);
     sql.exec("DELETE FROM tasks WHERE id = ?", taskId);
 
+    // The rows are gone by now, so the space is passed explicitly: the
+    // broadcast filter still has to know which board these deletes belong to.
     for (const sid of subtaskIds) t.emit("delete", "subtask", sid, null, { taskId, spaceId });
     t.emit("delete", "task", taskId, null, { spaceId });
     t.audit("task.delete", taskId, { listId: row.list_id, title: row.title });
@@ -395,6 +463,13 @@ export function deleteTask(
   });
 }
 
+/**
+ * Drops rows from pending_object_deletes once the caller has actually
+ * removed the R2 objects (a delete route's waitUntil, or the backup job's
+ * sweep). Not wrapped in runTurn: this is bookkeeping cleanup for storage
+ * that already has no workspace-visible representation, not a mutation —
+ * it has no actor, produces no delta, and belongs in no audit log.
+ */
 export function clearPendingObjectDeletes(
   sql: SqlStorage,
   r2Keys: string[]
@@ -404,6 +479,10 @@ export function clearPendingObjectDeletes(
   }
   return { ok: true, cleared: r2Keys.length };
 }
+
+// =========================================================================
+// Subtasks (Asana-style: done/not-done, no statuses)
+// =========================================================================
 
 export function createSubtask(
   host: WorkspaceHost,
@@ -523,6 +602,7 @@ export function toggleSubtask(
     const after = requireSubtask(sql, before.id);
     t.emit("update", "subtask", after.id, { done: after.done }, { taskId: after.taskId });
     t.audit("subtask.toggle", after.id, { done: after.done, taskId: after.taskId });
+    // all_subtasks_done is a trigger the engine derives from this delta.
     return after;
   });
 }
@@ -544,13 +624,21 @@ export function deleteSubtask(
   });
 }
 
+// =========================================================================
+// Comments
+// =========================================================================
+
 export function createComment(
   host: WorkspaceHost,
   input: ParsedCommentInput,
   actor: string | Actor
 ): Comment {
   return host.runTurn(toActor(actor), (t) => {
+    // A missing task resolves to no space, so this passes and the not-found
+    // error comes from applyCommentCreate's requireTaskRow instead.
     assertTaskWritable(host.sql, t.actor, input.taskId);
+    // Every reply check runs before the comment is written, since a throw
+    // does not roll back what the turn already wrote.
     const reply = input.emailToRequester === true ? requireEmailReply(host, t.actor, input.taskId) : null;
     const comment = applyCommentCreate(host, t, input, reply?.target.to ?? null);
     if (reply !== null) {
@@ -572,6 +660,12 @@ export function createComment(
   });
 }
 
+/**
+ * The checks for emailing a comment back: a person in the web app, or an api
+ * key an owner or admin allowed to (never MCP, and never a key nobody
+ * allowed, so no agent writes to a client on its own), replies turned on,
+ * and a requester to write to.
+ */
 function requireEmailReply(
   host: WorkspaceHost,
   actor: Actor,
@@ -603,6 +697,7 @@ function mayEmailRequesters(sql: SqlStorage, actor: Actor): boolean {
   return row !== undefined && row.revoked_at === null && row.can_email_requesters === 1;
 }
 
+/** The comment write itself, shared with ingestEmail. Callers check access. */
 export function applyCommentCreate(
   host: WorkspaceHost,
   t: Turn,
@@ -617,6 +712,8 @@ export function applyCommentCreate(
     authorId: t.actor.userId,
     body: input.body,
     createdAt: t.now,
+    // How it arrived: "api"/"mcp" is the author's agent, "ui" the person,
+    // "webhook" an inbound email. Recorded on the row, not inferred later.
     via: t.actor.via,
     emailTo,
     emailStatus: emailTo === null ? null : "sending",
@@ -637,6 +734,9 @@ export function applyCommentCreate(
     taskId: comment.taskId,
   });
   t.audit("comment.create", comment.id, { taskId: comment.taskId });
+  // Activity wakes a snoozed task, in this same turn: the comment delta and
+  // the task's snoozedUntil -> null delta commit and broadcast together, so
+  // nobody ever sees the comment land on a card that is still asleep.
   if (wakesOnComment(tRow.snoozed_until ?? null)) {
     applyTaskUpdate(host, t, { taskId: comment.taskId, snoozedUntil: null }, "task.wake");
   }
@@ -663,6 +763,10 @@ export function deleteComment(
   });
 }
 
+// =========================================================================
+// Attachments — the api Worker does the R2 upload, the DO owns the metadata
+// =========================================================================
+
 export function createAttachment(
   host: WorkspaceHost,
   input: CreateAttachmentInput,
@@ -675,6 +779,10 @@ export function createAttachment(
   });
 }
 
+/**
+ * The metadata write, shared with ingestEmail. Honours a caller-supplied id
+ * (the R2 key embeds it); callers check the task exists and is writable.
+ */
 export function applyAttachmentCreate(
   host: WorkspaceHost,
   t: Turn,
@@ -717,6 +825,10 @@ export function applyAttachmentCreate(
   return attachment;
 }
 
+/**
+ * Make a verified Drive file canonical while retaining the R2 key until a
+ * separate, read-back-gated cleanup call succeeds.
+ */
 export function setAttachmentDriveStorage(
   host: WorkspaceHost,
   input: SetAttachmentDriveStorageInput,
@@ -765,6 +877,7 @@ export function setAttachmentDriveStorage(
   });
 }
 
+/** Mark cleanup complete only for the exact Drive file the caller read back. */
 export function markAttachmentDriveCleanupComplete(
   host: WorkspaceHost,
   attachmentId: string,
@@ -798,6 +911,10 @@ export function markAttachmentDriveCleanupComplete(
   });
 }
 
+/**
+ * Returns the r2Key so the caller can delete the object from R2 (and clear
+ * the pending_object_deletes row this parks in the same turn).
+ */
 export function deleteAttachment(
   host: WorkspaceHost,
   attachmentId: string,
@@ -809,6 +926,10 @@ export function deleteAttachment(
     if (!before) throw new Error(`Attachment ${attachmentId} not found.`);
     assertTaskWritable(sql, t.actor, before.taskId);
     const spaceId = spaceIdForTask(sql, before.taskId);
+    // Same parking as deleteTask: this row is the only record of the R2
+    // key, so persist it before dropping the row. The route's waitUntil
+    // deletes the object and clears the pending row; if the Worker is
+    // evicted first, the backup job's daily sweep picks it up.
     sql.exec("INSERT OR IGNORE INTO pending_object_deletes (r2_key, enqueued_at) VALUES (?, ?)", before.r2Key, t.now);
     sql.exec("DELETE FROM attachments WHERE id = ?", attachmentId);
     t.emit("delete", "attachment", attachmentId, null, { spaceId });

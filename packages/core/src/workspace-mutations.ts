@@ -27,6 +27,10 @@ import { type Turn, toActor } from "./turn.js";
 import { isPrivilegedRole, listSpaceMemberIds, roleOf } from "./visibility.js";
 import { broadcastWs, closeSocket, resyncFor, sendWs, socketsFor } from "./ws.js";
 
+// =========================================================================
+// Spaces & lists
+// =========================================================================
+
 export function createSpace(host: WorkspaceHost, input: ParsedSpaceInput, actor: string | Actor): Space {
   return host.runTurn(toActor(actor), (t) => {
     const { sql } = host;
@@ -36,6 +40,10 @@ export function createSpace(host: WorkspaceHost, input: ParsedSpaceInput, actor:
       color: input.color ?? null,
       position: nextPosition(sql, "spaces"),
       archived: false,
+      // Spaces are born private (private is the norm for this workspace);
+      // a caller may opt into workspace-wide visibility explicitly, and
+      // flipping visibility afterwards is a separate, audited mutation
+      // (`setSpaceVisibility`).
       visibility: input.visibility,
       createdAt: t.now,
     };
@@ -50,6 +58,10 @@ export function createSpace(host: WorkspaceHost, input: ParsedSpaceInput, actor:
       space.createdAt,
       t.actor.userId
     );
+    // A private space needs at least one member, and the person who just
+    // built it is the honest answer — mirrors setSpaceVisibility's flip to
+    // private, including for an admin/owner creator, so membership stays
+    // consistent regardless of who made the space private.
     if (space.visibility === "private") {
       addSpaceMember(sql, space.id, t.actor.userId, t.now);
     }
@@ -85,6 +97,11 @@ export function updateSpace(
   });
 }
 
+/**
+ * Flip visibility between workspace and private; going private ensures at
+ * least one member (creator, or acting admin if created_by is null) and
+ * triggers client resync.
+ */
 export function setSpaceVisibility(
   host: WorkspaceHost,
   input: { spaceId: string; visibility: SpaceVisibility },
@@ -108,19 +125,27 @@ export function setSpaceVisibility(
 
     const after = requireSpace(sql, input.spaceId);
     t.emit("update", "space", after.id, { visibility: after.visibility });
-    t.audit("space.visibility", after.id, { from: before.visibility, to: after.visibility });
+    t.audit("space.set_visibility", after.id, { visibility: after.visibility });
     return { space: after, changed: true };
   });
 
   if (result.changed) {
+    // The visibility delta replays, but the subtree a member gained or lost
+    // does not — so replay from any earlier seq is invalid for them.
     bumpResyncFloor(host.sql, host.maxSeq());
-    const spaceId = result.space.id;
-    const members = new Set(listSpaceMemberIds(host.sql, spaceId));
-    resyncFor(host, (userId) => !members.has(userId));
+    // Everyone who is not an owner/admin may have gained or lost a subtree.
+    resyncFor(host, () => true);
   }
   return result.space;
 }
 
+/**
+ * Replace a space's member list. `userIds` is the complete set afterwards, so
+ * the caller never has to diff — the UI always knows the whole list.
+ *
+ * Unknown user ids are rejected rather than silently dropped: a typo'd id
+ * would otherwise look like a granted permission that never works.
+ */
 export function setSpaceMembers(
   host: WorkspaceHost,
   input: { spaceId: string; userIds: string[] },
@@ -128,7 +153,7 @@ export function setSpaceMembers(
 ): { spaceId: string; userIds: string[] } {
   const result = host.runTurn(toActor(actor), (t) => {
     const { sql } = host;
-    requirePrivileged(sql, t.actor, "Setting a space's members");
+    requirePrivileged(sql, t.actor, "Changing a space's members");
     const space = requireSpace(sql, input.spaceId);
 
     const seen = new Set<string>();
@@ -149,11 +174,16 @@ export function setSpaceMembers(
     for (const userId of before) if (!seen.has(userId)) changedUsers.add(userId);
     for (const userId of wanted) if (!before.has(userId)) changedUsers.add(userId);
 
+    // Membership is not board content: it is audited, but there is no member
+    // delta to broadcast — the affected clients resync instead.
     t.audit("space.set_members", space.id, { userIds: wanted });
     return { spaceId: space.id, userIds: wanted, changedUsers, private: space.visibility === "private" };
   });
 
+  // Only a private space's membership changes what anyone can see.
   if (result.private && result.changedUsers.size > 0) {
+    // Membership writes no delta at all, so an affected user reconnecting
+    // later with an old sinceSeq must get a snapshot, not a replay.
     bumpResyncFloor(host.sql, host.maxSeq());
     resyncFor(host, (userId) => result.changedUsers.has(userId));
   }
@@ -252,12 +282,15 @@ export function updateList(
         prev[key] = before[key];
       }
     }
+    // `prev.spaceId` is how resyncForSpaceMoves spots a cross-space move: the
+    // list and every task under it just changed visibility for someone.
     t.emit("update", "list", after.id, patch, { prev });
     t.audit("list.update", after.id, patch);
     return after;
   });
 }
 
+/** Issue (or rotate) the bearer token for the list's inbound webhook. */
 export function setListInboundToken(
   host: WorkspaceHost,
   input: { listId: string; enabled: boolean },
@@ -269,6 +302,9 @@ export function setListInboundToken(
     assertSpaceWritable(sql, t.actor, row.space_id);
     const inboundToken = input.enabled ? token() : null;
     sql.exec("UPDATE lists SET inbound_token = ? WHERE id = ?", inboundToken, row.id);
+    // The delta goes to every connected member, so it carries `null` — the
+    // same value the snapshot carries. Only this method's return value (which
+    // the admin-only PATCH route shows once) has the plaintext.
     t.emit("update", "list", row.id, { inboundToken: null });
     t.audit("list.set_inbound_token", row.id, { enabled: input.enabled });
     return { listId: row.id, inboundToken };
@@ -287,6 +323,8 @@ export function deleteList(host: WorkspaceHost, listId: string, actor: string | 
           `or archive the list instead (updateList with archived: true).`
       );
     }
+    // An alias outliving its list would keep accepting mail for nowhere, and
+    // keep the alias from being reused, so the intake goes in the same turn.
     const intake = emailIntakeForList(sql, listId);
     sql.exec("DELETE FROM email_intakes WHERE list_id = ?", listId);
     sql.exec("DELETE FROM statuses WHERE list_id = ?", listId);
@@ -300,6 +338,13 @@ export function deleteList(host: WorkspaceHost, listId: string, actor: string | 
   });
 }
 
+// =========================================================================
+// Users, API keys, automation rules
+// =========================================================================
+
+/**
+ * First-login bootstrap: lets OWNER_EMAIL claim the seeded owner@placeholder.flow row.
+ */
 export function claimOwner(host: WorkspaceHost, email: string): User | null {
   const trimmed = email.trim();
   if (trimmed === "") return null;
@@ -310,21 +355,28 @@ export function claimOwner(host: WorkspaceHost, email: string): User | null {
   return upsertUser(host, { id: placeholder.id, email: trimmed }, placeholder.id);
 }
 
+/** Upsert by id when given, otherwise by email (case-insensitive). */
 export function upsertUser(host: WorkspaceHost, input: UpsertUserInput, actor: string | Actor): User {
   const { before, after } = host.runTurn(toActor(actor), (t) => applyUserUpsert(host.sql, t, input));
   if (before === null) return after;
+  // Crossing member <-> owner/admin changes everything this user may see,
+  // automation rules included. The user delta cannot express that, so replay
+  // from any earlier seq is invalid and their open sockets resync.
   if (isPrivilegedRole(before.role) !== isPrivilegedRole(after.role)) {
     bumpResyncFloor(host.sql, host.maxSeq());
     if (!after.deactivated) {
       for (const ws of socketsFor(host.ctx, after.id)) sendWs(ws, { type: "resync" });
     }
   }
+  // The Worker refuses a deactivated user at upgrade, but a socket that is
+  // already open would otherwise keep streaming deltas indefinitely.
   if (after.deactivated) {
     for (const ws of socketsFor(host.ctx, after.id)) closeSocket(ws, 1008, "user deactivated");
   }
   return after;
 }
 
+/** `before` is null for a newly created user, and equals `after` on a no-op. */
 function applyUserUpsert(
   sql: SqlStorage,
   t: Turn,
@@ -422,6 +474,7 @@ export function createApiKey(
       key.tokenHash,
       key.createdAt
     );
+    // API keys are not board state: audited, but no delta / broadcast.
     t.audit("api_key.create", key.id, { userId: key.userId, name: key.name });
     return key;
   });
@@ -438,6 +491,11 @@ export function revokeApiKey(host: WorkspaceHost, keyId: string, actor: string |
   });
 }
 
+/**
+ * Allow or stop one key emailing a ticket's requester (see requireEmailReply).
+ * Owner or admin, from the app or an api key (there is no switch in the web
+ * app); never over MCP. Audited either way.
+ */
 export function setApiKeyEmailRequesters(
   host: WorkspaceHost,
   keyId: string,
@@ -456,6 +514,7 @@ export function setApiKeyEmailRequesters(
     if (!row) throw new Error(`API key ${keyId} not found.`);
     if (row.revoked_at !== null) throw new Error(`API key ${keyId} is revoked.`);
     sql.exec("UPDATE api_keys SET can_email_requesters = ? WHERE id = ?", allowed ? 1 : 0, keyId);
+    // Like create and revoke: audited, not board state, so no delta.
     t.audit("api_key.email_requesters", keyId, { allowed });
     return toApiKey({ ...row, can_email_requesters: allowed ? 1 : 0 });
   });

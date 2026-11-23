@@ -33,6 +33,22 @@ import { applyCommentCreate, applyTaskCreate, applyTaskUpdate } from "./task-mut
 import { toActor } from "./turn.js";
 import { canSeeSpace, isPrivilegedRole, isSpaceMember, isSystemActor, roleOf, visibleSpaceIds } from "./visibility.js";
 
+// =========================================================================
+// Agent handoffs (see ./handoffs.ts for the state rules)
+//
+// A handoff is an ordinary task — title and description carry the ask, the
+// assignee is the recipient, the due date is when it's needed, tag
+// "handoff" — plus the five handoff columns: who asked, what they want back,
+// which tasks to read first, and where the exchange stands. Replies are
+// ordinary comments. Both mutations check everything before their first
+// write, because a throw does not roll back what the turn already wrote.
+// =========================================================================
+
+/**
+ * File a request for a teammate's agent. One task turn through
+ * applyTaskCreate, so task_created automations fire and the recipient gets
+ * the assignment email (see notifyForDelta).
+ */
 export function requestHandoff(
   host: WorkspaceHost,
   input: RequestHandoffInput,
@@ -71,6 +87,12 @@ export function requestHandoff(
   });
 }
 
+/**
+ * Answer, ask back, or move a handoff along, in one turn: the message (if
+ * any) is a comment through applyCommentCreate, so `via` is recorded and a
+ * snoozed task wakes; the state change (if any) is one task update carrying
+ * the new `handoff` and, for done/declined or a reopen, the status move.
+ */
 export function replyHandoff(
   host: WorkspaceHost,
   input: ReplyHandoffInput,
@@ -96,6 +118,8 @@ export function replyHandoff(
     if (!decision.ok) throw new Error(handoffRefusal(host.sql, decision.reason, before, handoff));
     const next = decision.next;
     const changed = next !== handoff.state;
+    // Resolved before the first write: a malformed list throws here, not
+    // after the comment has already landed.
     const status = changed ? handoffStatusName(host.sql, before, next) : undefined;
 
     const comment =
@@ -114,9 +138,18 @@ export function replyHandoff(
     }
     return { taskId: before.id, comment };
   });
+  // Re-read after the automation drain, as runTaskTurn does.
   return { task: toTask(requireTaskRow(host.sql, out.taskId)), comment: out.comment };
 }
 
+/**
+ * Handoffs assigned to the actor (incoming) or filed by them (outgoing),
+ * newest state change first, limited to spaces the actor can see. Explicit
+ * `states` filter on the handoff state alone, so asking for done or declined
+ * returns the (closed) tasks behind them. The default (open states) also
+ * skips closed tasks: someone closing a handoff task by hand, without
+ * touching its state, has still taken it off everyone's plate.
+ */
 export function listHandoffs(
   sql: SqlStorage,
   input: ListHandoffsInput,
@@ -130,6 +163,8 @@ export function listHandoffs(
   const where = [`${column} = ?`, `handoff_state IN (${states.map(() => "?").join(", ")})`];
   const params: SqlStorageValue[] = [userId, ...states];
   if (query.states === undefined) where.push("closed_at IS NULL");
+  // Same visibility filter as searchTasks: in SQL, before the LIMIT, so a
+  // page of hidden rows can never come back short or empty.
   const visible = visibleSpaceIds(sql, userId);
   if (visible !== null) {
     if (visible.size === 0) return [];
@@ -150,6 +185,11 @@ export function listHandoffs(
     .map(toTask);
 }
 
+/**
+ * The recipient must exist, be someone else, be active, and be able to see
+ * the space the handoff lands in — a handoff they cannot open is one nobody
+ * will ever answer.
+ */
 function requireHandoffRecipient(sql: SqlStorage, actor: Actor, toUserId: string, spaceId: string): void {
   const recipient = userById(sql, toUserId);
   if (recipient === null) {
@@ -184,6 +224,12 @@ function requireHandoffRecipient(sql: SqlStorage, actor: Actor, toUserId: string
   }
 }
 
+/**
+ * Every context task must exist and be visible to both ends: the requester
+ * (it's their pointer) and the recipient, whose agent would otherwise be
+ * sent to read a task it can't open. De-duplicated, order kept. Called after
+ * requireHandoffRecipient, so the recipient is known to exist.
+ */
 function requireHandoffContext(
   sql: SqlStorage,
   actor: Actor,
@@ -220,6 +266,7 @@ function requireHandoffContext(
   return out;
 }
 
+/** The status name a state change moves the task to, or undefined to leave it. */
 function handoffStatusName(sql: SqlStorage, task: Task, next: HandoffState): string | undefined {
   const closed = getStatus(sql, task.statusId)?.type === "closed";
   switch (handoffStatusMove(next, closed)) {
@@ -232,6 +279,7 @@ function handoffStatusName(sql: SqlStorage, task: Task, next: HandoffState): str
   }
 }
 
+/** The refusal sentence, naming who can do what — agents act on these. */
 function handoffRefusal(
   sql: SqlStorage,
   reason: "outsider" | "requester_state",

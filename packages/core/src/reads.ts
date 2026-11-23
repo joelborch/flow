@@ -54,10 +54,23 @@ import { listStatuses } from "./statuses.js";
 import { toActor } from "./turn.js";
 import { automationRulesForSnapshot, visibleSpaceIds } from "./visibility.js";
 
+/**
+ * Full board state. Closed tasks whose closedAt is older than 60 days are
+ * omitted to keep the payload bounded — they stay queryable via searchTasks
+ * with `includeClosed: true`.
+ *
+ * `forUserId` applies per-space permissions: spaces the user cannot see, and
+ * every list, task and subtask under them, are absent from the result.
+ * Omitting it returns the unfiltered workspace and is for internal callers
+ * only — every request-serving path passes the authenticated user's id.
+ */
 export function getSnapshot(host: WorkspaceHost, forUserId?: string): BoardSnapshot {
   const { sql } = host;
   const cutoff = Date.now() - SNAPSHOT_CLOSED_WINDOW_MS;
   const seq = host.maxSeq();
+  // Only an absent id means "unfiltered". An empty one is an unidentified
+  // caller — a socket accepted without an id, say — and gets the same
+  // treatment as an unknown member: workspace-visible spaces and nothing else.
   const visible = forUserId === undefined ? null : visibleSpaceIds(sql, forUserId);
 
   const spaces = sql
@@ -66,6 +79,9 @@ export function getSnapshot(host: WorkspaceHost, forUserId?: string): BoardSnaps
     .map(toSpace)
     .filter((sp) => visible === null || visible.has(sp.id));
 
+  // The visible-list set is what the task and subtask filters key off, so the
+  // hierarchy can only ever be filtered consistently: no orphan list under a
+  // hidden space, no task whose list is gone.
   const visibleListIds =
     visible === null
       ? null
@@ -77,6 +93,7 @@ export function getSnapshot(host: WorkspaceHost, forUserId?: string): BoardSnaps
             .map((r) => r.id)
         );
 
+  // One pass over statuses, grouped in memory, instead of a query per list.
   const statusesByList = new Map<string, Status[]>();
   for (const s of sql
     .exec<{
@@ -142,6 +159,10 @@ export function getSnapshot(host: WorkspaceHost, forUserId?: string): BoardSnaps
   };
 }
 
+/**
+ * Lightweight hierarchy for MCP `flow_get_workspace_map` and pickers.
+ * `forUserId` filters it by per-space permissions, exactly as getSnapshot does.
+ */
 export function getWorkspaceMap(
   host: WorkspaceHost,
   forUserId?: string
@@ -187,6 +208,12 @@ export function getWorkspaceMap(
   };
 }
 
+/**
+ * One task with its children. `forUserId` refuses the read when the task
+ * lives in a space that user cannot see — with the same sentence a blocked
+ * write gets, rather than a bare 404, so nobody wastes time on a "missing"
+ * task that is simply someone else's.
+ */
 export function getTaskDetail(host: WorkspaceHost, taskId: string, forUserId?: string): TaskDetail {
   const { sql } = host;
   const row = requireTaskRow(sql, taskId);
@@ -205,6 +232,13 @@ export function getTaskDetail(host: WorkspaceHost, taskId: string, forUserId?: s
   };
 }
 
+/**
+ * Many tasks' details in one DO turn, so a reader such as the monthly backup
+ * makes one RPC per page instead of one per task, and every detail in the
+ * batch comes from the same workspace state. A missing or hidden task becomes
+ * an entry in `errors` with getTaskDetail's message rather than failing the
+ * whole batch.
+ */
 export function getTaskDetails(
   host: WorkspaceHost,
   taskIds: string[],
@@ -222,6 +256,10 @@ export function getTaskDetails(
   return { details, errors };
 }
 
+/**
+ * `actor` is optional for internal callers; when present, results are limited
+ * to the spaces that user may see (including `total`, so paging stays honest).
+ */
 export function searchTasks(
   sql: SqlStorage,
   input: SearchTasksInput,
@@ -242,10 +280,13 @@ export function getAuditLog(
   sql: SqlStorage,
   filter: {
     entity?: string;
+    /** Mutation name, e.g. "task.update". */
     action?: string;
     userId?: string;
     apiKeyId?: string;
+    /** Keyset cursor: the previous page's `nextBefore`. */
     before?: number;
+    /** Inclusive lower timestamp bound (`at >= after`). */
     after?: number;
     limit?: number;
   } = {}
@@ -293,6 +334,11 @@ export function getAuditLog(
   };
 }
 
+/**
+ * Read-only SQL over the query views (see ./query.ts), as forUserId sees
+ * them: every space for an owner/admin, only their visible spaces for a
+ * member, who also gets a lower row cap and a per-minute budget.
+ */
 export function runQuery(
   host: WorkspaceHost,
   text: string,
@@ -304,6 +350,7 @@ export function runQuery(
   return runReadOnlyQuery(host.sql, (fn) => host.ctx.storage.transactionSync(fn), text, maxRows, visible);
 }
 
+/** Auth hot path: resolve a bearer token hash, stamping last_used_at. */
 export function resolveApiKey(sql: SqlStorage, tokenHash: string): { key: ApiKey; user: User } | null {
   const row = sql
     .exec<ApiKeyRow>(`SELECT ${API_KEY_COLUMNS} FROM api_keys WHERE token_hash = ?`, tokenHash)
@@ -313,6 +360,7 @@ export function resolveApiKey(sql: SqlStorage, tokenHash: string): { key: ApiKey
     .exec<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`, row.user_id)
     .toArray()[0];
   if (!user) return null;
+  // Not a delta-worthy change: no audit row, no broadcast.
   sql.exec("UPDATE api_keys SET last_used_at = ? WHERE id = ?", Date.now(), row.id);
   return { key: toApiKey(row), user: toUser(user) };
 }
@@ -324,6 +372,12 @@ export function listApiKeys(sql: SqlStorage): ApiKey[] {
     .map(toApiKey);
 }
 
+/**
+ * Resolve the list behind an inbound webhook bearer token.
+ *
+ * One of only two reads that carry `inboundToken`; the caller (the inbound
+ * route) uses it for auth and never puts the list in a response body.
+ */
 export function getListByInboundToken(sql: SqlStorage, inboundToken: string): List | null {
   const row = sql
     .exec<ListRow>(`SELECT ${LIST_COLUMNS} FROM lists WHERE inbound_token = ?`, inboundToken)
@@ -331,6 +385,11 @@ export function getListByInboundToken(sql: SqlStorage, inboundToken: string): Li
   return row ? toListWithSecrets(row, listStatuses(sql, row.id)) : null;
 }
 
+/**
+ * One list WITH its inbound token. Admin-only by contract — the api Worker
+ * gates it — and the reason `getSnapshot()` can null the token unconditionally
+ * without breaking the "show me the intake credential" flow.
+ */
 export function getListWithSecrets(sql: SqlStorage, listId: string): List | null {
   const row = sql
     .exec<ListRow>(`SELECT ${LIST_COLUMNS} FROM lists WHERE id = ?`, listId)
