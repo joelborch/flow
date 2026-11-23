@@ -111,7 +111,13 @@ The Durable Object needs nothing pre-created — the `migrations` block in `wran
 
 ```bash
 cd ../..           # repo root
-pnpm deploy        # builds apps/web with Vite, then wrangler deploy from apps/api
+pnpm run deploy    # guarded deploy: verifies main, runs checks + dry-run, builds SPA, asks approval
+```
+
+For the one-click `wrangler.jsonc` at the repo root (when you haven't created `apps/api/wrangler.jsonc`), pass `--config wrangler.jsonc`:
+
+```bash
+pnpm run deploy -- --config wrangler.jsonc
 ```
 
 Because `routes` uses `"custom_domain": true`, wrangler creates the `flow.example.com` DNS record and certificate on your zone automatically. Verify liveness (this endpoint is public by design, so uptime checks don't need a credential):
@@ -152,7 +158,7 @@ Policy: action **Allow**, include your team — an email domain rule (`Emails en
 **Copy the AUD.** Open the allow app's **Overview** tab and copy the *Application Audience (AUD) Tag* — a 64-char hex string. Put it in `wrangler.jsonc` as `ACCESS_AUD`, set `ACCESS_TEAM_DOMAIN` to your team domain (visible under Zero Trust → Settings → Custom Pages, it looks like `your-team.cloudflareaccess.com`), and redeploy:
 
 ```bash
-pnpm deploy
+pnpm run deploy
 ```
 
 Now visit `https://flow.example.com` in a browser: Access should challenge you, and after login you should land on your board as the seeded owner. Remember: Access authenticating you is necessary but not sufficient — your email must also exist as a workspace user (step 1), or you'll get `403 you@example.com is not a member of this workspace`.
