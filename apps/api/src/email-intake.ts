@@ -16,7 +16,13 @@ import { findOwnerActor } from "./auth.js";
 import { workspace } from "./do.js";
 import type { Env } from "./env.js";
 import { contentDisposition, mimeEssence, sanitizeFilename } from "./routes/attachments.js";
-import { emailBrandName, emailFrom, renderEmailHtml, requesterFromName } from "./side-effects/index.js";
+import {
+  assertLiveEmailSender,
+  emailBrandName,
+  emailFrom,
+  renderEmailHtml,
+  requesterFromName,
+} from "./side-effects/index.js";
 import { HEADER_VALUE_MAX_BYTES, errorCode, sendWithHeaders, threadingHeaders } from "./email-thread.js";
 
 /**
@@ -964,6 +970,7 @@ export async function sendAcknowledgement(env: Env, ack: Acknowledgement, taskId
     );
     return;
   }
+  assertLiveEmailSender(env);
   const binding = env.SEND_EMAIL;
   if (!binding) {
     throw new Error('EMAIL_DRY_RUN is off but the SEND_EMAIL binding is missing from wrangler.jsonc');

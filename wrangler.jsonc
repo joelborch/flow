@@ -1,11 +1,14 @@
-// One-click deploy config, read by the "Deploy to Cloudflare" button in the
-// README (and by `pnpm deploy` from the repo root when you haven't created
-// apps/api/wrangler.jsonc). It serves Flow from a *.workers.dev hostname with
-// sign-in not yet configured: the app shows the remaining setup steps until
-// ACCESS_TEAM_DOMAIN, ACCESS_AUD and OWNER_EMAIL are set in the Worker's
-// Settings → Variables. For a custom domain, email sending and the rest, copy
-// apps/api/wrangler.example.jsonc to apps/api/wrangler.jsonc instead; see
-// docs/SELF_HOSTING.md.
+// One-click deploy config for the "Deploy to Cloudflare" button and root-config
+// self-hosting (`pnpm run build && pnpm --filter @flow/api exec wrangler deploy
+// --config ../../wrangler.jsonc`, or on macOS `pnpm run deploy -- --config
+// wrangler.jsonc`). `pnpm run deploy` uses apps/api/wrangler.jsonc by default
+// and requires macOS approval; it does not fall back to this file.
+//
+// Serves Flow from a *.workers.dev hostname with sign-in not yet configured:
+// the app shows the remaining setup steps until ACCESS_TEAM_DOMAIN, ACCESS_AUD
+// and OWNER_EMAIL are set in the Worker's Settings → Variables. For a custom
+// domain, email sending and the rest, copy apps/api/wrangler.example.jsonc to
+// apps/api/wrangler.jsonc instead; see docs/SELF_HOSTING.md.
 {
   "$schema": "./apps/api/node_modules/wrangler/config-schema.json",
   "name": "flow",
