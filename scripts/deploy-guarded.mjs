@@ -13,7 +13,7 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,8 +26,30 @@ export const REQUIRED_LIVE_EMAIL_VARS = [
 ];
 export const OSASCRIPT_PATH = "/usr/bin/osascript";
 
-const PLACEHOLDER_EMAIL_DOMAINS = ["example.com", "example.net", "example.org", "example"];
-const SECRET_VAR_PATTERN = /(SECRET|PASSWORD|PRIVATE_KEY)/i;
+const PLACEHOLDER_EMAIL_DOMAINS = [
+  "example.com",
+  "example.net",
+  "example.org",
+  "example",
+  "localhost",
+  "localdomain",
+  "local",
+  "invalid",
+  "test",
+  "yourdomain.com",
+  "yourdomain.net",
+  "yourdomain.org",
+  "your-domain.com",
+  "your-domain.net",
+  "your-domain.org",
+  "mydomain.com",
+  "yourcompany.com",
+  "your-company.com",
+  "placeholder.flow",
+];
+const SECRET_VAR_PATTERN = /(SECRET|PASSWORD|PRIVATE_KEY|TOKEN|KEY)/i;
+const FORBIDDEN_ENV_FILE_VAR_PATTERN = /^(CLOUDFLARE_|WRANGLER_)/i;
+const ENV_FILE_NAME_PATTERN = /^(\.env(\..+)?|\.dev\.vars(\..+)?)$/;
 const INHERITABLE_WRANGLER_KEYS = [
   "name",
   "main",
@@ -45,6 +67,9 @@ const INHERITABLE_WRANGLER_KEYS = [
   "text_blobs",
   "data_blobs",
   "wasm_modules",
+  "rules",
+  "find_additional_modules",
+  "no_bundle",
 ];
 
 function fail(message) {
@@ -122,11 +147,65 @@ export function parseConfigArg(argv, opts = {}) {
   return parseDeployArgs(argv, opts).configPath;
 }
 
-/** Return a copy of `env` with `CLOUDFLARE_ENV` stripped so Wrangler cannot silently pick one up. */
+/**
+ * Return a copy of `env` stripped of `CLOUDFLARE_ENV` and every `WRANGLER_*`
+ * override (including `WRANGLER_CI_OVERRIDE_NAME`, etc.) so Wrangler only uses
+ * the verified checkout configuration.
+ */
 export function sanitizedWranglerEnv(env = process.env) {
-  const clean = { ...env };
-  delete clean.CLOUDFLARE_ENV;
+  const clean = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key === "CLOUDFLARE_ENV" || /^WRANGLER_/i.test(key)) continue;
+    clean[key] = value;
+  }
   return clean;
+}
+
+/**
+ * Refuse if any `.env*` or `.dev.vars*` file in `dirs` defines a `CLOUDFLARE_*`
+ * or `WRANGLER_*` variable. Only variable names are extracted and reported.
+ */
+export function assertNoEnvFileOverrides(dirs, checkoutRoot) {
+  const realRoot = realpathSync(checkoutRoot);
+  const visitedDirs = new Set();
+  for (const dir of dirs) {
+    if (!dir || !existsSync(dir)) continue;
+    const realDir = realpathSync(dir);
+    if (visitedDirs.has(realDir)) continue;
+    visitedDirs.add(realDir);
+
+    const names = readdirSync(realDir).sort();
+    for (const name of names) {
+      if (!ENV_FILE_NAME_PATTERN.test(name) || name.endsWith(".example")) continue;
+      const fullPath = join(realDir, name);
+      let isFile = false;
+      try {
+        isFile = statSync(fullPath).isFile();
+      } catch {
+        continue;
+      }
+      if (!isFile) continue;
+
+      const found = [];
+      const content = readFileSync(fullPath, "utf8");
+      for (const rawLine of content.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith("#")) continue;
+        const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
+        if (!match) continue;
+        const varName = match[1];
+        if (FORBIDDEN_ENV_FILE_VAR_PATTERN.test(varName) && !found.includes(varName)) {
+          found.push(varName);
+        }
+      }
+      if (found.length > 0) {
+        const relFile = isWithinDir(realRoot, fullPath) ? relative(realRoot, fullPath) : fullPath;
+        throw new Error(
+          `env file ${relFile} sets forbidden override variable(s): ${found.join(", ")}; remove them before running deploy-guarded`
+        );
+      }
+    }
+  }
 }
 
 /** Return true iff `targetReal` equals `parentReal` or lies strictly inside it. */
@@ -251,8 +330,8 @@ function resolveContainedPath(rawValue, fieldName, baseDir, realRoot, { mustExis
 /**
  * Compute the effective Wrangler target configuration for `envName` (or top-level
  * when `envName` is null). Follows Wrangler inheritance: top-level inheritable
- * settings carry over unless overridden, whereas `vars`, `routes`, and bindings
- * are NOT inherited into named `env.<name>` blocks.
+ * settings and top-level `route`/`routes` (unless overridden by `env.<name>`)
+ * carry over, whereas `vars`, `define`, and bindings are NOT inherited.
  */
 export function resolveEffectiveConfig(config, envName = null) {
   if (!envName) {
@@ -274,7 +353,14 @@ export function resolveEffectiveConfig(config, envName = null) {
   if (envBlock.name === undefined && typeof config.name === "string" && config.name.trim()) {
     merged.name = `${config.name}-${envName}`;
   }
-  // Non-inheritable bindings/vars/routes come exclusively from the selected env block.
+  if (envBlock.routes !== undefined || envBlock.route !== undefined) {
+    if (envBlock.routes !== undefined) merged.routes = envBlock.routes;
+    if (envBlock.route !== undefined) merged.route = envBlock.route;
+  } else {
+    if (config.routes !== undefined) merged.routes = config.routes;
+    if (config.route !== undefined) merged.route = config.route;
+  }
+  // Non-inheritable bindings/vars/define come exclusively from the selected env block.
   for (const [key, val] of Object.entries(envBlock)) {
     if (!INHERITABLE_WRANGLER_KEYS.includes(key)) merged[key] = val;
   }
@@ -306,6 +392,44 @@ function validateTargetBlock(target, labelPrefix, configDir, inheritedBaseDir, r
       throw new Error(
         `${labelPrefix}alias is not allowed in guarded deploys (${Object.keys(target.alias).join(", ")})`
       );
+    }
+  }
+
+  if (target.define !== undefined) {
+    if (!isPlainObject(target.define)) {
+      throw new Error(`${labelPrefix}define must be an object`);
+    }
+    if (Object.keys(target.define).length > 0) {
+      throw new Error(
+        `${labelPrefix}define is not allowed in guarded deploys (${Object.keys(target.define).join(", ")})`
+      );
+    }
+  }
+
+  if (target.rules !== undefined) {
+    if (!Array.isArray(target.rules)) {
+      throw new Error(`${labelPrefix}rules must be an array`);
+    }
+    if (target.rules.length > 0) {
+      throw new Error(`${labelPrefix}rules is not allowed in guarded deploys`);
+    }
+  }
+
+  if (target.find_additional_modules !== undefined) {
+    if (typeof target.find_additional_modules !== "boolean") {
+      throw new Error(`${labelPrefix}find_additional_modules must be a boolean`);
+    }
+    if (target.find_additional_modules) {
+      throw new Error(`${labelPrefix}find_additional_modules is not allowed in guarded deploys`);
+    }
+  }
+
+  if (target.no_bundle !== undefined) {
+    if (typeof target.no_bundle !== "boolean") {
+      throw new Error(`${labelPrefix}no_bundle must be a boolean`);
+    }
+    if (target.no_bundle) {
+      throw new Error(`${labelPrefix}no_bundle is not allowed in guarded deploys`);
     }
   }
 
@@ -396,14 +520,42 @@ function validateTargetBlock(target, labelPrefix, configDir, inheritedBaseDir, r
 }
 
 /**
+ * Fail closed if any tracked file has `skip-worktree` (`S`) or `assume-unchanged`
+ * (lowercase tag in `git ls-files -v`), which hides local edits from `git status`
+ * and `git diff`.
+ */
+export function assertNoHiddenGitFlags(checkoutRoot) {
+  const realRoot = realpathSync(checkoutRoot);
+  const out = execFileSync("git", ["-c", "core.quotePath=false", "ls-files", "-v"], {
+    cwd: realRoot,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const flagged = [];
+  for (const line of out.split(/\r?\n/)) {
+    if (!line) continue;
+    if (/^[Sa-z] /.test(line)) {
+      const tag = line[0] === "S" ? "skip-worktree" : "assume-unchanged";
+      flagged.push(`${line.slice(2)} (${tag})`);
+    }
+  }
+  if (flagged.length > 0) {
+    throw new Error(
+      `tracked files have skip-worktree or assume-unchanged set: ${flagged.join(", ")}`
+    );
+  }
+}
+
+/**
  * Verify that `main` (and `assets.directory`, or `apps/web` for built SPA outputs)
- * is tracked by git in `realRoot` so untracked or gitignored files cannot deploy.
+ * is tracked by git in `realRoot` and no tracked file hides edits via index flags.
  */
 export function assertTrackedDeployPaths(
   { resolvedMain, resolvedAssetsDir },
   checkoutRoot
 ) {
   const realRoot = realpathSync(checkoutRoot);
+  assertNoHiddenGitFlags(realRoot);
 
   if (resolvedMain) {
     const relMain = relative(realRoot, resolvedMain);
@@ -484,6 +636,8 @@ export function validateDeployConfig(configPath, checkoutRoot, opts = {}) {
   }
 
   const configDir = dirname(realConfigPath);
+  assertNoEnvFileOverrides([configDir, join(realRoot, "apps", "api"), realRoot], realRoot);
+
   const topPaths = validateTargetBlock(
     config,
     "",
@@ -538,13 +692,43 @@ export function validateDeployConfig(configPath, checkoutRoot, opts = {}) {
   };
 }
 
-/** True when `email` is empty, malformed, or uses a placeholder `.example` domain. */
+/** True when `email` is empty, malformed, contains template tokens, or uses a placeholder/local domain. */
 export function isPlaceholderEmail(email) {
   const trimmed = String(email ?? "").trim().toLowerCase();
+  if (!trimmed || /[<>{}\s]/.test(trimmed)) return true;
   const at = trimmed.lastIndexOf("@");
   if (at <= 0 || at === trimmed.length - 1) return true;
   const domain = trimmed.slice(at + 1);
-  return PLACEHOLDER_EMAIL_DOMAINS.some((p) => domain === p || domain.endsWith(`.${p}`));
+  if (domain.startsWith(".") || domain.endsWith(".") || domain.includes("..")) return true;
+  if (PLACEHOLDER_EMAIL_DOMAINS.some((p) => domain === p || domain.endsWith(`.${p}`))) return true;
+  return !domain.includes(".");
+}
+
+/**
+ * Fail closed if `DEV_NO_AUTH` is enabled on a Worker target in a guarded
+ * production deploy.
+ */
+export function assertDeployConfigAuthVars(effectiveConfig) {
+  if (!effectiveConfig?.main) return;
+  const vars = isPlainObject(effectiveConfig.vars) ? effectiveConfig.vars : {};
+  const raw = vars.DEV_NO_AUTH;
+  if (raw === true || String(raw ?? "").trim().toLowerCase() === "true") {
+    throw new Error('DEV_NO_AUTH cannot be "true" for a guarded production deploy');
+  }
+}
+
+/** Extract all effective route patterns from both singular `route` and array `routes`. */
+export function extractEffectiveRoutes(effectiveConfig) {
+  const patterns = [];
+  const addRoute = (r) => {
+    const pattern = typeof r === "string" ? r : isPlainObject(r) && typeof r.pattern === "string" ? r.pattern : null;
+    if (pattern && !patterns.includes(pattern)) patterns.push(pattern);
+  };
+  if (effectiveConfig?.route !== undefined) addRoute(effectiveConfig.route);
+  if (Array.isArray(effectiveConfig?.routes)) {
+    for (const r of effectiveConfig.routes) addRoute(r);
+  }
+  return patterns;
 }
 
 /**
@@ -683,7 +867,7 @@ export function formatResolvedConfig({
   const relConfig = relative(realRoot, configPath) || configPath;
   const relMain = resolvedMain ? relative(realRoot, resolvedMain) : "(none — assets only)";
   const relAssets = resolvedAssetsDir ? relative(realRoot, resolvedAssetsDir) : "(none)";
-  const hosts = (effectiveConfig.routes ?? []).map((r) => (typeof r === "string" ? r : r.pattern));
+  const hosts = extractEffectiveRoutes(effectiveConfig);
   const vars = isPlainObject(effectiveConfig.vars) ? effectiveConfig.vars : {};
   const varEntries = Object.keys(vars)
     .sort()
@@ -722,8 +906,19 @@ export function formatDialogSummary({
   commitSubject,
 }) {
   const realRoot = realpathSync(checkoutRoot);
-  const hosts = (effectiveConfig.routes ?? []).map((r) => (typeof r === "string" ? r : r.pattern));
+  const hosts = extractEffectiveRoutes(effectiveConfig);
   const vars = isPlainObject(effectiveConfig.vars) ? effectiveConfig.vars : {};
+  const authVars = [
+    `DEV_NO_AUTH=${vars.DEV_NO_AUTH ?? "(unset)"}`,
+    `ACCESS_TEAM_DOMAIN=${vars.ACCESS_TEAM_DOMAIN ?? "(unset)"}`,
+    `ACCESS_AUD=${vars.ACCESS_AUD ?? "(unset)"}`,
+  ];
+  if (vars.MCP_ACCESS_OAUTH_ENABLED !== undefined || vars.MCP_ACCESS_AUD !== undefined) {
+    authVars.push(
+      `MCP_ACCESS_OAUTH_ENABLED=${vars.MCP_ACCESS_OAUTH_ENABLED ?? "(unset)"}`,
+      `MCP_ACCESS_AUD=${vars.MCP_ACCESS_AUD ?? "(unset)"}`
+    );
+  }
   const keyVars = [
     `APP_HOSTNAME=${vars.APP_HOSTNAME ?? "(unset)"}`,
     `EMAIL_FROM=${vars.EMAIL_FROM ?? "(unset)"}`,
@@ -736,7 +931,8 @@ export function formatDialogSummary({
     `Config: ${relative(realRoot, configPath)} (${gitignored ? "gitignored" : "tracked"}, sha256 ${configSha256.slice(0, 12)})`,
     `Main: ${resolvedMain ? relative(realRoot, resolvedMain) : "(none — assets only)"}`,
     `Assets: ${resolvedAssetsDir ? relative(realRoot, resolvedAssetsDir) : "(none)"}`,
-    `Routes: ${hosts.join(", ") || "(none)"}`,
+    `Routes: ${hosts.join(", ") || "(none)"} (workers_dev: ${Boolean(effectiveConfig.workers_dev)})`,
+    `Auth: ${authVars.join(", ")}`,
     `Vars: ${keyVars}`,
     `Commit: ${head.slice(0, 7)} ${commitSubject}`,
   ].join("\n");
@@ -773,6 +969,7 @@ async function main() {
 
   const { configPath, envName } = parseDeployArgs(process.argv.slice(2), { root: realRoot });
   const initial = validateDeployConfig(configPath, realRoot, { envName });
+  assertDeployConfigAuthVars(initial.effectiveConfig);
   assertDeployConfigEmailVars(initial.effectiveConfig);
 
   if (process.platform !== "darwin") {
@@ -792,6 +989,7 @@ async function main() {
     const branch = git("branch", "--show-current");
     if (branch !== "main") fail(`on branch "${branch}"; deploy from main`);
     if (git("status", "--porcelain") !== "") fail("working tree has uncommitted or untracked changes");
+    assertNoHiddenGitFlags(realRoot);
     const current = git("rev-parse", "HEAD");
     if (current !== git("rev-parse", "origin/main")) fail("HEAD is not origin/main; push or pull first");
     if (expectedHead && current !== expectedHead) fail("HEAD moved while checks were running");
@@ -805,6 +1003,8 @@ async function main() {
     if (verified.configSha256 !== expectedSha256) {
       fail("wrangler config changed while deploy checks were running");
     }
+    assertDeployConfigAuthVars(verified.effectiveConfig);
+    assertDeployConfigEmailVars(verified.effectiveConfig);
     return verified;
   };
 
@@ -870,7 +1070,7 @@ async function main() {
     wranglerEnv
   );
 
-  const hosts = (afterBuild.effectiveConfig.routes ?? []).map((r) => (typeof r === "string" ? r : r.pattern));
+  const hosts = extractEffectiveRoutes(afterBuild.effectiveConfig);
   for (const host of hosts) {
     try {
       const res = await fetch(`https://${host.replace(/\/\*$/, "")}/api/health`);
