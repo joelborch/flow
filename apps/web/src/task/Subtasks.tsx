@@ -48,7 +48,7 @@ function NoteEditor({ subtask, onClose }: { subtask: Subtask; onClose: () => voi
           onClose();
         }
       }}
-      class="w-full resize-none rounded-md bg-bg px-2 py-1.5 text-[16px] leading-relaxed text-text placeholder:text-faint focus:outline-none sm:text-[12.5px]"
+      class="w-full resize-none rounded-md bg-bg px-2 py-1.5 text-[16px] leading-relaxed text-text placeholder:text-faint focus:outline-none sm:text-[13px]"
     />
   );
 }
@@ -128,7 +128,7 @@ function SubtaskAssignee({ subtask, assignee }: { subtask: Subtask; assignee: Us
                 {u.id === subtask.assigneeId && <span class="text-[11px] text-faint">assigned</span>}
               </button>
             ))}
-            {matches.length === 0 && <p class="px-2 py-2 text-[12.5px] text-faint">No one matches “{q}”.</p>}
+            {matches.length === 0 && <p class="px-2 py-2 text-[13px] text-faint">No one matches “{q}”.</p>}
           </div>
         </div>
       )}
@@ -183,7 +183,7 @@ export function Subtasks({ taskId, fallback }: { taskId: string; fallback: Subta
       <SectionLabel
         right={
           rows.length > 0 && (
-            <span class="text-[11.5px] font-medium tabular-nums text-faint">
+            <span class="text-[12px] font-medium tabular-nums text-faint">
               {done}/{rows.length}
             </span>
           )
@@ -216,7 +216,7 @@ export function Subtasks({ taskId, fallback }: { taskId: string; fallback: Subta
                 class={cn(
                   // The box stays 16px; the invisible ::after gives a finger a
                   // 40px target without moving anything around it.
-                  "relative flex h-[16px] w-[16px] shrink-0 items-center justify-center rounded-[4px] border transition-colors after:absolute after:-inset-3 after:content-[''] sm:after:hidden",
+                  "relative flex h-[16px] w-[16px] shrink-0 items-center justify-center rounded border transition-colors after:absolute after:-inset-3 after:content-[''] sm:after:hidden",
                   s.done
                     ? "border-accent bg-accent text-white"
                     : "border-line-strong hover:border-accent"
@@ -231,7 +231,7 @@ export function Subtasks({ taskId, fallback }: { taskId: string; fallback: Subta
 
               <span
                 class={cn(
-                  "min-w-0 flex-1 truncate text-[13.5px]",
+                  "min-w-0 flex-1 truncate text-[14px]",
                   s.done ? "text-faint line-through decoration-line-strong" : "text-text"
                 )}
                 title={s.title}
@@ -242,7 +242,7 @@ export function Subtasks({ taskId, fallback }: { taskId: string; fallback: Subta
               {s.dueDate !== null && (
                 <span
                   class={cn(
-                    "shrink-0 rounded-md px-1.5 py-0.5 text-[11.5px] font-medium",
+                    "shrink-0 rounded-md px-1.5 py-0.5 text-[12px] font-medium",
                     isOverdue(s.dueDate) && !s.done ? "bg-danger-soft text-danger" : "bg-bg text-muted"
                   )}
                 >
@@ -274,7 +274,7 @@ export function Subtasks({ taskId, fallback }: { taskId: string; fallback: Subta
                       type="button"
                       aria-label={`Edit the note on “${s.title}”`}
                       onClick={() => setNoteEditId(s.id)}
-                      class="block w-full whitespace-pre-wrap break-words text-left text-[12.5px] leading-relaxed text-muted hover:text-text"
+                      class="block w-full whitespace-pre-wrap break-words text-left text-[13px] leading-relaxed text-muted hover:text-text"
                     >
                       {s.note}
                     </button>
@@ -304,7 +304,7 @@ export function Subtasks({ taskId, fallback }: { taskId: string; fallback: Subta
             }
           }}
           onBlur={() => void add()}
-          class="w-full bg-transparent text-[16px] text-text placeholder:text-faint focus:outline-none disabled:opacity-50 sm:text-[13.5px]"
+          class="w-full bg-transparent text-[16px] text-text placeholder:text-faint focus:outline-none disabled:opacity-50 sm:text-[14px]"
         />
       </div>
 

@@ -100,7 +100,7 @@ function QuickAddForm() {
       >
         <div class="flex items-center gap-2 border-b border-line px-4 py-3">
           <h2 class="min-w-0 flex-1 text-[14px] font-semibold text-text">Quick add</h2>
-          <kbd class="rounded border border-line bg-raised px-1.5 py-px font-sans text-[10px] font-medium text-faint">
+          <kbd class="rounded border border-line bg-raised px-1.5 py-px font-sans text-[11px] font-medium text-faint">
             Q
           </kbd>
           <button
@@ -137,7 +137,7 @@ function QuickAddForm() {
 
           <div class="mt-3 flex min-h-7 flex-wrap items-center gap-2">
             {target ? (
-              <span class="rounded-full border border-line bg-raised px-2.5 py-1 text-[11.5px] text-muted">
+              <span class="rounded-full border border-line bg-raised px-2.5 py-1 text-[12px] text-muted">
                 {target.label}
               </span>
             ) : (
@@ -146,7 +146,7 @@ function QuickAddForm() {
               </span>
             )}
             {parsed && (
-              <span class="inline-flex items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 text-[11.5px] font-medium text-accent">
+              <span class="inline-flex items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 text-[12px] font-medium text-accent">
                 <CalendarIcon class="h-3 w-3" />
                 Due {formatDue(parsed.dueDate)}
                 <button

@@ -123,13 +123,20 @@ function targetFixture(): { list: List; space: Space } {
 }
 
 describe("resolveQuickAddDestination", () => {
-  it("returns the owner's private Personal / Inbox target", () => {
+  it("returns the owner's private Personal / Inbox target (or Work Inbox)", () => {
     const { list, space } = targetFixture();
     expect(resolveQuickAddDestination(owner, [space], [list])).toEqual({
       listId: list.id,
       status: "To Do",
       assigneeId: owner.id,
       label: "Personal / Inbox",
+    });
+    const workInbox = { ...list, name: "Work Inbox" };
+    expect(resolveQuickAddDestination(owner, [space], [workInbox])).toEqual({
+      listId: workInbox.id,
+      status: "To Do",
+      assigneeId: owner.id,
+      label: "Personal / Work Inbox",
     });
   });
 

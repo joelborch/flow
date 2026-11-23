@@ -16,7 +16,7 @@ import { findOwnerActor } from "./auth.js";
 import { workspace } from "./do.js";
 import type { Env } from "./env.js";
 import { contentDisposition, mimeEssence, sanitizeFilename } from "./routes/attachments.js";
-import { emailBrandName, emailFrom, renderEmailHtml } from "./side-effects/index.js";
+import { emailBrandName, emailFrom, renderEmailHtml, requesterFromName } from "./side-effects/index.js";
 import { HEADER_VALUE_MAX_BYTES, errorCode, sendWithHeaders, threadingHeaders } from "./email-thread.js";
 
 /**
@@ -1216,13 +1216,14 @@ export async function handleEmail(
   });
   if (!acknowledge) return;
 
+  const baseFrom = emailFrom(env);
   const ack = buildAcknowledgement({
     sender,
     intakeAddress: message.to,
     messageId,
     parentIds: threadParentIds(message.headers),
     appHostname: env.APP_HOSTNAME,
-    from: emailFrom(env),
+    from: { email: baseFrom.email, name: requesterFromName(env) },
     brandName: emailBrandName(env),
   });
   // After the ingest has committed, and outside the SMTP response: a failed

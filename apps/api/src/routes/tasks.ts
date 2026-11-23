@@ -58,6 +58,7 @@ function searchInputFromQuery(url: URL): unknown {
   assign("spaceId", str("spaceId"));
   assign("status", arr("status"));
   assign("assigneeId", str("assigneeId"));
+  assign("turnOf", str("turnOf"));
   assign("tags", arr("tags"));
   assign("includeClosed", bool("includeClosed"));
   assign("dueBefore", num("dueBefore"));

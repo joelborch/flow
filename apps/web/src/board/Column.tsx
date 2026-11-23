@@ -48,7 +48,7 @@ export function Column({
           style={{ backgroundColor: status.color }}
           aria-hidden="true"
         />
-        <h2 class="truncate text-[12px] font-semibold tracking-wide text-text uppercase">
+        <h2 class="truncate text-[12px] font-semibold tracking-[0.07em] text-text uppercase">
           {status.name}
         </h2>
         <span class="tabular-nums text-[11px] text-faint">{tasks.length}</span>
@@ -80,14 +80,14 @@ export function Column({
             composer the click would otherwise open by surprise. */}
         {tasks.length === 0 && !composing ? (
           notes.length > 0 ? (
-            <p class="w-full rounded-card border border-dashed border-line px-2.5 py-3 text-left text-[12px] text-faint">
+            <p class="w-full rounded-lg border border-dashed border-line px-2.5 py-3 text-left text-[12px] text-faint">
               {notes.join(" · ")}
             </p>
           ) : (
             <button
               type="button"
               onClick={onCompose}
-              class="w-full rounded-card border border-dashed border-line px-2.5 py-3 text-left text-[12px] text-faint hover:border-line-strong hover:text-muted"
+              class="w-full rounded-lg border border-dashed border-line px-2.5 py-3 text-left text-[12px] text-faint hover:border-line-strong hover:text-muted"
             >
               Add a task
             </button>

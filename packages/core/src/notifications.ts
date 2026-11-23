@@ -20,12 +20,15 @@ import { taskUrl } from "./automation/template.js";
 
 export { taskUrl };
 
-/** The three deltas that produce a notification today. `mention` is not here. */
-export type NotifyKind = "assigned" | "comment" | "status";
+/** The deltas that produce a notification today. `mention` is not here. */
+export type NotifyKind = "assigned" | "turn" | "comment" | "status";
 
 /** Which per-user pref gates each notification kind. */
 export const PREF_KEY: Record<NotifyKind, keyof NotificationPref> = {
   assigned: "assigned_to_me",
+  // The ball landing on you is a request to act, the same signal as an
+  // assignment, so it shares that preference instead of adding a new one.
+  turn: "assigned_to_me",
   comment: "comment_on_my_task",
   status: "status_change_on_my_task",
 };
@@ -46,6 +49,16 @@ export function assignedRecipients(
 ): string[] {
   if (newAssigneeId === null || newAssigneeId === actorId) return [];
   return [newAssigneeId];
+}
+
+/**
+ * Turn passed ("ball in court"): only the person the ball lands on is told,
+ * and never when they passed it to themselves. Clearing the turn (null)
+ * notifies no one.
+ */
+export function turnRecipients(newWaitingOn: string | null, actorId: string): string[] {
+  if (newWaitingOn === null || newWaitingOn === actorId) return [];
+  return [newWaitingOn];
 }
 
 /**
@@ -72,11 +85,19 @@ export function stakeholderRecipients(
 /** Recipients for one delta kind. Convenience over the two functions above. */
 export function recipientsFor(
   kind: NotifyKind,
-  facts: { assigneeId: string | null; creatorId: string; newAssigneeId?: string | null },
+  facts: {
+    assigneeId: string | null;
+    creatorId: string;
+    newAssigneeId?: string | null;
+    newWaitingOn?: string | null;
+  },
   actorId: string
 ): string[] {
   if (kind === "assigned") {
     return assignedRecipients(facts.newAssigneeId ?? null, actorId);
+  }
+  if (kind === "turn") {
+    return turnRecipients(facts.newWaitingOn ?? null, actorId);
   }
   return stakeholderRecipients(facts.assigneeId, facts.creatorId, actorId);
 }
@@ -97,7 +118,7 @@ export interface NotificationInput {
   actorName: string;
   /** New status display name — status changes only. */
   statusName?: string;
-  /** The comment's markdown body — comments only. */
+  /** The comment's markdown body — comments, and the note on a turn pass. */
   commentBody?: string;
 }
 
@@ -119,6 +140,18 @@ export function renderAssigned(input: NotificationInput): RenderedEmail {
     subject: `You were assigned: ${input.taskTitle}`,
     body: [
       `**${input.actorName}** assigned you to **${input.taskTitle}**.`,
+      footer(input.taskUrl),
+    ].join("\n\n"),
+  };
+}
+
+export function renderTurn(input: NotificationInput): RenderedEmail {
+  return {
+    subject: `Your turn: ${input.taskTitle}`,
+    body: [
+      `**${input.actorName}** passed **${input.taskTitle}** to you. It's your turn.`,
+      // The note that came with the pass, when there was one.
+      ...(input.commentBody ? [asQuote(input.commentBody)] : []),
       footer(input.taskUrl),
     ].join("\n\n"),
   };
@@ -151,6 +184,8 @@ export function renderNotification(kind: NotifyKind, input: NotificationInput): 
   switch (kind) {
     case "assigned":
       return renderAssigned(input);
+    case "turn":
+      return renderTurn(input);
     case "comment":
       return renderComment(input);
     case "status":
@@ -160,7 +195,9 @@ export function renderNotification(kind: NotifyKind, input: NotificationInput): 
 
 /** The event name recorded on the queued payload's `ruleId` slot, for logs. */
 export function notificationTag(kind: NotifyKind): string {
-  const event: Record<NotifyKind, NotificationEvent> = {
+  // A turn shares the assignment preference but keeps its own tag in the logs.
+  if (kind === "turn") return "notify:turn_passed_to_me";
+  const event: Record<Exclude<NotifyKind, "turn">, NotificationEvent> = {
     assigned: "assigned_to_me",
     comment: "comment_on_my_task",
     status: "status_change_on_my_task",

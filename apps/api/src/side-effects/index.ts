@@ -51,6 +51,7 @@ export interface SideEffectEnv {
   EMAIL_FROM?: string;
   EMAIL_FROM_NAME?: string;
   EMAIL_BRAND_NAME?: string;
+  EMAIL_REQUESTER_FROM_NAME?: string;
   /** Reply-To for an emailed comment: `<alias>@EMAIL_INTAKE_DOMAIN`, back onto the ticket. */
   EMAIL_INTAKE_DOMAIN?: string;
   SEND_EMAIL?: SendEmail;
@@ -67,6 +68,11 @@ export function emailFrom(env: SideEffectEnv): { email: string; name: string } {
 /** Wordmark for the branded email header: EMAIL_BRAND_NAME, else EMAIL_FROM_NAME, else "Flow". */
 export function emailBrandName(env: SideEffectEnv): string {
   return env.EMAIL_BRAND_NAME || env.EMAIL_FROM_NAME || "Flow";
+}
+
+/** Display name for requester-facing mail: EMAIL_REQUESTER_FROM_NAME, else emailBrandName. */
+export function requesterFromName(env: SideEffectEnv): string {
+  return env.EMAIL_REQUESTER_FROM_NAME || emailBrandName(env);
 }
 
 export async function handleSideEffectBatch(batch: MessageBatch, env: Env): Promise<void> {
@@ -442,8 +448,9 @@ export async function deliverEmailReply(
   const domain = env.EMAIL_INTAKE_DOMAIN;
   if (!domain) throw new Error("EMAIL_INTAKE_DOMAIN is not set, so a reply would have no address to come back to");
   const replyTo = `${payload.alias}@${domain}`;
-  // Same sender as the intake acknowledgement: EMAIL_FROM / EMAIL_FROM_NAME.
-  const from = emailFrom(env);
+  // Same address as automation email, with requester-facing display name when set.
+  const baseFrom = emailFrom(env);
+  const from = { email: baseFrom.email, name: requesterFromName(env) };
   const html = renderEmailHtml(payload.body, {
     // External shell: clients can't sign in to Flow, so nothing links to it.
     audience: "external",

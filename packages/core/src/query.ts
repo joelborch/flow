@@ -59,7 +59,9 @@ export function queryViews(visible: ReadonlySet<string> | null): Record<string, 
       t.due_date, date(t.due_date / 1000, 'unixepoch') AS due_on, t.start_date,
       t.tags, t.tags_text, t.snoozed_until, t.blocked_note,
       t.closed_at, t.closed_at IS NOT NULL AS is_closed,
-      t.assigned_by, t.assigned_at, t.handoff_state, t.handoff_requested_by,
+      t.assigned_by, t.assigned_at, t.waiting_on, wu.name AS waiting_on_name,
+      COALESCE(t.waiting_on, t.assignee_id) AS turn_user_id, COALESCE(wu.name, u.name) AS turn_user_name,
+      t.handoff_state, t.handoff_requested_by,
       t.created_by, t.created_at, t.updated_at, t.position,
       (SELECT count(*) FROM subtasks x WHERE x.task_id = t.id) AS subtask_count,
       (SELECT count(*) FROM subtasks x WHERE x.task_id = t.id AND x.done = 1) AS subtasks_done
@@ -67,7 +69,8 @@ export function queryViews(visible: ReadonlySet<string> | null): Record<string, 
     JOIN lists l ON l.id = t.list_id
     JOIN spaces sp ON sp.id = l.space_id
     LEFT JOIN statuses st ON st.id = t.status_id
-    LEFT JOIN users u ON u.id = t.assignee_id${where((v) => v("l.space_id"))}`,
+    LEFT JOIN users u ON u.id = t.assignee_id
+    LEFT JOIN users wu ON wu.id = t.waiting_on${where((v) => v("l.space_id"))}`,
     subtasks_v: `SELECT s.id, s.task_id, t.title AS task_title, s.title, s.done, s.note,
       s.assignee_id, u.name AS assignee_name, s.due_date,
       date(s.due_date / 1000, 'unixepoch') AS due_on, s.assigned_by, s.position, s.created_at

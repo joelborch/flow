@@ -4,7 +4,7 @@
 import type { ComponentChildren } from "preact";
 import { useMemo, useRef, useState } from "preact/hooks";
 import type { Priority } from "@flow/shared";
-import { updateTask, users, type StoreTask } from "../store/index.js";
+import { me, updateTask, users, type StoreTask } from "../store/index.js";
 import { isClosed, statusesOf, statusOfTask, userById } from "../shell/data.js";
 import { cn, formatDue, fromDateInput, isOverdue, toDateInput } from "../shell/format.js";
 import { isSnoozed, snoozePreset, snoozeUntilLabel, visibleTags } from "../lib/fmt.js";
@@ -22,7 +22,7 @@ const EMPTY = "text-faint";
 export function PropertyRow({ label, icon, children }: { label: string; icon?: ComponentChildren; children: ComponentChildren }) {
   return (
     <div class="flex items-start gap-2 py-0.5 sm:gap-3">
-      <div class="flex w-[80px] shrink-0 items-center gap-1.5 pt-[9px] text-[12.5px] text-muted sm:w-[104px] sm:pt-[7px]">
+      <div class="flex w-[80px] shrink-0 items-center gap-1.5 pt-[9px] text-[13px] text-muted sm:w-[104px] sm:pt-[7px]">
         {icon}
         <span class="truncate">{label}</span>
       </div>
@@ -141,7 +141,7 @@ export function AssigneePicker({ task }: { task: StoreTask }) {
                 {u.id === task.assigneeId && <span class="text-[11px] text-faint">assigned</span>}
               </button>
             ))}
-            {matches.length === 0 && <p class="px-2 py-2 text-[12.5px] text-faint">No one matches “{q}”.</p>}
+            {matches.length === 0 && <p class="px-2 py-2 text-[13px] text-faint">No one matches “{q}”.</p>}
           </div>
         </div>
       )}
@@ -149,56 +149,223 @@ export function AssigneePicker({ task }: { task: StoreTask }) {
   );
 }
 
+// --- turn (waitingOn): whose move it is, separate from who owns the task ----
+
+export function WaitingOnPicker({ task }: { task: StoreTask }) {
+  const [q, setQ] = useState("");
+  const [note, setNote] = useState("");
+  const current = userById(task.waitingOn);
+  const owner = userById(task.assigneeId);
+  const all = users.value;
+  const meId = me.value?.id;
+  // With no turn passed, the move is the owner's.
+  const holderId = task.waitingOn ?? task.assigneeId;
+
+  const matches = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const active = all.filter((u) => !u.deactivated || u.id === task.waitingOn);
+    if (!needle) return active.slice(0, 50);
+    return active
+      .filter((u) => u.name.toLowerCase().includes(needle) || u.email.toLowerCase().includes(needle))
+      .slice(0, 50);
+  }, [q, all, task.waitingOn]);
+
+  // One-click target: back to whoever assigned it, otherwise to the owner.
+  // Never me, and never whoever already has the turn.
+  const quickTargetId =
+    [task.assignedBy, task.assigneeId].find((id) => id != null && id !== meId && id !== holderId) ?? null;
+  const rawQuickTarget = quickTargetId ? userById(quickTargetId) : undefined;
+  const quickTarget = rawQuickTarget && !rawQuickTarget.deactivated ? rawQuickTarget : undefined;
+
+  const pass = (userId: string) => {
+    // The note rides with a real pass only; the server refuses one sent to
+    // whoever already holds the turn.
+    const turnNote = note.trim();
+    setNote("");
+    void updateTask({
+      taskId: task.id,
+      waitingOn: userId,
+      ...(turnNote !== "" && userId !== task.waitingOn ? { turnNote } : {}),
+    });
+  };
+
+  return (
+    <div class="flex flex-wrap items-center gap-1">
+      <Menu
+        label="Change whose turn it is"
+        width="w-64"
+        trigger={() => (
+          <span class={FIELD}>
+            {current ? <Avatar user={current} size="sm" /> : null}
+            <span class={cn("truncate", !current && EMPTY)}>
+              {current ? current.name : owner ? `${owner.name.split(" ")[0] ?? owner.name} (owner)` : "No one"}
+            </span>
+          </span>
+        )}
+      >
+        {(close) => (
+          <div>
+            <div class="flex items-center gap-1.5 border-b border-line px-2 pb-1.5 text-faint">
+              <Search class="h-3.5 w-3.5" />
+              <input
+                autofocus
+                value={q}
+                placeholder="Pass the turn to…"
+                onInput={(e) => setQ((e.currentTarget as HTMLInputElement).value)}
+                class="w-full bg-transparent py-1 text-[16px] text-text placeholder:text-faint focus:outline-none sm:text-[13px]"
+              />
+            </div>
+            <div class="scroll-y max-h-56 overflow-y-auto py-1">
+              {matches.map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    close();
+                    pass(u.id);
+                  }}
+                  class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[13px] text-text hover:bg-bg sm:py-1.5"
+                >
+                  <Avatar user={u} size="sm" />
+                  <span class="min-w-0 flex-1 truncate">{u.name}</span>
+                  {u.id === task.waitingOn && <span class="text-[11px] text-faint">current</span>}
+                </button>
+              ))}
+              {matches.length === 0 && <p class="px-2 py-2 text-[13px] text-faint">No one matches “{q}”.</p>}
+            </div>
+            <div class="border-t border-line px-2 pt-2">
+              <input
+                value={note}
+                maxLength={500}
+                placeholder="Add a note (optional)"
+                aria-label="Note to send with the pass"
+                onInput={(e) => setNote((e.currentTarget as HTMLInputElement).value)}
+                class="w-full rounded-md border border-line bg-bg px-2 py-1.5 text-[16px] text-text placeholder:text-faint focus:border-line-strong focus:outline-none sm:text-[13px]"
+              />
+              <p class="px-0.5 pt-1 text-[11px] leading-snug text-faint">
+                Type it first, then pick a person. They get it in their email.
+              </p>
+            </div>
+            {task.waitingOn != null ? (
+              <div class="mt-2 border-t border-line pt-1">
+                <MenuItem
+                  onClick={() => {
+                    close();
+                    void updateTask({ taskId: task.id, waitingOn: null });
+                  }}
+                >
+                  <span class="text-muted">{owner ? "Hand back to the owner" : "Clear the turn"}</span>
+                </MenuItem>
+              </div>
+            ) : null}
+          </div>
+        )}
+      </Menu>
+      {quickTarget ? (
+        <button
+          type="button"
+          onClick={() => pass(quickTarget.id)}
+          class="shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-accent transition-colors hover:bg-accent-soft"
+          title={`Pass the turn to ${quickTarget.name}`}
+        >
+          Pass to {quickTarget.name.split(" ")[0] ?? quickTarget.name}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 // --- due date --------------------------------------------------------------
 
 export function DuePicker({ task }: { task: StoreTask }) {
-  const ref = useRef<HTMLInputElement>(null);
   // A date in the past is only "overdue" while the task is still open; a done
   // task with last week's due date is just done.
   const overdue = isOverdue(task.dueDate) && !isClosed(task);
+  const setDue = (dueDate: number | null) => void updateTask({ taskId: task.id, dueDate });
+  // Noon local, so a date never slips a day across a timezone boundary.
+  const inDays = (days: number): number => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    d.setHours(12, 0, 0, 0);
+    return d.getTime();
+  };
 
+  // A menu like every other field: the common answers one click away, and the
+  // date box inside it for the rest. (It used to be a hidden native input,
+  // which behaved unlike its neighbours and ate four keyboard stops.)
   return (
     <div class="group relative flex items-center">
-      <span
-        class={cn(FIELD, "cursor-pointer")}
-        onClick={() => {
-          const el = ref.current;
-          if (!el) return;
-          // showPicker is Chromium/Safari; the click fallback covers the rest.
-          if (typeof el.showPicker === "function") el.showPicker();
-          else el.focus();
-        }}
+      <Menu
+        label="Change due date"
+        width="w-56"
+        trigger={() => (
+          <span class={cn(FIELD, "cursor-pointer")}>
+            <span class={cn(task.dueDate === null ? EMPTY : overdue ? "text-danger" : "text-text")}>
+              {task.dueDate === null ? "No due date" : formatDue(task.dueDate)}
+            </span>
+            {overdue && <span class="text-[11px] font-medium text-danger">overdue</span>}
+          </span>
+        )}
       >
-        <span class={cn(task.dueDate === null ? EMPTY : overdue ? "text-danger" : "text-text")}>
-          {task.dueDate === null ? "No due date" : formatDue(task.dueDate)}
-        </span>
-        {overdue && <span class="text-[11px] font-medium text-danger">overdue</span>}
-      </span>
+        {(close) => (
+          <div>
+            {(
+              [
+                ["Today", 0],
+                ["Tomorrow", 1],
+                ["Next week", 7],
+              ] as const
+            ).map(([label, days]) => (
+              <MenuItem
+                key={label}
+                onClick={() => {
+                  close();
+                  setDue(inDays(days));
+                }}
+              >
+                {label}
+              </MenuItem>
+            ))}
+            <div class="mt-1 border-t border-line px-2 pb-1 pt-2">
+              <input
+                type="date"
+                aria-label="Due date"
+                value={toDateInput(task.dueDate)}
+                onChange={(e) => {
+                  const v = (e.currentTarget as HTMLInputElement).value;
+                  close();
+                  setDue(v ? fromDateInput(v) : null);
+                }}
+                class="w-full rounded-lg border border-line bg-surface px-2 py-1 text-[16px] text-text focus:border-accent/50 focus:outline-none sm:text-[13px]"
+              />
+            </div>
+            {task.dueDate !== null && (
+              <div class="mt-1 border-t border-line pt-1">
+                <MenuItem
+                  onClick={() => {
+                    close();
+                    setDue(null);
+                  }}
+                >
+                  <span class="text-muted">No due date</span>
+                </MenuItem>
+              </div>
+            )}
+          </div>
+        )}
+      </Menu>
 
       {task.dueDate !== null && (
         <button
           type="button"
           aria-label="Clear due date"
-          onClick={() => void updateTask({ taskId: task.id, dueDate: null })}
+          onClick={() => setDue(null)}
           class="ml-1 rounded p-2 text-faint opacity-100 transition-opacity hover:bg-bg hover:text-muted sm:p-1 sm:opacity-0 sm:group-hover:opacity-100"
         >
           <X class="h-3 w-3" />
         </button>
       )}
-
-      {/* Native picker, kept in flow but visually collapsed so the styled
-          trigger above is what people see. */}
-      <input
-        ref={ref}
-        type="date"
-        aria-label="Due date"
-        value={toDateInput(task.dueDate)}
-        onChange={(e) => {
-          const v = (e.currentTarget as HTMLInputElement).value;
-          void updateTask({ taskId: task.id, dueDate: v ? fromDateInput(v) : null });
-        }}
-        class="absolute left-2 top-0 h-full w-px opacity-0"
-      />
     </div>
   );
 }
@@ -306,7 +473,8 @@ export function SnoozePicker({ task }: { task: StoreTask }) {
 }
 
 /**
- * The "waiting on…" note. Free text, saved on blur or Enter — it is a reminder
+ * The "blocked on…" note: what outside the team the task is stuck behind (a
+ * client reply, an approval). Whose move it is inside the team is the Turn. Free text, saved on blur or Enter — it is a reminder
  * for a person, not a reference to one, so there is nothing to resolve.
  */
 export function BlockedNoteField({ task }: { task: StoreTask }) {
@@ -326,8 +494,8 @@ export function BlockedNoteField({ task }: { task: StoreTask }) {
     <input
       value={draft}
       maxLength={200}
-      placeholder="Waiting on…"
-      aria-label="Waiting on"
+      placeholder="A client reply, an approval…"
+      aria-label="Blocked on"
       onFocus={() => setFocused(true)}
       onInput={(e) => setDraft((e.currentTarget as HTMLInputElement).value)}
       onKeyDown={(e) => {
@@ -356,9 +524,9 @@ export function BlockedNoteField({ task }: { task: StoreTask }) {
 export function SnoozeBanner({ task }: { task: StoreTask }) {
   if (!isSnoozed(task.snoozedUntil) || task.snoozedUntil === null) return null;
   return (
-    <div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-line bg-raised px-3 py-2 text-[12.5px]">
+    <div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-line bg-raised px-3 py-2 text-[13px]">
       <span class="font-medium text-text">{snoozeUntilLabel(task.snoozedUntil)}</span>
-      {task.blockedNote ? <span class="min-w-0 truncate text-muted">waiting on {task.blockedNote}</span> : null}
+      {task.blockedNote ? <span class="min-w-0 truncate text-muted">blocked on {task.blockedNote}</span> : null}
       <span class="text-faint">· hidden from the board</span>
       <button
         type="button"

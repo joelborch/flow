@@ -77,6 +77,7 @@ const taskRow = (overrides: Partial<TaskRowSql> = {}): TaskRowSql => ({
   assignee_id: null,
   assigned_by: null,
   assigned_at: null,
+  waiting_on: null,
   priority: null,
   due_date: null,
   start_date: null,

@@ -100,3 +100,18 @@ export function handoffStateForStatusMove(
   if (wasClosed && !nowClosed && isTerminalHandoffState(current)) return "working";
   return null;
 }
+
+/**
+ * Whose turn a handoff's state puts the task on, so handoffs and ordinary
+ * turn-passing are one concept: the recipient holds it while it is requested
+ * or being worked, the requester holds it while the recipient needs input,
+ * and a finished or declined handoff is nobody's turn.
+ */
+export function handoffTurnHolder(
+  state: HandoffState,
+  recipientId: string | null,
+  requesterId: string
+): string | null {
+  if (isTerminalHandoffState(state)) return null;
+  return state === "needs_input" ? requesterId : recipientId;
+}

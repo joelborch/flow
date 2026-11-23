@@ -465,6 +465,7 @@ describe("flow_search_tasks", () => {
       "priority",
       "status",
       "title",
+      "turn",
     ]);
 
     const detailed = toolPayload(

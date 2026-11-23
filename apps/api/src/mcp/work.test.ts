@@ -139,6 +139,7 @@ describe("taskView", () => {
         title: "Checkout fails",
         statusId: "st_todo",
         assigneeId: "us_alice",
+        waitingOn: null,
         priority: "urgent",
         dueDate: NOW,
         tags: ["bug"],
@@ -152,6 +153,8 @@ describe("taskView", () => {
       list: "Bugs",
       space: "Engineering",
       assignee: "Alice",
+      // With no turn passed, the move is the assignee's.
+      turn: "Alice",
       listId: "ls_bugs",
       assigneeId: "us_alice",
     });

@@ -30,7 +30,7 @@ function mcpSnippet(token: string): string {
 function RevealedKey({ created, onDone }: { created: CreatedApiKey; onDone: () => void }) {
   return (
     <div class="space-y-2.5 border-b border-line bg-accent-soft/60 px-4 py-3">
-      <p class="text-[12.5px] text-text">
+      <p class="text-[13px] text-text">
         <span class="font-semibold">{created.apiKey.name}</span> created, acting as{" "}
         {created.impersonates.name} ({created.impersonates.email}).
       </p>
@@ -93,10 +93,10 @@ function KeyRow({
           )}
         </span>
 
-        <span class="shrink-0 text-[11.5px] text-faint" title={formatDateTime(apiKey.createdAt)}>
+        <span class="shrink-0 text-[12px] text-faint" title={formatDateTime(apiKey.createdAt)}>
           created {relativeTime(apiKey.createdAt)}
         </span>
-        <span class="w-[110px] shrink-0 text-[11.5px] text-faint">
+        <span class="w-[110px] shrink-0 text-[12px] text-faint">
           {apiKey.lastUsedAt === null ? "never used" : `used ${relativeTime(apiKey.lastUsedAt)}`}
         </span>
 
@@ -163,7 +163,7 @@ function CreateKey({
           aria-label="Impersonate"
           value={userId}
           onChange={(e) => setUserId((e.currentTarget as HTMLSelectElement).value)}
-          class="h-[28px] rounded-lg border border-line bg-surface px-2 text-[12.5px] text-text hover:border-line-strong focus:border-accent/50 focus:outline-none"
+          class="h-[28px] rounded-lg border border-line bg-surface px-2 text-[13px] text-text hover:border-line-strong focus:border-accent/50 focus:outline-none"
         >
           <option value="">Acts as me</option>
           {users.value

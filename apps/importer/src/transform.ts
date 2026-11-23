@@ -529,6 +529,7 @@ export function buildTasks(
       assigneeId: userId(assignee),
       assignedBy: null,
       assignedAt: null,
+      waitingOn: null,
       priority: mapPriority(t.priority, opts),
       dueDate: parseTs(t.due_date),
       startDate: parseTs(t.start_date),

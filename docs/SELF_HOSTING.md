@@ -99,7 +99,7 @@ Notes on the vars:
 - `APP_HOSTNAME` — used to build task URLs in webhook payloads, notification emails, and `{{task.url}}` templates.
 - `ACCESS_TEAM_DOMAIN` / `ACCESS_AUD` — filled in during step 4. You can deploy before Access exists; the API will just reject every browser request until it's wired up.
 - `OWNER_EMAIL` — the fallback identity: local dev auth resolves to this user, and inbound webhooks with no dedicated API key act as this user.
-- `EMAIL_FROM` / `EMAIL_FROM_NAME` / `EMAIL_BRAND_NAME` — sender address, sender display name, and the wordmark shown in the branded email header (falls back to `EMAIL_FROM_NAME`, then `"Flow"`, when unset).
+- `EMAIL_FROM` / `EMAIL_FROM_NAME` / `EMAIL_BRAND_NAME` / `EMAIL_REQUESTER_FROM_NAME` — sender address, sender display name, the wordmark shown in the branded email header (falls back to `EMAIL_FROM_NAME`, then `"Flow"`, when unset), and an optional separate sender display name for client-facing intake acknowledgements and email replies.
 - `GLEAP_ATTACHMENT_HOSTS` — comma-separated HTTPS host allowlist for rendered Gleap screenshot URLs fetched by the side-effects queue consumer.
 - `DEV_NO_AUTH` is deliberately **not** in this file. Put it in `apps/api/.dev.vars` (gitignored) for local development only — it fails closed, so anything other than the exact string `"true"` leaves auth enforced.
 

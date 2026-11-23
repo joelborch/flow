@@ -70,6 +70,12 @@
     // Wordmark shown in the branded email header. Falls back to
     // EMAIL_FROM_NAME, then "Flow", when unset.
     "EMAIL_BRAND_NAME": "Flow",
+    // Optional display name on requester-facing acknowledgements and replies
+    // (defaults to EMAIL_BRAND_NAME when unset).
+    // "EMAIL_REQUESTER_FROM_NAME": "Flow Support",
+    // Optional Cloudflare Access Managed OAuth on /mcp/oauth only:
+    // "MCP_ACCESS_OAUTH_ENABLED": "true",
+    // "MCP_ACCESS_AUD": "",
     // Comma-separated HTTPS host allowlist for rendered Gleap screenshot URLs
     // fetched by the side-effects queue consumer (see gleap-screenshot.ts).
     "GLEAP_ATTACHMENT_HOSTS": ".gleap.io",

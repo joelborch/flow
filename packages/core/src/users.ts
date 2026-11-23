@@ -32,10 +32,11 @@ export interface UserHint {
 export function unknownAssigneeMessage(
   userId: string,
   known: readonly UserHint[],
-  total: number = known.length
+  total: number = known.length,
+  field: string = "assigneeId"
 ): string {
   if (total === 0) {
-    return `Unknown assigneeId "${userId}" — this workspace has no users yet.`;
+    return `Unknown ${field} "${userId}" — this workspace has no users yet.`;
   }
   const listed = known
     .slice(0, ASSIGNEE_HINT_LIMIT)
@@ -44,8 +45,8 @@ export function unknownAssigneeMessage(
   const shown = Math.min(known.length, ASSIGNEE_HINT_LIMIT);
   const overflow = total > shown ? `, and ${total - shown} more` : "";
   return (
-    `Unknown assigneeId "${userId}". Valid user ids: ${listed}${overflow}. ` +
-    `Deactivated users are still assignable; pass null to leave the item unassigned.`
+    `Unknown ${field} "${userId}". Valid user ids: ${listed}${overflow}. ` +
+    `Deactivated users are still assignable; pass null to leave it unset.`
   );
 }
 
@@ -53,7 +54,11 @@ export function unknownAssigneeMessage(
  * Throw unless `userId` names an existing user. `null`/`undefined` mean
  * "unassigned" and are always fine.
  */
-export function requireAssignee(sql: SqlStorage, userId: string | null | undefined): void {
+export function requireAssignee(
+  sql: SqlStorage,
+  userId: string | null | undefined,
+  field: string = "assigneeId"
+): void {
   if (userId === null || userId === undefined) return;
   const hit = sql
     .exec<{ id: string }>("SELECT id FROM users WHERE id = ?", userId)
@@ -68,5 +73,5 @@ export function requireAssignee(sql: SqlStorage, userId: string | null | undefin
     .toArray()
     .map((r) => ({ id: r.id, name: r.name, deactivated: r.deactivated !== 0 }));
   const { n } = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM users").one();
-  throw new Error(unknownAssigneeMessage(userId, known, n));
+  throw new Error(unknownAssigneeMessage(userId, known, n, field));
 }

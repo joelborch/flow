@@ -82,6 +82,7 @@ export interface TaskRowSql {
   assignee_id: string | null;
   assigned_by: string | null;
   assigned_at: number | null;
+  waiting_on: string | null;
   priority: string | null;
   due_date: number | null;
   start_date: number | null;
@@ -118,6 +119,7 @@ export interface SnapshotTaskRowSql {
   assignee_id: string | null;
   assigned_by: string | null;
   assigned_at: number | null;
+  waiting_on: string | null;
   priority: string | null;
   due_date: number | null;
   tags: string;
@@ -373,6 +375,7 @@ export const toTask = (r: TaskRowSql): Task => ({
   assigneeId: r.assignee_id,
   assignedBy: r.assigned_by ?? null,
   assignedAt: r.assigned_at ?? null,
+  waitingOn: r.waiting_on ?? null,
   priority: r.priority as Task["priority"],
   dueDate: r.due_date,
   startDate: r.start_date,
@@ -399,6 +402,7 @@ export const toSnapshotTask = (r: SnapshotTaskRowSql): SnapshotTask => ({
   assigneeId: r.assignee_id,
   assignedBy: r.assigned_by ?? null,
   assignedAt: r.assigned_at ?? null,
+  waitingOn: r.waiting_on ?? null,
   priority: r.priority as SnapshotTask["priority"],
   dueDate: r.due_date,
   tags: parseJson<string[]>(r.tags, []),
@@ -417,6 +421,7 @@ export const toTaskRow = (r: TaskRowSql): TaskRow => ({
   title: r.title,
   statusId: r.status_id,
   assigneeId: r.assignee_id,
+  waitingOn: r.waiting_on ?? null,
   priority: r.priority as TaskRow["priority"],
   dueDate: r.due_date,
   tags: parseJson<string[]>(r.tags, []),

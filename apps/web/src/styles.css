@@ -16,21 +16,22 @@
   --color-line: #e7e7ec;
   --color-line-strong: #c9c9d2;
   --color-text: #17171b;
-  --color-muted: #6d6d7a;
-  --color-faint: #9a9aa6;
+  /* Both steps clear 4.5:1 on every surface they sit on (bg, surface,
+     raised, accent-soft): faint carries real information at 11px. */
+  --color-muted: #595966;
+  --color-faint: #70707c;
 
   --color-accent: #5b5bd6;
   --color-accent-soft: #eeeefc;
-  --color-danger: #d0453d;
+  --color-danger: #bf3b33;
   --color-danger-soft: #fdeceb;
-  --color-warn: #b5791a;
-  --color-ok: #37946a;
+  --color-warn: #946211;
+  --color-ok: #2d7d59;
 
   --text-base: 0.8125rem; /* 13px */
   --text-sm: 0.75rem;
   --text-xs: 0.6875rem;
 
-  --radius-card: 7px;
 }
 
 /* Dark palette. It has to apply in two situations that must not fight:
@@ -48,10 +49,10 @@
     --color-line: #26262c;
     --color-line-strong: #3a3a44;
     --color-text: #ecedef;
-    --color-muted: #9a9aa6;
-    --color-faint: #6d6d7a;
+    --color-muted: #a4a4b0;
+    --color-faint: #8c8c9a;
 
-    --color-accent: #7b7bef;
+    --color-accent: #8a8af3;
     --color-accent-soft: #24243a;
     --color-danger: #e8695f;
     --color-danger-soft: #35201f;
@@ -67,10 +68,10 @@
   --color-line: #26262c;
   --color-line-strong: #3a3a44;
   --color-text: #ecedef;
-  --color-muted: #9a9aa6;
-  --color-faint: #6d6d7a;
+  --color-muted: #a4a4b0;
+  --color-faint: #8c8c9a;
 
-  --color-accent: #7b7bef;
+  --color-accent: #8a8af3;
   --color-accent-soft: #24243a;
   --color-danger: #e8695f;
   --color-danger-soft: #35201f;
@@ -387,5 +388,3 @@ body.is-dragging {
   flex: 1 1 auto;
   min-width: 0;
 }
-
-

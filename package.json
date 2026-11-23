@@ -11,6 +11,7 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "deploy": "pnpm --filter @flow/web build && node scripts/deploy-worker.mjs",
+    "deploy:guarded": "node scripts/deploy-guarded.mjs",
     "build:demo": "pnpm --filter @flow/web build:demo",
     "deploy:demo": "pnpm build:demo && pnpm --filter @flow/api exec wrangler deploy --config ../../demo/wrangler.jsonc",
     "deploy:sandbox": "pnpm --filter @flow/api exec wrangler deploy --config ../../sandbox/wrangler.jsonc"

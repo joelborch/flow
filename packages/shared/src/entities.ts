@@ -149,6 +149,10 @@ export const Task = z.object({
   // personal delegation.
   assignedBy: Id.nullable().default(null),
   assignedAt: Ts.nullable().default(null),
+  // The turn: whose move the task is, independent of assigneeId so ownership
+  // stays put while the work passes between teammates. Null means the
+  // assignee's. A handoff's state sets it; closing the task clears it.
+  waitingOn: Id.nullable().default(null),
   priority: Priority.nullable().default(null),
   dueDate: Ts.nullable().default(null),
   startDate: Ts.nullable().default(null),
@@ -159,7 +163,10 @@ export const Task = z.object({
   // runs out (the hourly sweep) or somebody comments on it. Waking NEVER
   // changes the status — snooze is an attention filter, not a workflow state.
   snoozedUntil: Ts.nullable().default(null),
-  /** Optional "waiting on Dr. Patel for the x-rays" note shown with the snooze. */
+  /**
+   * Optional note shown with the snooze: what OUTSIDE the team the task is
+   * blocked on ("the client's x-rays"). A teammate's move is `waitingOn`.
+   */
   blockedNote: blockedNote().nullable().default(null),
   // Fractional ordering key within a status column.
   position: z.number(),

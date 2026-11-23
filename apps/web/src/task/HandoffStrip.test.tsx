@@ -60,6 +60,7 @@ function task(id: string, patch: Partial<StoreTask> = {}): StoreTask {
     assigneeId: BLAKE.id,
     assignedBy: MARA.id,
     assignedAt: 1,
+    waitingOn: null,
     priority: null,
     dueDate: null,
     snoozedUntil: null,

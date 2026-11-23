@@ -29,14 +29,14 @@ export function openSettings(): void {
   const from = route.value.path;
   boardPath = isSettingsPath(from) ? null : from;
   open.value = true;
-  navigate(SETTINGS_PATH);
+  navigate(`${SETTINGS_PATH}/${activeTab.value}`);
 }
 
 export function closeSettings(): void {
   if (!open.value) return;
   open.value = false;
-  // "/" lets main.tsx's own default-route redirect pick the first list, which
-  // is the right answer when settings was opened cold from a deep link.
+  // "/" lets main.tsx's own default-route redirect land on My Work, which is
+  // the right answer when settings was opened cold from a deep link.
   navigate(boardPath ?? "/");
 }
 
@@ -45,20 +45,41 @@ export function closeSettings(): void {
 if (typeof window !== "undefined") {
   addEventListener("popstate", () => {
     open.value = isSettingsPath(location.pathname);
+    const tab = tabFromPath(location.pathname);
+    if (tab) activeTab.value = tab;
   });
 }
 
 // --- tabs ------------------------------------------------------------------
 
-export const SETTINGS_TABS = ["automations", "api-keys", "inbound", "spaces"] as const;
+export const SETTINGS_TABS = ["general", "automations", "api-keys", "inbound", "spaces"] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 export const TAB_LABEL: Record<SettingsTab, string> = {
+  general: "General",
   automations: "Automations",
   "api-keys": "API keys",
   inbound: "Inbound",
   spaces: "Spaces",
 };
 
-/** Module-level so the tab survives a trip to the board and back. */
-export const activeTab: Signal<SettingsTab> = signal("automations");
+/** The tab named by /settings/<tab>, or null for a bare /settings. */
+function tabFromPath(path: string): SettingsTab | null {
+  const name = path.startsWith(`${SETTINGS_PATH}/`) ? path.slice(SETTINGS_PATH.length + 1).split("/")[0] : "";
+  return (SETTINGS_TABS as readonly string[]).includes(name ?? "") ? (name as SettingsTab) : null;
+}
+
+/**
+ * The open tab. It lives in the address (/settings/<tab>), so a reload or a
+ * shared link lands on the same section; module-level too, so it survives a
+ * trip to the board and back.
+ */
+export const activeTab: Signal<SettingsTab> = signal(
+  (typeof location !== "undefined" ? tabFromPath(location.pathname) : null) ?? "general"
+);
+
+export function setSettingsTab(tab: SettingsTab): void {
+  activeTab.value = tab;
+  // Replace, not push: flipping tabs shouldn't stack up Back presses.
+  if (open.value) navigate(`${SETTINGS_PATH}/${tab}`, { replace: true });
+}

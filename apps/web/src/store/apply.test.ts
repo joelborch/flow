@@ -40,6 +40,7 @@ function task(id: string, patch: Partial<Task> = {}): Task {
     startDate: null,
     snoozedUntil: null,
     blockedNote: null,
+    waitingOn: null,
     tags: [],
     position: 1,
     createdBy: "us_1",

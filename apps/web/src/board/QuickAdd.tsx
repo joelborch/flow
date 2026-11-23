@@ -51,7 +51,7 @@ export function QuickAdd({
   };
 
   return (
-    <div class="rounded-card border border-accent bg-surface px-2.5 py-2" data-no-drag>
+    <div class="rounded-lg border border-accent bg-surface px-2.5 py-2" data-no-drag>
       <textarea
         ref={ref}
         rows={2}
@@ -77,7 +77,7 @@ export function QuickAdd({
       />
       {parsed && (
         <div class="mb-1 flex">
-          <span class="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[10.5px] font-medium text-accent">
+          <span class="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-medium text-accent">
             <CalendarIcon class="h-2.5 w-2.5" />
             Due {formatDue(parsed.dueDate)}
             <button
@@ -93,7 +93,7 @@ export function QuickAdd({
           </span>
         </div>
       )}
-      <div class="mt-1 flex items-center justify-between text-[10px] text-faint">
+      <div class="mt-1 flex items-center justify-between text-[11px] text-faint">
         <span class="hidden sm:inline">Enter to add · Esc to close</span>
         <button
           type="button"

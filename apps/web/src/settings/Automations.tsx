@@ -46,7 +46,7 @@ function TaskLink({ taskId }: { taskId: string }) {
   const task = tasks.value.get(taskId);
   if (!task) {
     return (
-      <span class="min-w-0 truncate text-[12.5px] text-faint italic" title={taskId}>
+      <span class="min-w-0 truncate text-[13px] text-faint italic" title={taskId}>
         deleted task
       </span>
     );
@@ -58,7 +58,7 @@ function TaskLink({ taskId }: { taskId: string }) {
         closeSettings();
         openTask(taskId);
       }}
-      class="min-w-0 truncate text-left text-[12.5px] text-accent underline-offset-2 hover:underline"
+      class="min-w-0 truncate text-left text-[13px] text-accent underline-offset-2 hover:underline"
     >
       {task.title}
     </button>
@@ -85,8 +85,8 @@ function ResultChip({ result }: { result: AutomationRunLog["results"][number] })
 
 function RunRow({ run, ruleName }: { run: AutomationRunLog; ruleName?: string }) {
   return (
-    <div class="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 px-4 py-2 text-[12.5px]">
-      <span class="w-[74px] shrink-0 text-[11.5px] tabular-nums text-faint">
+    <div class="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 px-4 py-2 text-[13px]">
+      <span class="w-[74px] shrink-0 text-[12px] tabular-nums text-faint">
         {relativeTime(run.at)}
       </span>
       {ruleName ? (
@@ -97,7 +97,7 @@ function RunRow({ run, ruleName }: { run: AutomationRunLog; ruleName?: string })
         </span>
       )}
       <TaskLink taskId={run.taskId} />
-      <span class="shrink-0 text-[11.5px] text-faint">{actionKindLabel(run.trigger)}</span>
+      <span class="shrink-0 text-[12px] text-faint">{actionKindLabel(run.trigger)}</span>
       {run.depth > 0 && <Tag title="Fired by another automation">depth {run.depth}</Tag>}
       <span class="flex flex-wrap items-center gap-1">
         {run.results.map((r, i) => (
@@ -148,17 +148,17 @@ function RuleDetail({ rule, names }: { rule: AutomationRule; names: Names }) {
           <h4 class="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-faint">
             When
           </h4>
-          <p class="text-[12.5px] text-text">{triggerSummary(rule.trigger, names)}</p>
+          <p class="text-[13px] text-text">{triggerSummary(rule.trigger, names)}</p>
 
           <h4 class="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-[0.07em] text-faint">
             And all of
           </h4>
           {rule.conditions.length === 0 ? (
-            <p class="text-[12.5px] text-faint">No conditions — every trigger match runs it.</p>
+            <p class="text-[13px] text-faint">No conditions — every trigger match runs it.</p>
           ) : (
             <ul class="space-y-0.5">
               {rule.conditions.map((c, i) => (
-                <li key={i} class="text-[12.5px] text-text">
+                <li key={i} class="text-[13px] text-text">
                   {conditionSummary(c, names)}
                 </li>
               ))}
@@ -172,13 +172,13 @@ function RuleDetail({ rule, names }: { rule: AutomationRule; names: Names }) {
           </h4>
           <ol class="space-y-1">
             {rule.actions.map((a, i) => (
-              <li key={i} class="flex gap-2 text-[12.5px] text-text">
+              <li key={i} class="flex gap-2 text-[13px] text-text">
                 <span class="w-3 shrink-0 text-right tabular-nums text-faint">{i + 1}</span>
                 <span class="min-w-0">{actionSummary(a, names)}</span>
               </li>
             ))}
           </ol>
-          <p class="mt-3 text-[11.5px] text-faint">
+          <p class="mt-3 text-[12px] text-faint">
             Scope: {scopeSummary(rule, names)} · Rule {rule.id} · updated{" "}
             {relativeTime(rule.updatedAt)}
           </p>
@@ -282,7 +282,7 @@ function RuleRow({
         </span>
 
         <span class="flex shrink-0 items-center gap-2">
-          <span class={rule.enabled ? "text-[11.5px] text-ok" : "text-[11.5px] text-faint"}>
+          <span class={rule.enabled ? "text-[12px] text-ok" : "text-[12px] text-faint"}>
             {rule.enabled ? "On" : "Off"}
           </span>
           <Switch

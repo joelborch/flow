@@ -34,6 +34,8 @@ export const ConciseTaskView = z.object({
   status: z.string(),
   list: z.string(),
   assignee: z.string().nullable(),
+  /** Whose move it is: the person the turn was passed to, otherwise the assignee. */
+  turn: z.string().nullable(),
   dueDate: z.number().nullable(),
   priority: z.string().nullable(),
 });
@@ -87,6 +89,8 @@ export const TaskDetailView = TaskView.extend({
   closedAt: z.number().nullable(),
   snoozedUntil: z.number().nullable(),
   blockedNote: z.string().nullable(),
+  waitingOn: z.string().nullable(),
+  waitingOnName: z.string().nullable(),
 });
 export type TaskDetailView = z.infer<typeof TaskDetailView>;
 

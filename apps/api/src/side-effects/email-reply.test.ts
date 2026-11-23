@@ -104,6 +104,18 @@ describe("deliverEmailReply", () => {
     expect(message.html).not.toContain("flow.example.com");
   });
 
+  it("uses EMAIL_REQUESTER_FROM_NAME when configured while keeping EMAIL_FROM", async () => {
+    const { env, send } = liveEnv(undefined, {
+      EMAIL_FROM: "flow@mail.example.com",
+      EMAIL_FROM_NAME: "Flow",
+      EMAIL_REQUESTER_FROM_NAME: "Acme Support",
+    });
+    await deliverEmailReply(reply(), env);
+    expect(send.mock.calls[0]![0]).toMatchObject({
+      from: { email: "flow@mail.example.com", name: "Acme Support" },
+    });
+  });
+
   it("resends without the threading headers when the binding refuses them", async () => {
     const send = vi
       .fn()

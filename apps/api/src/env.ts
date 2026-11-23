@@ -16,6 +16,10 @@ export type Env = CoreEnv & {
   ACCESS_TEAM_DOMAIN: string;
   /** Cloudflare Access application AUD tag (hex). */
   ACCESS_AUD: string;
+  /** Opt-in to Access Managed OAuth on /mcp/oauth only; unset is disabled. */
+  MCP_ACCESS_OAUTH_ENABLED?: string;
+  /** Audience of the separate MCP OAuth Access app; never replaces browser AUD. */
+  MCP_ACCESS_AUD?: string;
   /** Email of the workspace owner; the fallback identity for dev + inbound. */
   OWNER_EMAIL: string;
   /** Sender address for automation/notification email (default flow@mail.example.com). */
@@ -24,6 +28,8 @@ export type Env = CoreEnv & {
   EMAIL_FROM_NAME?: string;
   /** Wordmark shown in the branded email header (default EMAIL_FROM_NAME ?? "Flow"). */
   EMAIL_BRAND_NAME?: string;
+  /** Display name on acknowledgements and replies sent to ticket requesters (default emailBrandName). */
+  EMAIL_REQUESTER_FROM_NAME?: string;
   /** JSON object mapping exact Gleap project IDs to their screenshot API tokens. */
   GLEAP_PROJECT_TOKENS_JSON?: string;
   /** Comma-separated HTTPS host allowlist for rendered Gleap screenshot URLs. */

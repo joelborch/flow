@@ -121,7 +121,7 @@ flowcurl -X POST $FLOW/api/tasks/tk_ghi789/move -H 'Content-Type: application/js
 
 `status` is always a status **name**, matched case-insensitively; omitted on create, the task lands in the list's open status. Priorities: `urgent`, `high`, `normal`, `low`. Descriptions and comments are markdown, plain strings over the wire.
 
-**Snooze.** `PATCH` also takes `snoozedUntil` (epoch ms; `null` wakes now) and `blockedNote` (≤200 chars). A snoozed task keeps its list, status, and position — it's just hidden from the board and parked at the bottom of My Work until the hourly sweep passes its wake time or anyone comments on it. Waking never changes the status.
+**Turns and snooze.** `waitingOn` passes whose move the task is without changing `assigneeId` (null hands it back to the assignee; closing a task clears it). Pair `waitingOn` with `turnNote` on `PATCH` to post a note as a comment and quote it in that person's "Your turn" email. `PATCH` also takes `snoozedUntil` (epoch ms; `null` wakes now) and `blockedNote` (≤200 chars, for something external to the team). A snoozed task keeps its list, status, and position — it's just hidden from the board and parked at the bottom of My Work until the hourly sweep passes its wake time or anyone comments on it. Waking never changes the status.
 
 ```bash
 flowcurl -X PATCH $FLOW/api/tasks/tk_ghi789 -H 'Content-Type: application/json' \
@@ -136,6 +136,7 @@ flowcurl -X PATCH $FLOW/api/tasks/tk_ghi789 -H 'Content-Type: application/json' 
 |---|---|
 | `query` (alias `q`) | FTS string |
 | `listId`, `spaceId`, `assigneeId` | id |
+| `turnOf` | id (matches `waitingOn` where set, else `assigneeId`) |
 | `status` | array of status names |
 | `tags` | array |
 | `includeClosed` | boolean, default false |
@@ -222,7 +223,7 @@ flowcurl -X PATCH $FLOW/api/subtasks/sb_jkl012 \
 
 A comment records how it arrived in `via` (`"ui"`, `"api"`, `"mcp"`, …), so a thread can tell a person from their agent.
 
-**Emailing a reply.** On a task opened by [email intake](#email-intake), `emailToRequester: true` also emails the comment to the sender whose email opened the ticket: from `EMAIL_FROM`, in their original thread (`Re: <title>`), with Reply-To on the intake address so their answer lands back on the task. The comment records `emailTo` and `emailStatus` (`sending`, then `sent` or `failed`). It needs `EMAIL_INTAKE_REPLY="true"`, and a person signed in to the app or an API key an admin allowed (`canEmailRequesters`, below); MCP never can. `GET /api/tasks/:taskId` returns `emailReplyTo` and `emailReplySubject`, so a client can show exactly what would be sent before sending it.
+**Emailing a reply.** On a task opened by [email intake](#email-intake), `emailToRequester: true` also emails the comment to the sender whose email opened the ticket: from `EMAIL_FROM` (with optional `EMAIL_REQUESTER_FROM_NAME` display name), in their original thread (`Re: <title>`), with Reply-To on the intake address so their answer lands back on the task. The comment records `emailTo` and `emailStatus` (`sending`, then `sent` or `failed`). It needs `EMAIL_INTAKE_REPLY="true"`, and a person signed in to the app or an API key an admin allowed (`canEmailRequesters`, below); MCP never can. `GET /api/tasks/:taskId` returns `emailReplyTo` and `emailReplySubject`, so a client can show exactly what would be sent before sending it.
 
 ```bash
 flowcurl -X POST $FLOW/api/tasks/tk_ghi789/comments -H 'Content-Type: application/json' \
