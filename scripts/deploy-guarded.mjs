@@ -1,33 +1,51 @@
 #!/usr/bin/env node
-// Guarded production deploy with checkout-boundary checks, clean-origin/main
-// verification, resolved config inspection, and native macOS (or interactive TTY)
-// human-presence confirmation.
+// Guarded macOS production deploy with checkout-boundary checks, git-tracked
+// target checks, explicit environment & Cloudflare account resolution, resolved
+// config inspection, and native /usr/bin/osascript human-presence confirmation.
 //
-// Usage:
+// Usage (macOS only):
 //   pnpm run deploy
 //   pnpm run deploy -- --config apps/api/wrangler.jsonc
+//   pnpm run deploy -- --config wrangler.jsonc --env production
 //   pnpm run deploy:demo
 //   pnpm run deploy:sandbox
 //   FLOW_WRANGLER_CONFIG=apps/api/wrangler.jsonc pnpm run deploy
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 export const DEFAULT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-export const REQUIRED_PROD_EMAIL_VARS = [
+export const REQUIRED_LIVE_EMAIL_VARS = [
   "EMAIL_FROM",
   "EMAIL_FROM_NAME",
   "EMAIL_BRAND_NAME",
-  "EMAIL_REQUESTER_FROM_NAME",
 ];
-export const DEFAULT_EMAIL_FROM = "flow@mail.example.com";
+export const OSASCRIPT_PATH = "/usr/bin/osascript";
 
+const PLACEHOLDER_EMAIL_DOMAINS = ["example.com", "example.net", "example.org", "example"];
 const SECRET_VAR_PATTERN = /(SECRET|PASSWORD|PRIVATE_KEY)/i;
+const INHERITABLE_WRANGLER_KEYS = [
+  "name",
+  "main",
+  "assets",
+  "account_id",
+  "compatibility_date",
+  "compatibility_flags",
+  "workers_dev",
+  "keep_vars",
+  "base_dir",
+  "tsconfig",
+  "site",
+  "build",
+  "alias",
+  "text_blobs",
+  "data_blobs",
+  "wasm_modules",
+];
 
 function fail(message) {
   console.error(`\n✗ deploy refused: ${message}`);
@@ -35,16 +53,23 @@ function fail(message) {
 }
 
 /**
- * Parse CLI arguments strictly: only `--config <path>`, `--config=<path>`,
- * `-c <path>`, or `FLOW_WRANGLER_CONFIG` may choose a config inside the
- * checkout; unexpected flags or positional args are refused.
+ * Parse CLI arguments strictly and refuse ambient `CLOUDFLARE_ENV`. Only
+ * `--config <path>`, `--config=<path>`, `-c <path>`, `--env <name>`,
+ * `--env=<name>`, `-e <name>`, or `FLOW_WRANGLER_CONFIG` are accepted.
  */
-export function parseConfigArg(argv, opts = {}) {
+export function parseDeployArgs(argv, opts = {}) {
   const cwd = opts.cwd ?? process.cwd();
   const env = opts.env ?? process.env;
   const root = opts.root ?? DEFAULT_ROOT;
 
+  if (env.CLOUDFLARE_ENV?.trim()) {
+    throw new Error(
+      `CLOUDFLARE_ENV is set ("${env.CLOUDFLARE_ENV}"); unset it and pass --env <name> explicitly so the target environment is unambiguous`
+    );
+  }
+
   let cliConfig = null;
+  let envName = null;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--") continue;
@@ -62,13 +87,46 @@ export function parseConfigArg(argv, opts = {}) {
       cliConfig = resolve(cwd, val);
       continue;
     }
-    throw new Error(`unexpected argument "${arg}"; deploy-guarded only accepts --config <path>`);
+    if (arg === "--env" || arg === "-e") {
+      const next = argv[++i];
+      if (!next?.trim()) throw new Error(`${arg} requires an environment name`);
+      if (envName !== null) throw new Error("duplicate env flag");
+      envName = next.trim();
+      continue;
+    }
+    if (arg.startsWith("--env=")) {
+      const val = arg.slice("--env=".length).trim();
+      if (!val) throw new Error("--env= requires a non-empty environment name");
+      if (envName !== null) throw new Error("duplicate env flag");
+      envName = val;
+      continue;
+    }
+    throw new Error(
+      `unexpected argument "${arg}"; deploy-guarded only accepts --config <path> and --env <name>`
+    );
   }
 
-  if (cliConfig !== null) return cliConfig;
-  const fromEnv = env.FLOW_WRANGLER_CONFIG?.trim();
-  if (fromEnv) return resolve(cwd, fromEnv);
-  return join(root, "apps", "api", "wrangler.jsonc");
+  let configPath;
+  if (cliConfig !== null) {
+    configPath = cliConfig;
+  } else {
+    const fromEnv = env.FLOW_WRANGLER_CONFIG?.trim();
+    configPath = fromEnv ? resolve(cwd, fromEnv) : join(root, "apps", "api", "wrangler.jsonc");
+  }
+
+  return { configPath, envName };
+}
+
+/** Backwards-compatible wrapper returning only the resolved config path. */
+export function parseConfigArg(argv, opts = {}) {
+  return parseDeployArgs(argv, opts).configPath;
+}
+
+/** Return a copy of `env` with `CLOUDFLARE_ENV` stripped so Wrangler cannot silently pick one up. */
+export function sanitizedWranglerEnv(env = process.env) {
+  const clean = { ...env };
+  delete clean.CLOUDFLARE_ENV;
+  return clean;
 }
 
 /** Return true iff `targetReal` equals `parentReal` or lies strictly inside it. */
@@ -94,105 +152,320 @@ export function resolveRealThroughAncestors(absPath) {
   return join(realpathSync(cur), ...tail);
 }
 
-/** wrangler.jsonc allows comments and trailing commas; JSON.parse doesn't. */
-export function readJsonc(path) {
-  const src = readFileSync(path, "utf8");
-  let out = "";
+/**
+ * String-aware JSONC parser: strips comments (`//`, `/* ... *\/`) and trailing
+ * commas strictly outside double-quoted string literals so string contents like
+ * `", }"` or `"//"` are never altered.
+ */
+export function parseJsonc(src) {
+  let noComments = "";
   let inString = false;
   for (let i = 0; i < src.length; i++) {
     const ch = src[i];
     if (inString) {
-      out += ch;
-      if (ch === "\\") out += src[++i] ?? "";
-      else if (ch === '"') inString = false;
+      noComments += ch;
+      if (ch === "\\") {
+        if (i + 1 < src.length) noComments += src[++i];
+      } else if (ch === '"') {
+        inString = false;
+      }
     } else if (ch === '"') {
       inString = true;
-      out += ch;
+      noComments += ch;
     } else if (ch === "/" && src[i + 1] === "/") {
       while (i < src.length && src[i] !== "\n") i++;
-      out += "\n";
+      if (i < src.length) noComments += "\n";
     } else if (ch === "/" && src[i + 1] === "*") {
-      const end = src.indexOf("*/", i + 2);
-      if (end === -1) break;
-      i = end + 1;
+      const close = src.indexOf("*/", i + 2);
+      if (close === -1) throw new Error("unterminated block comment in wrangler config");
+      i = close + 1;
     } else {
-      out += ch;
+      noComments += ch;
     }
   }
-  return JSON.parse(out.replace(/,(\s*[}\]])/g, "$1"));
+
+  let cleaned = "";
+  inString = false;
+  for (let i = 0; i < noComments.length; i++) {
+    const ch = noComments[i];
+    if (inString) {
+      cleaned += ch;
+      if (ch === "\\") {
+        if (i + 1 < noComments.length) cleaned += noComments[++i];
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      cleaned += ch;
+      continue;
+    }
+    if (ch === ",") {
+      let j = i + 1;
+      while (j < noComments.length && /\s/.test(noComments[j])) j++;
+      if (noComments[j] === "}" || noComments[j] === "]") continue;
+    }
+    cleaned += ch;
+  }
+
+  return JSON.parse(cleaned);
 }
 
-function validateTargetPaths(target, labelPrefix, configDir, realRoot, requireAssetsExist) {
+/** Read and parse a JSONC file. */
+export function readJsonc(path) {
+  return parseJsonc(readFileSync(path, "utf8"));
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Verify a path field resolves strictly inside `realRoot` relative to `baseDir` (including symlinks). */
+function resolveContainedPath(rawValue, fieldName, baseDir, realRoot, { mustExist = false } = {}) {
+  if (typeof rawValue !== "string" || !rawValue.trim()) {
+    throw new Error(`${fieldName} must be a non-empty string`);
+  }
+  const rawResolved = resolve(baseDir, rawValue);
+  if (!isWithinDir(realRoot, rawResolved)) {
+    throw new Error(`${fieldName} escapes checkout (${rawValue} -> ${rawResolved})`);
+  }
+  const ancestorReal = resolveRealThroughAncestors(rawResolved);
+  if (!isWithinDir(realRoot, ancestorReal)) {
+    throw new Error(`${fieldName} symlink escapes checkout (${rawValue} -> ${ancestorReal})`);
+  }
+  if (existsSync(rawResolved)) {
+    const real = realpathSync(rawResolved);
+    if (!isWithinDir(realRoot, real)) {
+      throw new Error(`${fieldName} resolves outside checkout (${rawValue} -> ${real})`);
+    }
+    return real;
+  }
+  if (mustExist) {
+    throw new Error(`${fieldName} does not exist: ${ancestorReal}`);
+  }
+  return ancestorReal;
+}
+
+/**
+ * Compute the effective Wrangler target configuration for `envName` (or top-level
+ * when `envName` is null). Follows Wrangler inheritance: top-level inheritable
+ * settings carry over unless overridden, whereas `vars`, `routes`, and bindings
+ * are NOT inherited into named `env.<name>` blocks.
+ */
+export function resolveEffectiveConfig(config, envName = null) {
+  if (!envName) {
+    return {
+      environment: "(top-level)",
+      envName: null,
+      effectiveConfig: config,
+    };
+  }
+  if (!isPlainObject(config.env) || !isPlainObject(config.env[envName])) {
+    throw new Error(`wrangler environment "${envName}" is not defined in config.env`);
+  }
+  const envBlock = config.env[envName];
+  const merged = {};
+  for (const key of INHERITABLE_WRANGLER_KEYS) {
+    if (envBlock[key] !== undefined) merged[key] = envBlock[key];
+    else if (config[key] !== undefined) merged[key] = config[key];
+  }
+  if (envBlock.name === undefined && typeof config.name === "string" && config.name.trim()) {
+    merged.name = `${config.name}-${envName}`;
+  }
+  // Non-inheritable bindings/vars/routes come exclusively from the selected env block.
+  for (const [key, val] of Object.entries(envBlock)) {
+    if (!INHERITABLE_WRANGLER_KEYS.includes(key)) merged[key] = val;
+  }
+  return {
+    environment: envName,
+    envName,
+    effectiveConfig: merged,
+  };
+}
+
+function validateTargetBlock(target, labelPrefix, configDir, inheritedBaseDir, realRoot, requireAssetsExist) {
+  let effectiveBaseDir = inheritedBaseDir;
+  if (target.base_dir !== undefined) {
+    effectiveBaseDir = resolveContainedPath(
+      target.base_dir,
+      `${labelPrefix}base_dir`,
+      configDir,
+      realRoot,
+      { mustExist: true }
+    );
+  }
+  const baseCandidates = effectiveBaseDir === configDir ? [configDir] : [effectiveBaseDir, configDir];
+
+  if (target.alias !== undefined) {
+    if (!isPlainObject(target.alias)) {
+      throw new Error(`${labelPrefix}alias must be an object`);
+    }
+    if (Object.keys(target.alias).length > 0) {
+      throw new Error(
+        `${labelPrefix}alias is not allowed in guarded deploys (${Object.keys(target.alias).join(", ")})`
+      );
+    }
+  }
+
+  if (target.build !== undefined) {
+    if (!isPlainObject(target.build)) {
+      throw new Error(`${labelPrefix}build must be an object`);
+    }
+    if (target.build.command !== undefined && target.build.command !== null) {
+      throw new Error(`${labelPrefix}build.command is not allowed in guarded deploys`);
+    }
+    if (target.build.cwd !== undefined) {
+      for (const base of baseCandidates) {
+        resolveContainedPath(target.build.cwd, `${labelPrefix}build.cwd`, base, realRoot);
+      }
+    }
+    if (target.build.watch_dir !== undefined) {
+      const dirs = Array.isArray(target.build.watch_dir)
+        ? target.build.watch_dir
+        : [target.build.watch_dir];
+      for (const dir of dirs) {
+        for (const base of baseCandidates) {
+          resolveContainedPath(dir, `${labelPrefix}build.watch_dir`, base, realRoot);
+        }
+      }
+    }
+  }
+
   let resolvedMain = null;
   if (target.main !== undefined) {
-    if (typeof target.main !== "string" || !target.main.trim()) {
-      throw new Error(`${labelPrefix}main must be a non-empty string`);
+    resolvedMain = resolveContainedPath(target.main, `${labelPrefix}main`, effectiveBaseDir, realRoot, {
+      mustExist: true,
+    });
+    if (effectiveBaseDir !== configDir) {
+      const fromConfig = resolve(configDir, target.main);
+      if (!isWithinDir(realRoot, fromConfig)) {
+        throw new Error(`${labelPrefix}main escapes checkout relative to config dir (${target.main})`);
+      }
     }
-    const rawMain = resolve(configDir, target.main);
-    if (!isWithinDir(realRoot, rawMain)) {
-      throw new Error(`${labelPrefix}main escapes checkout (${target.main} -> ${rawMain})`);
-    }
-    const ancestorRealMain = resolveRealThroughAncestors(rawMain);
-    if (!isWithinDir(realRoot, ancestorRealMain)) {
-      throw new Error(`${labelPrefix}main symlink escapes checkout (${target.main} -> ${ancestorRealMain})`);
-    }
-    if (!existsSync(rawMain)) {
-      throw new Error(`${labelPrefix}main does not exist: ${rawMain}`);
-    }
-    const realMain = realpathSync(rawMain);
-    if (!isWithinDir(realRoot, realMain)) {
-      throw new Error(`${labelPrefix}main resolves outside checkout (${target.main} -> ${realMain})`);
-    }
-    resolvedMain = realMain;
   }
 
   let resolvedAssetsDir = null;
   if (target.assets !== undefined) {
-    if (!target.assets || typeof target.assets !== "object" || Array.isArray(target.assets)) {
+    if (!isPlainObject(target.assets)) {
       throw new Error(`${labelPrefix}assets must be an object`);
     }
     if (target.assets.directory !== undefined) {
-      if (typeof target.assets.directory !== "string" || !target.assets.directory.trim()) {
-        throw new Error(`${labelPrefix}assets.directory must be a non-empty string`);
-      }
-      const rawAssets = resolve(configDir, target.assets.directory);
-      if (!isWithinDir(realRoot, rawAssets)) {
-        throw new Error(
-          `${labelPrefix}assets.directory escapes checkout (${target.assets.directory} -> ${rawAssets})`
-        );
-      }
-      const ancestorRealAssets = resolveRealThroughAncestors(rawAssets);
-      if (!isWithinDir(realRoot, ancestorRealAssets)) {
-        throw new Error(
-          `${labelPrefix}assets.directory symlink escapes checkout (${target.assets.directory} -> ${ancestorRealAssets})`
-        );
-      }
-      if (existsSync(rawAssets)) {
-        const realAssets = realpathSync(rawAssets);
-        if (!isWithinDir(realRoot, realAssets)) {
-          throw new Error(
-            `${labelPrefix}assets.directory resolves outside checkout (${target.assets.directory} -> ${realAssets})`
-          );
-        }
-        resolvedAssetsDir = realAssets;
-      } else {
-        if (requireAssetsExist) {
-          throw new Error(`${labelPrefix}assets.directory does not exist: ${ancestorRealAssets}`);
-        }
-        resolvedAssetsDir = ancestorRealAssets;
+      resolvedAssetsDir = resolveContainedPath(
+        target.assets.directory,
+        `${labelPrefix}assets.directory`,
+        effectiveBaseDir,
+        realRoot,
+        { mustExist: requireAssetsExist }
+      );
+    }
+  }
+
+  if (target.site !== undefined) {
+    if (!isPlainObject(target.site)) {
+      throw new Error(`${labelPrefix}site must be an object`);
+    }
+    if (target.site.bucket !== undefined) {
+      for (const base of baseCandidates) {
+        resolveContainedPath(target.site.bucket, `${labelPrefix}site.bucket`, base, realRoot);
       }
     }
   }
 
-  return { resolvedMain, resolvedAssetsDir };
+  if (target.tsconfig !== undefined) {
+    for (const base of baseCandidates) {
+      resolveContainedPath(target.tsconfig, `${labelPrefix}tsconfig`, base, realRoot);
+    }
+  }
+
+  for (const blobField of ["text_blobs", "data_blobs", "wasm_modules"]) {
+    if (target[blobField] !== undefined) {
+      if (!isPlainObject(target[blobField])) {
+        throw new Error(`${labelPrefix}${blobField} must be an object`);
+      }
+      for (const [blobKey, blobPath] of Object.entries(target[blobField])) {
+        for (const base of baseCandidates) {
+          resolveContainedPath(blobPath, `${labelPrefix}${blobField}.${blobKey}`, base, realRoot);
+        }
+      }
+    }
+  }
+
+  return { resolvedMain, resolvedAssetsDir, resolvedBaseDir: effectiveBaseDir };
 }
 
 /**
- * Verify that `configPath`, its `main`, and its `assets.directory` (top-level
- * and every `env.<name>` override) resolve strictly inside `checkoutRoot`.
+ * Verify that `main` (and `assets.directory`, or `apps/web` for built SPA outputs)
+ * is tracked by git in `realRoot` so untracked or gitignored files cannot deploy.
+ */
+export function assertTrackedDeployPaths(
+  { resolvedMain, resolvedAssetsDir },
+  checkoutRoot
+) {
+  const realRoot = realpathSync(checkoutRoot);
+
+  if (resolvedMain) {
+    const relMain = relative(realRoot, resolvedMain);
+    const tracked = spawnSync("git", ["ls-files", "--error-unmatch", "--", relMain], {
+      cwd: realRoot,
+      encoding: "utf8",
+    });
+    if (tracked.status !== 0) {
+      throw new Error(`main is not tracked by git: ${relMain}`);
+    }
+  }
+
+  if (resolvedAssetsDir) {
+    const distDir = join(realRoot, "apps", "web", "dist");
+    const demoDistDir = join(realRoot, "apps", "web", "dist-demo");
+    if (resolvedAssetsDir === distDir || resolvedAssetsDir === demoDistDir) {
+      const webPkg = spawnSync(
+        "git",
+        ["ls-files", "--error-unmatch", "--", "apps/web/package.json"],
+        { cwd: realRoot, encoding: "utf8" }
+      );
+      if (webPkg.status !== 0) {
+        throw new Error("apps/web/package.json is not tracked by git");
+      }
+      const webDirty = execFileSync("git", ["status", "--porcelain", "--", "apps/web"], {
+        cwd: realRoot,
+        encoding: "utf8",
+      }).trim();
+      if (webDirty !== "") {
+        throw new Error("apps/web has uncommitted or untracked changes");
+      }
+    } else {
+      const relAssets = relative(realRoot, resolvedAssetsDir) || ".";
+      const trackedFiles = execFileSync("git", ["ls-files", "--", relAssets], {
+        cwd: realRoot,
+        encoding: "utf8",
+      }).trim();
+      if (!trackedFiles) {
+        throw new Error(`assets.directory is not tracked by git: ${relAssets}`);
+      }
+      const untrackedOrIgnored = execFileSync(
+        "git",
+        ["status", "--porcelain", "--ignored", "--", relAssets],
+        { cwd: realRoot, encoding: "utf8" }
+      ).trim();
+      if (untrackedOrIgnored !== "") {
+        throw new Error(`assets.directory contains untracked or gitignored files: ${relAssets}`);
+      }
+    }
+  }
+}
+
+/**
+ * Verify `configPath`, its effective target, and all `env.<name>` blocks keep
+ * every path (`main`, `assets.directory`, `base_dir`, `site.bucket`, `tsconfig`,
+ * `text_blobs`, `build`, `alias`) inside `checkoutRoot`, and verify git-tracked
+ * `main` and `assets` targets unless `checkGitTracked: false`.
  */
 export function validateDeployConfig(configPath, checkoutRoot, opts = {}) {
   const requireAssetsExist = opts.requireAssetsExist ?? false;
+  const checkGitTracked = opts.checkGitTracked ?? true;
+  const envName = opts.envName ?? null;
   const realRoot = realpathSync(checkoutRoot);
 
   if (!existsSync(configPath)) {
@@ -205,81 +478,160 @@ export function validateDeployConfig(configPath, checkoutRoot, opts = {}) {
 
   const rawBytes = readFileSync(realConfigPath);
   const configSha256 = createHash("sha256").update(rawBytes).digest("hex");
-  const config = readJsonc(realConfigPath);
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
+  const config = parseJsonc(rawBytes.toString("utf8"));
+  if (!isPlainObject(config)) {
     throw new Error(`wrangler config must parse to an object: ${realConfigPath}`);
   }
 
   const configDir = dirname(realConfigPath);
-  const { resolvedMain, resolvedAssetsDir } = validateTargetPaths(
+  const topPaths = validateTargetBlock(
     config,
     "",
+    configDir,
+    configDir,
+    realRoot,
+    envName ? false : requireAssetsExist
+  );
+
+  if (config.env !== undefined) {
+    if (!isPlainObject(config.env)) {
+      throw new Error("env must be an object");
+    }
+    for (const [blockName, envBlock] of Object.entries(config.env)) {
+      if (!isPlainObject(envBlock)) {
+        throw new Error(`env.${blockName} must be an object`);
+      }
+      validateTargetBlock(
+        envBlock,
+        `env.${blockName}.`,
+        configDir,
+        topPaths.resolvedBaseDir,
+        realRoot,
+        blockName === envName ? requireAssetsExist : false
+      );
+    }
+  }
+
+  const { environment, effectiveConfig } = resolveEffectiveConfig(config, envName);
+  const effectivePaths = validateTargetBlock(
+    effectiveConfig,
+    envName ? `env.${envName}.` : "",
+    configDir,
     configDir,
     realRoot,
     requireAssetsExist
   );
 
-  if (config.env !== undefined) {
-    if (!config.env || typeof config.env !== "object" || Array.isArray(config.env)) {
-      throw new Error("env must be an object");
-    }
-    for (const [envName, envBlock] of Object.entries(config.env)) {
-      if (!envBlock || typeof envBlock !== "object" || Array.isArray(envBlock)) {
-        throw new Error(`env.${envName} must be an object`);
-      }
-      validateTargetPaths(envBlock, `env.${envName}.`, configDir, realRoot, requireAssetsExist);
-    }
+  if (checkGitTracked) {
+    assertTrackedDeployPaths(effectivePaths, realRoot);
   }
 
   return {
     configPath: realConfigPath,
     config,
+    effectiveConfig,
+    environment,
+    envName,
     configSha256,
-    resolvedMain,
-    resolvedAssetsDir,
+    resolvedMain: effectivePaths.resolvedMain,
+    resolvedAssetsDir: effectivePaths.resolvedAssetsDir,
   };
 }
 
-/**
- * Mirror apps/api `signInMode` Access check so deploy-guarded catches missing
- * production email branding vars before running Wrangler.
- */
-function hasConfiguredAccess(vars) {
-  const aud = String(vars.ACCESS_AUD ?? "").trim();
-  const team = String(vars.ACCESS_TEAM_DOMAIN ?? "").trim().toLowerCase();
-  const teamSet = team.endsWith(".cloudflareaccess.com") && team !== "your-team.cloudflareaccess.com";
-  return /^[0-9a-f]{64}$/i.test(aud) && teamSet;
+/** True when `email` is empty, malformed, or uses a placeholder `.example` domain. */
+export function isPlaceholderEmail(email) {
+  const trimmed = String(email ?? "").trim().toLowerCase();
+  const at = trimmed.lastIndexOf("@");
+  if (at <= 0 || at === trimmed.length - 1) return true;
+  const domain = trimmed.slice(at + 1);
+  return PLACEHOLDER_EMAIL_DOMAINS.some((p) => domain === p || domain.endsWith(`.${p}`));
 }
 
-/** Fail closed when a production Worker config omits explicit email branding vars. */
-export function assertDeployConfigEmailVars(config) {
-  if (!config.main || config.keep_vars === true) return;
-  const vars = config.vars && typeof config.vars === "object" ? config.vars : {};
+/**
+ * Fail closed at deploy time ONLY when live email sending is enabled
+ * (`EMAIL_DRY_RUN === "false"`). Applied even when `keep_vars` is true, and
+ * skipped only for assets-only/dev/sandbox configs. `EMAIL_REQUESTER_FROM_NAME`
+ * remains optional; Access vars do NOT mark email as live.
+ */
+export function assertDeployConfigEmailVars(effectiveConfig) {
+  if (!effectiveConfig.main) return;
+  const vars = isPlainObject(effectiveConfig.vars) ? effectiveConfig.vars : {};
   if (vars.DEV_NO_AUTH === "true" || vars.SANDBOX === "true") return;
-
-  const isProd = hasConfiguredAccess(vars) || vars.EMAIL_DRY_RUN === "false";
-  if (!isProd) return;
+  if (vars.EMAIL_DRY_RUN !== "false") return;
 
   const missing = [];
-  for (const key of REQUIRED_PROD_EMAIL_VARS) {
+  for (const key of REQUIRED_LIVE_EMAIL_VARS) {
     const val = vars[key];
     if (typeof val !== "string" || !val.trim()) missing.push(key);
   }
-  if (typeof vars.EMAIL_FROM === "string" && vars.EMAIL_FROM.trim().toLowerCase() === DEFAULT_EMAIL_FROM) {
-    missing.push(`EMAIL_FROM (placeholder ${DEFAULT_EMAIL_FROM})`);
+  if (typeof vars.EMAIL_FROM === "string" && vars.EMAIL_FROM.trim() && isPlaceholderEmail(vars.EMAIL_FROM)) {
+    missing.push(`EMAIL_FROM (placeholder "${vars.EMAIL_FROM.trim()}")`);
   }
   if (missing.length > 0) {
     throw new Error(
-      `production config requires explicit email branding vars (${missing.join(", ")})`
+      `live email config (EMAIL_DRY_RUN = "false") requires explicit sender branding (${missing.join(", ")})`
     );
   }
 }
 
-/** Pick the Vite build script matching `resolvedAssetsDir`, or null for API-only configs. */
+/** Pick the Vite build script matching `resolvedAssetsDir`, or null for worker-only/static configs. */
 export function selectWebBuildScript(resolvedAssetsDir, checkoutRoot) {
   if (!resolvedAssetsDir) return null;
-  const demoOut = join(realpathSync(checkoutRoot), "apps", "web", "dist-demo");
-  return resolvedAssetsDir === demoOut ? "build:demo" : "build";
+  const realRoot = realpathSync(checkoutRoot);
+  if (resolvedAssetsDir === join(realRoot, "apps", "web", "dist-demo")) return "build:demo";
+  if (resolvedAssetsDir === join(realRoot, "apps", "web", "dist")) return "build";
+  return null;
+}
+
+/** Parse `wrangler whoami --json` stdout and resolve the single target Cloudflare account. */
+export function resolveCloudflareAccount({ config, env = process.env, whoami = null }) {
+  const cfgId = typeof config.account_id === "string" ? config.account_id.trim() : "";
+  const envId = typeof env.CLOUDFLARE_ACCOUNT_ID === "string" ? env.CLOUDFLARE_ACCOUNT_ID.trim() : "";
+  if (cfgId && envId && cfgId !== envId) {
+    throw new Error(
+      `account_id in config (${cfgId}) conflicts with CLOUDFLARE_ACCOUNT_ID (${envId})`
+    );
+  }
+  const explicitId = cfgId || envId || null;
+  const accounts = Array.isArray(whoami?.accounts) ? whoami.accounts : [];
+
+  if (explicitId) {
+    const matched = accounts.find((a) => a && a.id === explicitId);
+    return matched
+      ? { id: matched.id, name: matched.name ?? null, label: `${matched.name} (${matched.id})` }
+      : { id: explicitId, name: null, label: `${explicitId} (configured)` };
+  }
+
+  if (!whoami || whoami.loggedIn !== true) {
+    throw new Error("could not determine Cloudflare account (run `wrangler login` or set account_id)");
+  }
+  if (accounts.length === 1) {
+    const acct = accounts[0];
+    return { id: acct.id, name: acct.name ?? null, label: `${acct.name} (${acct.id})` };
+  }
+  if (accounts.length > 1) {
+    throw new Error(
+      `multiple Cloudflare accounts (${accounts.map((a) => `${a.name} <${a.id}>`).join(", ")}); set account_id or CLOUDFLARE_ACCOUNT_ID explicitly`
+    );
+  }
+  throw new Error("wrangler whoami returned zero Cloudflare accounts");
+}
+
+function queryWranglerWhoami(apiDir, wranglerEnv) {
+  const res = spawnSync("pnpm", ["exec", "wrangler", "whoami", "--json"], {
+    cwd: apiDir,
+    env: wranglerEnv,
+    encoding: "utf8",
+  });
+  if (res.status !== 0) return null;
+  const raw = res.stdout ?? "";
+  const brace = raw.indexOf("{");
+  if (brace === -1) return null;
+  try {
+    return JSON.parse(raw.slice(brace));
+  } catch {
+    return null;
+  }
 }
 
 function summarizeBindings(config) {
@@ -307,13 +659,11 @@ function summarizeBindings(config) {
   return parts.join(", ") || "(none)";
 }
 
-/**
- * Format the resolved deploy configuration (including gitignored status,
- * SHA-256, resolved paths, bindings, routes, and redacted sorted vars) so
- * operators always inspect what is actually about to deploy.
- */
+/** Format full resolved deploy summary (environment, account, gitignored/tracked SHA-256, paths, bindings, vars). */
 export function formatResolvedConfig({
-  config,
+  effectiveConfig,
+  environment,
+  account,
   configPath,
   configSha256,
   gitignored,
@@ -327,8 +677,8 @@ export function formatResolvedConfig({
   const relConfig = relative(realRoot, configPath) || configPath;
   const relMain = resolvedMain ? relative(realRoot, resolvedMain) : "(none — assets only)";
   const relAssets = resolvedAssetsDir ? relative(realRoot, resolvedAssetsDir) : "(none)";
-  const hosts = (config.routes ?? []).map((r) => (typeof r === "string" ? r : r.pattern));
-  const vars = config.vars && typeof config.vars === "object" ? config.vars : {};
+  const hosts = (effectiveConfig.routes ?? []).map((r) => (typeof r === "string" ? r : r.pattern));
+  const vars = isPlainObject(effectiveConfig.vars) ? effectiveConfig.vars : {};
   const varEntries = Object.keys(vars)
     .sort()
     .map((key) => {
@@ -336,31 +686,47 @@ export function formatResolvedConfig({
       return `  ${key} = ${value}`;
     });
 
-  const lines = [
-    `Worker:   ${config.name ?? "(unnamed)"}`,
-    `Config:   ${relConfig} (${gitignored ? "gitignored" : "tracked"}, sha256 ${configSha256.slice(0, 12)})`,
-    `Main:     ${relMain}`,
-    `Assets:   ${relAssets}`,
-    `Routes:   ${hosts.join(", ") || "(none)"} (workers_dev: ${Boolean(config.workers_dev)})`,
-    `Bindings: ${summarizeBindings(config)}`,
-    `Commit:   ${head.slice(0, 7)} ${commitSubject}`,
+  return [
+    `Worker:      ${effectiveConfig.name ?? "(unnamed)"}`,
+    `Environment: ${environment ?? "(top-level)"}`,
+    `Account:     ${account?.label ?? "(unknown)"}`,
+    `Config:      ${relConfig} (${gitignored ? "gitignored" : "tracked"}, sha256 ${configSha256.slice(0, 12)})`,
+    `Main:        ${relMain}`,
+    `Assets:      ${relAssets}`,
+    `Routes:      ${hosts.join(", ") || "(none)"} (workers_dev: ${Boolean(effectiveConfig.workers_dev)})`,
+    `Bindings:    ${summarizeBindings(effectiveConfig)}`,
+    `Commit:      ${head.slice(0, 7)} ${commitSubject}`,
     `Vars:`,
     ...(varEntries.length > 0 ? varEntries : ["  (none)"]),
-  ];
-  return lines.join("\n");
+  ].join("\n");
 }
 
-function formatDialogSummary({ config, configPath, configSha256, gitignored, resolvedMain, resolvedAssetsDir, checkoutRoot, head, commitSubject }) {
+/** Compact summary shown inside the macOS human-presence confirmation dialog. */
+export function formatDialogSummary({
+  effectiveConfig,
+  environment,
+  account,
+  configPath,
+  configSha256,
+  gitignored,
+  resolvedMain,
+  resolvedAssetsDir,
+  checkoutRoot,
+  head,
+  commitSubject,
+}) {
   const realRoot = realpathSync(checkoutRoot);
-  const hosts = (config.routes ?? []).map((r) => (typeof r === "string" ? r : r.pattern));
-  const vars = config.vars && typeof config.vars === "object" ? config.vars : {};
+  const hosts = (effectiveConfig.routes ?? []).map((r) => (typeof r === "string" ? r : r.pattern));
+  const vars = isPlainObject(effectiveConfig.vars) ? effectiveConfig.vars : {};
   const keyVars = [
     `APP_HOSTNAME=${vars.APP_HOSTNAME ?? "(unset)"}`,
     `EMAIL_FROM=${vars.EMAIL_FROM ?? "(unset)"}`,
     `EMAIL_DRY_RUN=${vars.EMAIL_DRY_RUN ?? "(unset)"}`,
   ].join(", ");
   return [
-    `Worker: ${config.name}`,
+    `Worker: ${effectiveConfig.name ?? "(unnamed)"}`,
+    `Environment: ${environment ?? "(top-level)"}`,
+    `Account: ${account?.label ?? "(unknown)"}`,
     `Config: ${relative(realRoot, configPath)} (${gitignored ? "gitignored" : "tracked"}, sha256 ${configSha256.slice(0, 12)})`,
     `Main: ${resolvedMain ? relative(realRoot, resolvedMain) : "(none — assets only)"}`,
     `Assets: ${resolvedAssetsDir ? relative(realRoot, resolvedAssetsDir) : "(none)"}`,
@@ -370,27 +736,28 @@ function formatDialogSummary({ config, configPath, configSha256, gitignored, res
   ].join("\n");
 }
 
-async function humanApproval(summary) {
-  if (process.platform === "darwin") {
-    const text = `${summary}\n\nThis deploys to PRODUCTION.`
-      .replace(/\\/g, "\\\\")
-      .replace(/"/g, '\\"')
-      .replace(/\n/g, "\\n");
-    const script =
-      `display dialog "${text}" with title "Flow production deploy" ` +
-      `buttons {"Cancel", "Deploy"} default button "Cancel" cancel button "Cancel" ` +
-      `with icon caution giving up after 180`;
-    const result = spawnSync("osascript", ["-e", script], { encoding: "utf8" });
-    return result.status === 0 && /button returned:Deploy/.test(result.stdout) && !/gave up:true/.test(result.stdout);
+/**
+ * Request physical macOS human-presence approval via `/usr/bin/osascript`.
+ * Terminal prompts are NOT human presence; off macOS, refuse cleanly.
+ */
+export async function humanApproval(summary, opts = {}) {
+  const platform = opts.platform ?? process.platform;
+  const spawn = opts.spawn ?? spawnSync;
+  if (platform !== "darwin") {
+    throw new Error(
+      "guarded production deploy requires macOS (/usr/bin/osascript) human-presence approval; off macOS, build and deploy with wrangler directly"
+    );
   }
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    fail("approval needs the macOS dialog or an interactive terminal");
-  }
-  const code = randomBytes(3).toString("hex");
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await rl.question(`\n${summary}\n\nType ${code} to deploy to PRODUCTION: `);
-  rl.close();
-  return answer.trim() === code;
+  const text = `${summary}\n\nThis deploys to PRODUCTION.`
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n");
+  const script =
+    `display dialog "${text}" with title "Flow production deploy" ` +
+    `buttons {"Cancel", "Deploy"} default button "Cancel" cancel button "Cancel" ` +
+    `with icon caution giving up after 180`;
+  const result = spawn(OSASCRIPT_PATH, ["-e", script], { encoding: "utf8" });
+  return result.status === 0 && /button returned:Deploy/.test(result.stdout) && !/gave up:true/.test(result.stdout);
 }
 
 async function main() {
@@ -398,14 +765,21 @@ async function main() {
   const realRoot = realpathSync(root);
   const apiDir = join(realRoot, "apps", "api");
 
-  const requestedConfig = parseConfigArg(process.argv.slice(2), { root: realRoot });
-  const initial = validateDeployConfig(requestedConfig, realRoot);
-  assertDeployConfigEmailVars(initial.config);
+  const { configPath, envName } = parseDeployArgs(process.argv.slice(2), { root: realRoot });
+  const initial = validateDeployConfig(configPath, realRoot, { envName });
+  assertDeployConfigEmailVars(initial.effectiveConfig);
 
+  if (process.platform !== "darwin") {
+    fail(
+      "guarded production deploy requires macOS (/usr/bin/osascript) human-presence approval; off macOS, build and deploy with wrangler directly"
+    );
+  }
+
+  const wranglerEnv = sanitizedWranglerEnv(process.env);
   const git = (...args) => execFileSync("git", args, { cwd: realRoot, encoding: "utf8" }).trim();
-  const run = (label, cmd, args, cwd = realRoot) => {
+  const run = (label, cmd, args, cwd = realRoot, env = process.env) => {
     console.log(`\n→ ${label}`);
-    const result = spawnSync(cmd, args, { cwd, stdio: "inherit" });
+    const result = spawnSync(cmd, args, { cwd, env, stdio: "inherit" });
     if (result.status !== 0) fail(`${label} failed`);
   };
   const assertCheckout = (expectedHead) => {
@@ -418,7 +792,10 @@ async function main() {
     return current;
   };
   const assertConfigUnchanged = (expectedSha256) => {
-    const verified = validateDeployConfig(initial.configPath, realRoot, { requireAssetsExist: true });
+    const verified = validateDeployConfig(initial.configPath, realRoot, {
+      envName,
+      requireAssetsExist: true,
+    });
     if (verified.configSha256 !== expectedSha256) {
       fail("wrangler config changed while deploy checks were running");
     }
@@ -434,20 +811,30 @@ async function main() {
   run("tests", "pnpm", ["test"]);
 
   const buildScript = selectWebBuildScript(initial.resolvedAssetsDir, realRoot);
-  if (buildScript) {
+  if (buildScript && initial.resolvedAssetsDir) {
+    rmSync(initial.resolvedAssetsDir, { recursive: true, force: true });
     run(`web ${buildScript}`, "pnpm", ["--filter", "@flow/web", buildScript]);
   }
 
   const afterBuild = assertConfigUnchanged(initial.configSha256);
-  assertDeployConfigEmailVars(afterBuild.config);
+  assertDeployConfigEmailVars(afterBuild.effectiveConfig);
 
+  const whoami = queryWranglerWhoami(apiDir, wranglerEnv);
+  const account = resolveCloudflareAccount({
+    config: afterBuild.effectiveConfig,
+    env: wranglerEnv,
+    whoami,
+  });
+
+  const envFlags = envName ? ["--env", envName] : [];
   const dryRunDir = mkdtempSync(join(tmpdir(), "flow-deploy-"));
   try {
     run(
       "wrangler dry run",
       "pnpm",
-      ["exec", "wrangler", "deploy", "--dry-run", "--config", afterBuild.configPath, "--outdir", dryRunDir],
-      apiDir
+      ["exec", "wrangler", "deploy", "--dry-run", "--config", afterBuild.configPath, ...envFlags, "--outdir", dryRunDir],
+      apiDir,
+      wranglerEnv
     );
   } finally {
     rmSync(dryRunDir, { recursive: true, force: true });
@@ -457,20 +844,27 @@ async function main() {
   const gitignored = spawnSync("git", ["check-ignore", "-q", relConfig], { cwd: realRoot }).status === 0;
   const info = {
     ...afterBuild,
+    account,
     gitignored,
     checkoutRoot: realRoot,
     head,
     commitSubject: git("log", "-1", "--format=%s"),
   };
 
-  console.log(`\n${formatResolvedConfig(info)}\n\n→ waiting for approval (dialog on the Mac)`);
+  console.log(`\n${formatResolvedConfig(info)}\n\n→ waiting for approval (macOS dialog via ${OSASCRIPT_PATH})`);
   if (!(await humanApproval(formatDialogSummary(info)))) fail("not approved");
 
   assertCheckout(head);
   assertConfigUnchanged(initial.configSha256);
-  run("wrangler deploy", "pnpm", ["exec", "wrangler", "deploy", "--config", afterBuild.configPath], apiDir);
+  run(
+    "wrangler deploy",
+    "pnpm",
+    ["exec", "wrangler", "deploy", "--config", afterBuild.configPath, ...envFlags],
+    apiDir,
+    wranglerEnv
+  );
 
-  const hosts = (afterBuild.config.routes ?? []).map((r) => (typeof r === "string" ? r : r.pattern));
+  const hosts = (afterBuild.effectiveConfig.routes ?? []).map((r) => (typeof r === "string" ? r : r.pattern));
   for (const host of hosts) {
     try {
       const res = await fetch(`https://${host.replace(/\/\*$/, "")}/api/health`);

@@ -143,8 +143,11 @@ cd apps/api
 pnpm exec wrangler r2 bucket create flow-attachments
 pnpm exec wrangler queues create flow-side-effects
 pnpm exec wrangler queues create flow-dlq
-pnpm run deploy  # guarded deploy: checks clean main, builds SPA, shows resolved config, deploys Worker
+cd ../..
+pnpm run deploy  # macOS guarded deploy: checks clean main, builds SPA, shows resolved config + account, asks macOS approval
 ```
+
+Off macOS (Linux/Windows self-hosters), `pnpm run deploy` refuses because it requires macOS `/usr/bin/osascript` human-presence confirmation; build the SPA and deploy with Wrangler directly (`pnpm --filter @flow/web build && pnpm --filter @flow/api exec wrangler deploy`). For the **Deploy to Cloudflare** button (Workers Builds on Linux), set the Build command to `pnpm run build` and Deploy command to `pnpm --filter @flow/api exec wrangler deploy --config ../../wrangler.jsonc`.
 
 The full runbook — custom domain, Cloudflare Access application setup, email sending, first-user bootstrap — is in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md).
 
