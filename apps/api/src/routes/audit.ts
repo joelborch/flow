@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { requireAdmin } from "../auth.js";
-import { queryAudit } from "../do.js";
+import { workspace } from "../do.js";
 import type { AppEnv } from "../env.js";
 import { parseOrThrow } from "../errors.js";
 
@@ -31,5 +31,6 @@ auditRoutes.get("/audit", async (c) => {
     if (value !== "") raw[key] = value;
   }
   const filter = parseOrThrow(AuditQuery, raw, "audit query params");
-  return c.json(await queryAudit(c.env, filter));
+  const { entries, nextBefore } = await workspace(c.env).getAuditLog(filter);
+  return c.json({ entries, cursor: nextBefore });
 });

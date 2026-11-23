@@ -259,57 +259,64 @@ export async function moveTask(input: MoveTaskInput): Promise<void> {
   }
 }
 
-export async function toggleSubtask(subtaskId: string, done: boolean): Promise<void> {
+async function optimisticSubtask(
+  subtaskId: string,
+  nextOf: (prev: Subtask) => Subtask | null,
+  call: () => Promise<Subtask>,
+  errorPrefix: string
+): Promise<void> {
   const prev = getSubtask(subtaskId);
   if (!prev) return;
-  putSubtask({ ...prev, done });
+  const optimistic = nextOf(prev);
+  if (!optimistic) return;
+  putSubtask(optimistic);
   flush();
   try {
-    putSubtask(await api.toggleSubtask(subtaskId, done));
+    putSubtask(await call());
     flush();
   } catch (err) {
     putSubtask(prev);
     flush();
-    toast(`Couldn't update the subtask — ${reason(err)}`, "error");
+    toast(`${errorPrefix} — ${reason(err)}`, "error");
   }
+}
+
+export async function toggleSubtask(subtaskId: string, done: boolean): Promise<void> {
+  return optimisticSubtask(
+    subtaskId,
+    (prev) => ({ ...prev, done }),
+    () => api.toggleSubtask(subtaskId, done),
+    "Couldn't update the subtask"
+  );
 }
 
 export async function setSubtaskAssignee(
   subtaskId: string,
   assigneeId: string | null
 ): Promise<void> {
-  const prev = getSubtask(subtaskId);
-  if (!prev || prev.assigneeId === assigneeId) return;
-  putSubtask({
-    ...prev,
-    assigneeId,
-    assignedBy: assigneeId === null ? null : (me.value?.id ?? null),
-    assignedAt: assigneeId === null ? null : Date.now(),
-  });
-  flush();
-  try {
-    putSubtask(await api.setSubtaskAssignee(subtaskId, assigneeId));
-    flush();
-  } catch (err) {
-    putSubtask(prev);
-    flush();
-    toast(`Couldn't assign the subtask — ${reason(err)}`, "error");
-  }
+  return optimisticSubtask(
+    subtaskId,
+    (prev) =>
+      prev.assigneeId === assigneeId
+        ? null
+        : {
+            ...prev,
+            assigneeId,
+            assignedBy: assigneeId === null ? null : (me.value?.id ?? null),
+            assignedAt: assigneeId === null ? null : Date.now(),
+          },
+    () => api.setSubtaskAssignee(subtaskId, assigneeId),
+    "Couldn't assign the subtask"
+  );
 }
 
 export async function setSubtaskNote(subtaskId: string, note: string | null): Promise<void> {
-  const prev = getSubtask(subtaskId);
-  if (!prev || (prev.note ?? null) === note) return;
-  putSubtask({ ...prev, note });
-  flush();
-  try {
-    putSubtask(await api.setSubtaskNote(subtaskId, note));
-    flush();
-  } catch (err) {
-    putSubtask(prev);
-    flush();
-    toast(`Couldn't save the note — ${reason(err)}`, "error");
-  }
+  return optimisticSubtask(
+    subtaskId,
+    (prev) => ((prev.note ?? null) === note ? null : { ...prev, note }),
+    () => api.setSubtaskNote(subtaskId, note),
+    "Couldn't save the note"
+  );
 }
 
 export async function createSubtask(taskId: string, title: string): Promise<void> {

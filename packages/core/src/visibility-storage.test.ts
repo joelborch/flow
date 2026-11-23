@@ -10,6 +10,7 @@ import {
   type ServerMsg,
 } from "@flow/shared";
 import { QUERY_MEMBER_PER_MINUTE } from "./query.js";
+import { fakeCtx } from "./testkit.js";
 
 // ---------------------------------------------------------------------------
 // Storage-level per-space permission tests against the real Workspace class.
@@ -30,84 +31,6 @@ import { QUERY_MEMBER_PER_MINUTE } from "./query.js";
 // real Workspace runs against node:sqlite. INSERT ... RETURNING is routed
 // through .all() because these tests exercise delta-emitting mutations.
 // ---------------------------------------------------------------------------
-
-vi.mock("cloudflare:workers", () => ({
-  DurableObject: class {
-    ctx: unknown;
-    env: unknown;
-    constructor(ctx: unknown, env: unknown) {
-      this.ctx = ctx;
-      this.env = env;
-    }
-  },
-}));
-
-function sqliteStorage(db: DatabaseSync): SqlStorage {
-  const exec = (query: string, ...params: unknown[]): unknown => {
-    const returnsRows = /^\s*(SELECT|WITH)/i.test(query) || /RETURNING/i.test(query);
-    if (!returnsRows) {
-      db.prepare(query).run(...(params as never[]));
-      return { toArray: () => [], one: () => undefined };
-    }
-    const rows = db.prepare(query).all(...(params as never[]));
-    return {
-      // raw() and columnNames are what runReadOnlyQuery reads.
-      raw: () => {
-        const arrays = db.prepare(query);
-        arrays.setReturnArrays(true);
-        return (arrays.all(...(params as never[])) as unknown[])[Symbol.iterator]();
-      },
-      get columnNames() {
-        return db.prepare(query).columns().map((c) => c.name);
-      },
-      toArray: () => rows,
-      one: () => {
-        if (rows.length !== 1) throw new Error(`expected 1 row, got ${rows.length}`);
-        return rows[0];
-      },
-    };
-  };
-  return { exec } as unknown as SqlStorage;
-}
-
-/**
- * `getWebSockets`/`acceptWebSocket` track pushed-in fake sockets so tests can
- * assert on live `broadcastDeltas` (not just the pull-based replay/snapshot
- * paths covered elsewhere). No existing test calls `acceptWebSocket`, so this
- * stays an empty array — and broadcast a no-op — for all of them.
- */
-function fakeCtx(db: DatabaseSync): DurableObjectState {
-  const sockets: WebSocket[] = [];
-  return {
-    id: { toString: () => "do_test" },
-    storage: {
-      sql: sqliteStorage(db),
-      getAlarm: async () => null,
-      setAlarm: async () => undefined,
-      // Migrations run inside storage.transactionSync in production; emulate
-      // its throws-roll-back contract with a node:sqlite savepoint (explicit
-      // savepoints are legal here, unlike in workerd's sql.exec).
-      transactionSync: <T,>(fn: () => T): T => {
-        db.prepare("SAVEPOINT _txn").run();
-        try {
-          const result = fn();
-          db.prepare("RELEASE _txn").run();
-          return result;
-        } catch (err) {
-          db.prepare("ROLLBACK TO _txn").run();
-          db.prepare("RELEASE _txn").run();
-          throw err;
-        }
-      },
-    },
-    blockConcurrencyWhile: async <T>(fn: () => Promise<T> | T): Promise<T> => fn(),
-    waitUntil: () => undefined,
-    getWebSockets: () => sockets,
-    acceptWebSocket: (ws: WebSocket) => {
-      sockets.push(ws);
-    },
-  } as unknown as DurableObjectState;
-}
 
 /** A hibernated-socket stand-in: an identity plus a transcript of frames. */
 function fakeSocket(userId: string): { ws: WebSocket; frames: ServerMsg[] } {

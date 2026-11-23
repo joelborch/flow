@@ -2,15 +2,15 @@
 import PostalMime, { decodeWords, type Email } from "postal-mime";
 import {
   EMAIL_INGEST_PERMANENT_ERROR,
+  SYNTHETIC_ID_PREFIX,
   messageIdsIn,
   normalizeMessageId,
   type EmailIngestAttachment,
   type EmailIntakeCheck,
   type IngestEmailInput,
   type IngestEmailResult,
-} from "@flow/core";
+} from "@flow/core/email-intake";
 import { id, ID_PREFIX } from "@flow/core/id";
-import { SYNTHETIC_ID_PREFIX } from "@flow/core/email-intake";
 import { LIMITS, type Actor } from "@flow/shared";
 import { findOwnerActor } from "./auth.js";
 import { workspace } from "./do.js";

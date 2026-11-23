@@ -8,20 +8,7 @@ import type { Actor, Status } from "@flow/shared";
 import { workspace, type WorkspaceApi } from "../do.js";
 import type { AuthContext, Env } from "../env.js";
 
-/**
- * `Workspace.getWorkspaceMap()` exists in packages/core precisely for
- * `flow_get_workspace_map` and for the id -> name resolution below (it is the
- * hierarchy plus statuses and users, with no task rows), but `WorkspaceApi` in
- * `src/do.ts` does not list it yet and that file belongs to another owner. The
- * shape is taken straight from the DO's own return type so this cannot drift,
- * and the assertion is confined to `workspaceWithMap` below.
- */
 export type WorkspaceMap = ReturnType<Workspace["getWorkspaceMap"]>;
-type WorkspaceMapRpc = { getWorkspaceMap(forUserId?: string): Promise<WorkspaceMap> };
-
-function workspaceWithMap(env: Env): WorkspaceApi & WorkspaceMapRpc {
-  return workspace(env) as WorkspaceApi & WorkspaceMapRpc;
-}
 
 /** Id -> human name lookups. Every miss degrades to the raw id, never to null. */
 export type NameIndex = {
@@ -60,7 +47,7 @@ export function buildNameIndex(map: WorkspaceMap): NameIndex {
  * calls three tools costs at most one extra `getWorkspaceMap()` RPC in total.
  */
 export class ToolContext {
-  readonly ws: WorkspaceApi & WorkspaceMapRpc;
+  readonly ws: WorkspaceApi;
   private mapPromise: Promise<WorkspaceMap> | null = null;
   private indexPromise: Promise<NameIndex> | null = null;
 
@@ -68,7 +55,7 @@ export class ToolContext {
     readonly env: Env,
     readonly auth: AuthContext
   ) {
-    this.ws = workspaceWithMap(env);
+    this.ws = workspace(env);
   }
 
   /**

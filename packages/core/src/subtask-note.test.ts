@@ -7,6 +7,7 @@ import {
   CreateTaskInput,
   UpdateSubtaskInput,
 } from "@flow/shared";
+import { fakeCtx } from "./testkit.js";
 
 // ---------------------------------------------------------------------------
 // The subtask `note` column (core-0009) round-tripped through the real
@@ -15,63 +16,6 @@ import {
 // visibility-storage.test.ts: `cloudflare:workers` is mocked so the real
 // Workspace runs against node:sqlite.
 // ---------------------------------------------------------------------------
-
-vi.mock("cloudflare:workers", () => ({
-  DurableObject: class {
-    ctx: unknown;
-    env: unknown;
-    constructor(ctx: unknown, env: unknown) {
-      this.ctx = ctx;
-      this.env = env;
-    }
-  },
-}));
-
-function sqliteStorage(db: DatabaseSync): SqlStorage {
-  const exec = (query: string, ...params: unknown[]): unknown => {
-    const returnsRows = /^\s*SELECT/i.test(query) || /RETURNING/i.test(query);
-    if (!returnsRows) {
-      db.prepare(query).run(...(params as never[]));
-      return { toArray: () => [], one: () => undefined };
-    }
-    const rows = db.prepare(query).all(...(params as never[]));
-    return {
-      toArray: () => rows,
-      one: () => {
-        if (rows.length !== 1) throw new Error(`expected 1 row, got ${rows.length}`);
-        return rows[0];
-      },
-    };
-  };
-  return { exec } as unknown as SqlStorage;
-}
-
-function fakeCtx(db: DatabaseSync): DurableObjectState {
-  return {
-    id: { toString: () => "do_test" },
-    storage: {
-      sql: sqliteStorage(db),
-      getAlarm: async () => null,
-      setAlarm: async () => undefined,
-      transactionSync: <T,>(fn: () => T): T => {
-        db.prepare("SAVEPOINT _txn").run();
-        try {
-          const result = fn();
-          db.prepare("RELEASE _txn").run();
-          return result;
-        } catch (err) {
-          db.prepare("ROLLBACK TO _txn").run();
-          db.prepare("RELEASE _txn").run();
-          throw err;
-        }
-      },
-    },
-    blockConcurrencyWhile: async <T>(fn: () => Promise<T> | T): Promise<T> => fn(),
-    waitUntil: () => undefined,
-    getWebSockets: () => [],
-    acceptWebSocket: () => undefined,
-  } as unknown as DurableObjectState;
-}
 
 const OWNER = "us_owner";
 

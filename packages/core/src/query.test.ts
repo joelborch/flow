@@ -10,6 +10,7 @@ import {
   runReadOnlyQuery,
 } from "./query.js";
 import { runMigrations } from "./schema.js";
+import { sqliteStorage } from "./testkit.js";
 
 // The read-only query gate (POST /api/query, MCP flow_query). prepareQuery is
 // the security boundary, so most of these are refusals; the runReadOnlyQuery
@@ -115,26 +116,6 @@ describe("prepareQuery: what it allows", () => {
     expect(merged).toContain("n(i) AS (SELECT 1");
   });
 });
-
-/** SqlStorage over node:sqlite, with the raw()/columnNames cursor runReadOnlyQuery reads. */
-function sqliteStorage(db: DatabaseSync): SqlStorage {
-  const exec = (query: string, ...params: unknown[]): unknown => {
-    if (!/^\s*(SELECT|WITH)/i.test(query)) {
-      db.prepare(query).run(...(params as never[]));
-      return { toArray: () => [], one: () => undefined, raw: () => [][Symbol.iterator](), columnNames: [] };
-    }
-    const objects = db.prepare(query).all(...(params as never[]));
-    const arrays = db.prepare(query);
-    arrays.setReturnArrays(true);
-    return {
-      toArray: () => objects,
-      one: () => objects[0],
-      raw: () => (arrays.all(...(params as never[])) as unknown as unknown[][])[Symbol.iterator](),
-      columnNames: arrays.columns().map((c) => c.name),
-    };
-  };
-  return { exec } as unknown as SqlStorage;
-}
 
 describe("runReadOnlyQuery against the real schema", () => {
   let db: DatabaseSync;

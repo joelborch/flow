@@ -8,7 +8,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { MCP_TOOLS, type McpToolName, type Task } from "@flow/shared";
-import { queryAudit } from "../do.js";
 import { ApiError, parseOrThrow } from "../errors.js";
 import { ToolContext } from "./context.js";
 import {
@@ -352,12 +351,16 @@ export function registerFlowTools(server: McpServer, ctx: ToolContext): void {
         // Same gate as GET /api/audit — the trail spans every space, including
         // ones the calling member cannot see.
         requireAdminRole(ctx);
+        const beforeParam = cursor ?? before;
         const [page, names] = await Promise.all([
-          queryAudit(ctx.env, { ...filter, before: cursor ?? before }),
+          ctx.ws.getAuditLog({
+            ...filter,
+            ...(beforeParam !== undefined ? { before: beforeParam } : {}),
+          }),
           ctx.names(),
         ]);
         return {
-          cursor: page.cursor,
+          cursor: page.nextBefore,
           entries: page.entries.map((entry) => ({
             id: entry.id,
             at: entry.at,

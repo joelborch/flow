@@ -66,6 +66,7 @@ import type {
 import {
   EMAIL_INTAKE_HOURLY_LIMIT,
   EMAIL_INTAKE_LIST_HOURLY_LIMIT,
+  EMAIL_INGEST_PERMANENT_ERROR,
   EMAIL_INTAKE_TAG,
   EMAIL_INTAKE_UNVERIFIED_TAG,
   EMAIL_REPLY_REFERENCE_LIMIT,
@@ -200,9 +201,9 @@ export type {
   EmailIngestAttachment, EmailIntakeCheck, IngestEmailInput, IngestEmailResult,
 } from "./email-intake.js";
 export {
-  EMAIL_INTAKE_HOURLY_LIMIT, EMAIL_INTAKE_LIST_HOURLY_LIMIT, EMAIL_INTAKE_TAG, EMAIL_INTAKE_UNVERIFIED_TAG,
-  EMAIL_REPLY_REFERENCE_LIMIT, SYNTHETIC_ID_PREFIX, messageIdsIn, normalizeMessageId, replySubject,
-  senderAllowed, type EmailReplyTarget,
+  EMAIL_INGEST_PERMANENT_ERROR, EMAIL_INTAKE_HOURLY_LIMIT, EMAIL_INTAKE_LIST_HOURLY_LIMIT,
+  EMAIL_INTAKE_TAG, EMAIL_INTAKE_UNVERIFIED_TAG, EMAIL_REPLY_REFERENCE_LIMIT, SYNTHETIC_ID_PREFIX,
+  messageIdsIn, normalizeMessageId, replySubject, senderAllowed, type EmailReplyTarget,
 } from "./email-intake.js";
 export { ID_PREFIX, INBOUND_TOKEN_PREFIX, id, token } from "./id.js";
 export { HANDOFF_TAG, OPEN_HANDOFF_STATES } from "./handoffs.js";
@@ -372,6 +373,14 @@ const API_KEY_COLUMNS = `id, user_id, name, token_hash, created_at, last_used_at
 /** Every comment read goes through this; `email_*` is core-0014-email-replies. */
 const COMMENT_COLUMNS = `id, task_id, author_id, body, created_at, via, email_to, email_status`;
 
+const USER_COLUMNS = `id, email, name, role, deactivated, created_at, needs_email_update, clickup_id`;
+
+const SUBTASK_COLUMNS = `id, task_id, title, done, assignee_id, assigned_by, assigned_at,
+  due_date, note, position, created_at`;
+
+const ATTACHMENT_COLUMNS = `id, task_id, filename, r2_key, storage_provider, drive_file_id,
+  drive_web_view_link, drive_destination, migration_state, size, mime_type, uploaded_by, created_at`;
+
 /** The window both email rate limits count over. */
 const EMAIL_RATE_WINDOW_MS = 3_600_000;
 
@@ -381,15 +390,6 @@ const EMAIL_RATE_WINDOW_MS = 3_600_000;
  * queries on what a sender put in a header.
  */
 const EMAIL_THREAD_REFERENCE_LIMIT = 20;
-
-/**
- * Prefix of every error ingestEmail throws for a condition no retry can fix:
- * no Message-ID, an attachment id already in use, or an inbound actor that may
- * not write to the target list or task. The Worker matches it to reject the
- * message outright instead of asking the sending server to try again; any
- * other throw is treated as transient.
- */
-export const EMAIL_INGEST_PERMANENT_ERROR = "Email intake permanent failure";
 
 const permanentEmailError = (detail: string): Error =>
   new Error(`${EMAIL_INGEST_PERMANENT_ERROR}: ${detail}`);
@@ -1065,11 +1065,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
   private userById(userId: string): User | null {
     const row = this.sql
-      .exec<UserRow>(
-        `SELECT id, email, name, role, deactivated, created_at, needs_email_update, clickup_id
-         FROM users WHERE id = ?`,
-        userId
-      )
+      .exec<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`, userId)
       .toArray()[0];
     return row ? toUser(row) : null;
   }
@@ -1401,40 +1397,17 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     );
   }
 
-  private spaceIdForSubtask(subtaskId: string): string | null {
+  private spaceIdForChild(
+    table: "subtasks" | "comments" | "attachments",
+    childId: string
+  ): string | null {
     return (
       this.sql
         .exec<{ space_id: string }>(
-          `SELECT l.space_id AS space_id FROM subtasks s
-             JOIN tasks t ON t.id = s.task_id JOIN lists l ON l.id = t.list_id
-           WHERE s.id = ?`,
-          subtaskId
-        )
-        .toArray()[0]?.space_id ?? null
-    );
-  }
-
-  private spaceIdForComment(commentId: string): string | null {
-    return (
-      this.sql
-        .exec<{ space_id: string }>(
-          `SELECT l.space_id AS space_id FROM comments c
+          `SELECT l.space_id AS space_id FROM ${table} c
              JOIN tasks t ON t.id = c.task_id JOIN lists l ON l.id = t.list_id
            WHERE c.id = ?`,
-          commentId
-        )
-        .toArray()[0]?.space_id ?? null
-    );
-  }
-
-  private spaceIdForAttachment(attachmentId: string): string | null {
-    return (
-      this.sql
-        .exec<{ space_id: string }>(
-          `SELECT l.space_id AS space_id FROM attachments a
-             JOIN tasks t ON t.id = a.task_id JOIN lists l ON l.id = t.list_id
-           WHERE a.id = ?`,
-          attachmentId
+          childId
         )
         .toArray()[0]?.space_id ?? null
     );
@@ -1442,14 +1415,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
   /**
    * The space a delta belongs to, for the per-connection broadcast filter.
-   *
-   * `user` deltas belong to no space and go to everyone. `automation_rule`
-   * deltas belong to no space either, but they are owner/admin-only — the
-   * broadcast and replay paths gate them via `isPrivilegedDeltaEntity`, not
-   * via a space id.
-   * Child-entity deltas resolve through their parent task, which is why `emit`
-   * passes `taskId` along — a subtask id joined back to a space would be a
-   * three-table hop that a delete delta could no longer make anyway.
+   * `user` deltas go to everyone; `automation_rule` deltas gate on role.
    */
   private spaceIdForDelta(
     entity: Delta["entity"],
@@ -1467,11 +1433,10 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       case "comment":
       case "attachment":
         if (taskId !== undefined) return this.spaceIdForTask(taskId);
-        return entity === "subtask"
-          ? this.spaceIdForSubtask(entityId)
-          : entity === "comment"
-            ? this.spaceIdForComment(entityId)
-            : this.spaceIdForAttachment(entityId);
+        return this.spaceIdForChild(
+          entity === "subtask" ? "subtasks" : entity === "comment" ? "comments" : "attachments",
+          entityId
+        );
       default:
         return null;
     }
@@ -1770,31 +1735,20 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
   listUsers(): User[] {
     return this.sql
-      .exec<UserRow>(
-        `SELECT id, email, name, role, deactivated, created_at, needs_email_update, clickup_id
-         FROM users ORDER BY created_at`
-      )
+      .exec<UserRow>(`SELECT ${USER_COLUMNS} FROM users ORDER BY created_at`)
       .toArray()
       .map(toUser);
   }
 
   getUserByEmail(email: string): User | null {
     const row = this.sql
-      .exec<UserRow>(
-        `SELECT id, email, name, role, deactivated, created_at, needs_email_update, clickup_id
-         FROM users WHERE lower(email) = lower(?)`,
-        email.trim()
-      )
+      .exec<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE lower(email) = lower(?)`, email.trim())
       .toArray()[0];
     return row ? toUser(row) : null;
   }
 
   /**
-   * First-login bootstrap. The schema seed can't read env, so a fresh
-   * workspace holds one owner at owner@placeholder.flow. When the operator's
-   * OWNER_EMAIL authenticates for the first time, it claims that seeded row —
-   * same user id, real email, needs_email_update cleared — instead of being
-   * turned away at the door. A no-op once the workspace has real users.
+   * First-login bootstrap: lets OWNER_EMAIL claim the seeded owner@placeholder.flow row.
    */
   claimOwner(email: string): User | null {
     const trimmed = email.trim();
@@ -1808,12 +1762,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
   listSubtasks(taskId: string): Subtask[] {
     return this.sql
-      .exec<SubtaskRow>(
-        `SELECT id, task_id, title, done, assignee_id, assigned_by, assigned_at,
-                due_date, note, position, created_at
-         FROM subtasks WHERE task_id = ? ORDER BY position`,
-        taskId
-      )
+      .exec<SubtaskRow>(`SELECT ${SUBTASK_COLUMNS} FROM subtasks WHERE task_id = ? ORDER BY position`, taskId)
       .toArray()
       .map(toSubtask);
   }
@@ -1831,10 +1780,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   listAttachments(taskId: string): Attachment[] {
     return this.sql
       .exec<AttachmentRow>(
-        `SELECT id, task_id, filename, r2_key, storage_provider, drive_file_id,
-                drive_web_view_link, drive_destination, migration_state,
-                size, mime_type, uploaded_by, created_at
-         FROM attachments WHERE task_id = ? ORDER BY created_at`,
+        `SELECT ${ATTACHMENT_COLUMNS} FROM attachments WHERE task_id = ? ORDER BY created_at`,
         taskId
       )
       .toArray()
@@ -1844,13 +1790,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   /** Single attachment row — the api Worker needs r2Key to stream a download. */
   getAttachment(attachmentId: string): Attachment | null {
     const row = this.sql
-      .exec<AttachmentRow>(
-        `SELECT id, task_id, filename, r2_key, storage_provider, drive_file_id,
-                drive_web_view_link, drive_destination, migration_state,
-                size, mime_type, uploaded_by, created_at
-         FROM attachments WHERE id = ?`,
-        attachmentId
-      )
+      .exec<AttachmentRow>(`SELECT ${ATTACHMENT_COLUMNS} FROM attachments WHERE id = ?`, attachmentId)
       .toArray()[0];
     return row ? toAttachment(row) : null;
   }
@@ -1968,6 +1908,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       apiKeyId?: string;
       /** Keyset cursor: the previous page's `nextBefore`. */
       before?: number;
+      /** Inclusive lower timestamp bound (`at >= after`). */
+      after?: number;
       limit?: number;
     } = {}
   ): { entries: AuditEntry[]; nextBefore: number | null } {
@@ -1992,6 +1934,10 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     if (filter.before !== undefined) {
       where.push("id < ?");
       params.push(filter.before);
+    }
+    if (filter.after !== undefined) {
+      where.push("at >= ?");
+      params.push(filter.after);
     }
     const limit = Math.min(Math.max(filter.limit ?? 100, 1), 500);
     const rows = this.sql
@@ -2596,33 +2542,21 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     return this.runTurn(toActor(actor), (t) => {
       const before = this.requireSubtask(input.subtaskId);
       this.assertTaskWritable(t.actor, before.taskId);
-      const sets: string[] = [];
-      const params: SqlStorageValue[] = [];
-      if (input.title !== undefined && input.title !== before.title) {
-        sets.push("title = ?");
-        params.push(input.title);
-      }
+      const p = sqlPatch();
+      p.setIf(input.title, before.title, "title");
       if (input.assigneeId !== undefined && (input.assigneeId ?? null) !== before.assigneeId) {
         requireAssignee(this.sql, input.assigneeId);
         const assigneeId = input.assigneeId ?? null;
         const assignedBy = this.humanAssigner(t, assigneeId);
-        sets.push("assignee_id = ?", "assigned_by = ?", "assigned_at = ?");
-        params.push(assigneeId, assignedBy, assignedBy === null ? null : t.now);
+        p.set("assignee_id", assigneeId);
+        p.set("assigned_by", assignedBy);
+        p.set("assigned_at", assignedBy === null ? null : t.now);
       }
-      if (input.dueDate !== undefined && (input.dueDate ?? null) !== before.dueDate) {
-        sets.push("due_date = ?");
-        params.push(input.dueDate ?? null);
-      }
-      if (input.note !== undefined && (input.note ?? null) !== before.note) {
-        sets.push("note = ?");
-        params.push(input.note ?? null);
-      }
-      if (input.position !== undefined && input.position !== before.position) {
-        sets.push("position = ?");
-        params.push(input.position);
-      }
-      if (sets.length === 0) return before;
-      this.sql.exec(`UPDATE subtasks SET ${sets.join(", ")} WHERE id = ?`, ...params, before.id);
+      p.setNullable(input.dueDate, before.dueDate, "due_date");
+      p.setNullable(input.note, before.note, "note");
+      p.setIf(input.position, before.position, "position");
+      if (p.sets.length === 0) return before;
+      this.sql.exec(`UPDATE subtasks SET ${p.sets.join(", ")} WHERE id = ?`, ...p.params, before.id);
       const after = this.requireSubtask(before.id);
       const patch = diffOf(
         before as unknown as Record<string, unknown>,
@@ -3257,16 +3191,9 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    */
   deleteAttachment(attachmentId: string, actor: string | Actor): { ok: true; r2Key: string } {
     return this.runTurn(toActor(actor), (t) => {
-      const rows = this.sql
-        .exec<AttachmentRow>(
-          `SELECT id, task_id, filename, r2_key, storage_provider, drive_file_id,
-                  drive_web_view_link, drive_destination, migration_state,
-                  size, mime_type, uploaded_by, created_at
-           FROM attachments WHERE id = ?`,
-          attachmentId
-        )
-        .toArray();
-      const row = rows[0];
+      const row = this.sql
+        .exec<AttachmentRow>(`SELECT ${ATTACHMENT_COLUMNS} FROM attachments WHERE id = ?`, attachmentId)
+        .toArray()[0];
       if (!row) throw new Error(`Attachment ${attachmentId} not found.`);
       this.assertTaskWritable(t.actor, row.task_id);
       const spaceId = this.spaceIdForTask(row.task_id);
@@ -3335,26 +3262,13 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   ): Space {
     return this.runTurn(toActor(actor), (t) => {
       const before = this.requireSpace(input.spaceId);
-      const sets: string[] = [];
-      const params: SqlStorageValue[] = [];
-      if (input.name !== undefined && input.name !== before.name) {
-        sets.push("name = ?");
-        params.push(input.name);
-      }
-      if (input.color !== undefined && (input.color ?? null) !== before.color) {
-        sets.push("color = ?");
-        params.push(input.color ?? null);
-      }
-      if (input.archived !== undefined && input.archived !== before.archived) {
-        sets.push("archived = ?");
-        params.push(input.archived ? 1 : 0);
-      }
-      if (input.position !== undefined && input.position !== before.position) {
-        sets.push("position = ?");
-        params.push(input.position);
-      }
-      if (sets.length === 0) return before;
-      this.sql.exec(`UPDATE spaces SET ${sets.join(", ")} WHERE id = ?`, ...params, before.id);
+      const p = sqlPatch();
+      p.setIf(input.name, before.name, "name");
+      p.setNullable(input.color, before.color, "color");
+      p.setIf(input.archived === undefined ? undefined : input.archived ? 1 : 0, before.archived ? 1 : 0, "archived");
+      p.setIf(input.position, before.position, "position");
+      if (p.sets.length === 0) return before;
+      this.sql.exec(`UPDATE spaces SET ${p.sets.join(", ")} WHERE id = ?`, ...p.params, before.id);
       const after = this.requireSpace(before.id);
       const patch = diffOf(
         before as unknown as Record<string, unknown>,
@@ -3368,16 +3282,9 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   }
 
   /**
-   * Flip a space between workspace-wide and private.
-   *
-   * Going private auto-adds the space's creator, so an admin cannot lock the
-   * person who built the space out of it with one click. Spaces from the ClickUp
-   * import have no recorded creator, and there the acting admin is added
-   * instead — the space needs at least one member, and the person doing the
-   * flip is the honest answer.
-   *
-   * The change cannot be expressed as a patch for clients whose view of the
-   * space just changed, so they are told to resync (see `resyncFor`).
+   * Flip visibility between workspace and private; going private ensures at
+   * least one member (creator, or acting admin if created_by is null) and
+   * triggers client resync.
    */
   setSpaceVisibility(
     input: { spaceId: string; visibility: SpaceVisibility },
@@ -3548,27 +3455,16 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       this.assertSpaceWritable(t.actor, row.space_id);
       if (input.spaceId !== undefined) this.assertSpaceWritable(t.actor, input.spaceId);
       const before = toList(row, listStatuses(this.sql, row.id));
-      const sets: string[] = [];
-      const params: SqlStorageValue[] = [];
-      if (input.name !== undefined && input.name !== before.name) {
-        sets.push("name = ?");
-        params.push(input.name);
-      }
-      if (input.archived !== undefined && input.archived !== before.archived) {
-        sets.push("archived = ?");
-        params.push(input.archived ? 1 : 0);
-      }
-      if (input.position !== undefined && input.position !== before.position) {
-        sets.push("position = ?");
-        params.push(input.position);
-      }
+      const p = sqlPatch();
+      p.setIf(input.name, before.name, "name");
+      p.setIf(input.archived === undefined ? undefined : input.archived ? 1 : 0, before.archived ? 1 : 0, "archived");
+      p.setIf(input.position, before.position, "position");
       if (input.spaceId !== undefined && input.spaceId !== before.spaceId) {
         this.requireSpace(input.spaceId);
-        sets.push("space_id = ?");
-        params.push(input.spaceId);
+        p.set("space_id", input.spaceId);
       }
-      if (sets.length === 0) return before;
-      this.sql.exec(`UPDATE lists SET ${sets.join(", ")} WHERE id = ?`, ...params, before.id);
+      if (p.sets.length === 0) return before;
+      this.sql.exec(`UPDATE lists SET ${p.sets.join(", ")} WHERE id = ?`, ...p.params, before.id);
       const after = toList(this.requireListRow(before.id), listStatuses(this.sql, before.id));
       const patch = diffOf(
         before as unknown as Record<string, unknown>,
@@ -3982,7 +3878,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     const email = input.email.trim();
     const existingRows = this.sql
       .exec<UserRow>(
-        `SELECT id, email, name, role, deactivated, created_at, needs_email_update, clickup_id
+        `SELECT ${USER_COLUMNS}
          FROM users WHERE ${input.id !== undefined ? "id = ?" : "lower(email) = lower(?)"}`,
         input.id ?? email
       )
@@ -4017,38 +3913,23 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     }
 
     const before = toUser(existing);
-    const sets: string[] = [];
-    const params: SqlStorageValue[] = [];
+    const p = sqlPatch();
     if (email !== "" && email.toLowerCase() !== before.email.toLowerCase()) {
-      sets.push("email = ?", "needs_email_update = ?");
-      params.push(email, email.endsWith("@placeholder.flow") ? 1 : 0);
+      p.set("email", email);
+      p.set("needs_email_update", email.endsWith("@placeholder.flow") ? 1 : 0);
     }
-    if (input.name !== undefined && input.name !== before.name) {
-      sets.push("name = ?");
-      params.push(input.name);
-    }
-    if (input.role !== undefined && input.role !== before.role) {
-      sets.push("role = ?");
-      params.push(input.role);
-    }
-    if (input.deactivated !== undefined && input.deactivated !== before.deactivated) {
-      sets.push("deactivated = ?");
-      params.push(input.deactivated ? 1 : 0);
-    }
-    if (input.clickupId !== undefined && input.clickupId !== existing.clickup_id) {
-      sets.push("clickup_id = ?");
-      params.push(input.clickupId);
-    }
-    if (sets.length === 0) return { before, after: before };
-    this.sql.exec(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`, ...params, before.id);
+    p.setIf(input.name, before.name, "name");
+    p.setIf(input.role, before.role, "role");
+    p.setIf(
+      input.deactivated === undefined ? undefined : input.deactivated ? 1 : 0,
+      before.deactivated ? 1 : 0,
+      "deactivated"
+    );
+    p.setIf(input.clickupId, existing.clickup_id, "clickup_id");
+    if (p.sets.length === 0) return { before, after: before };
+    this.sql.exec(`UPDATE users SET ${p.sets.join(", ")} WHERE id = ?`, ...p.params, before.id);
     const after = toUser(
-      this.sql
-        .exec<UserRow>(
-          `SELECT id, email, name, role, deactivated, created_at, needs_email_update, clickup_id
-           FROM users WHERE id = ?`,
-          before.id
-        )
-        .one()
+      this.sql.exec<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`, before.id).one()
     );
     const patch = diffOf(
       before as unknown as Record<string, unknown>,
@@ -4723,12 +4604,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
   private requireSubtask(subtaskId: string): Subtask {
     const rows = this.sql
-      .exec<SubtaskRow>(
-        `SELECT id, task_id, title, done, assignee_id, assigned_by, assigned_at,
-                due_date, note, position, created_at
-         FROM subtasks WHERE id = ?`,
-        subtaskId
-      )
+      .exec<SubtaskRow>(`SELECT ${SUBTASK_COLUMNS} FROM subtasks WHERE id = ?`, subtaskId)
       .toArray();
     const row = rows[0];
     if (!row) throw new Error(`Subtask ${subtaskId} not found.`);
@@ -4778,6 +4654,26 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
 // --- module-local helpers ---------------------------------------------------
 
+function sqlPatch() {
+  const sets: string[] = [];
+  const params: SqlStorageValue[] = [];
+  const set = (col: string, val: SqlStorageValue): void => {
+    sets.push(`${col} = ?`);
+    params.push(val);
+  };
+  const setIf = <T extends SqlStorageValue>(next: T | undefined, current: T, col: string): void => {
+    if (next !== undefined && next !== current) set(col, next);
+  };
+  const setNullable = <T extends SqlStorageValue>(
+    next: T | null | undefined,
+    current: T | null,
+    col: string
+  ): void => {
+    if (next !== undefined && (next ?? null) !== current) set(col, next ?? null);
+  };
+  return { sets, params, set, setIf, setNullable };
+}
+
 function safeJson(text: string): unknown {
   try {
     return JSON.parse(text);
@@ -4798,8 +4694,7 @@ function prevOf(
 
 /**
  * A user is emailable only with a real address: non-empty and not one of the
- * `@placeholder.flow` addresses the ClickUp import mints for people whose real
- * email is unknown. Sending to those would just bounce.
+ * `@placeholder.flow` seed addresses, since sending to those would bounce.
  */
 function hasRealEmail(email: string): boolean {
   const e = email.trim().toLowerCase();

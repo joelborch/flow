@@ -1,4 +1,5 @@
 import { InboundTaskInput } from "@flow/shared";
+import { decodeEntities } from "./email-intake.js";
 
 /**
  * Gleap's ticket.created event is a ticket object, not the small generic
@@ -91,26 +92,7 @@ function nestedString(source: Rec, path: readonly string[]): string {
 }
 
 function decodeHtmlEntities(value: string): string {
-  const named: Record<string, string> = {
-    amp: "&",
-    apos: "'",
-    gt: ">",
-    lt: "<",
-    nbsp: " ",
-    quot: '"',
-  };
-  const codePoint = (match: string, digits: string, radix: number): string => {
-    const parsed = Number.parseInt(digits, radix);
-    return Number.isInteger(parsed) && parsed >= 0 && parsed <= 0x10ffff
-      ? String.fromCodePoint(parsed)
-      : match;
-  };
-  return value
-    .replace(/&#(\d+);/g, (match, digits: string) => codePoint(match, digits, 10))
-    .replace(/&#x([0-9a-f]+);/gi, (match, digits: string) => codePoint(match, digits, 16))
-    .replace(/&([a-z]+);/gi, (match, name: string) => named[name.toLowerCase()] ?? match)
-    .replace(/\r\n/g, "\n")
-    .trim();
+  return decodeEntities(value).replace(/\r\n/g, "\n").trim();
 }
 
 function truncateTitle(value: string): string {

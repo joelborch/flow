@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { Hono } from "hono";
 import type { Actor, ApiKey, User } from "@flow/shared";
-import type { AppEnv, AuthContext, Env } from "../env.js";
-import { onError } from "../errors.js";
+import { authedApp, workspaceEnv } from "./testkit.js";
 import { CommentOnTaskArgs } from "../mcp/schemas.js";
 import { apiKeyRoutes } from "./api-keys.js";
 import { taskRoutes } from "./tasks.js";
@@ -44,18 +42,8 @@ function appWith(
 ) {
   const createComment = vi.fn().mockResolvedValue({ id: "cm_1" });
   const setApiKeyEmailRequesters = vi.fn().mockResolvedValue({ ...apiKey(true) });
-  const auth: AuthContext = { user: who, apiKey: key, actor };
-  const app = new Hono<AppEnv>();
-  app.onError(onError);
-  app.use("*", async (c, next) => {
-    c.set("auth", auth);
-    return next();
-  });
-  app.route("/api", taskRoutes);
-  app.route("/api", apiKeyRoutes);
-  const env = {
-    WORKSPACE: { idFromName: () => ({}), get: () => ({ createComment, setApiKeyEmailRequesters, ...stub }) },
-  } as unknown as Env;
+  const app = authedApp({ user: who, apiKey: key, actor }, taskRoutes, apiKeyRoutes);
+  const env = workspaceEnv({ createComment, setApiKeyEmailRequesters, ...stub });
   const send = (method: string, path: string, body: unknown) =>
     app.request(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
   return {

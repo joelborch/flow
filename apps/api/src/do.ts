@@ -1,346 +1,32 @@
 /// <reference types="@cloudflare/workers-types" />
-import type { z } from "zod";
-import type {
-  BackupStatus, EmailIntakeCheck, IngestEmailInput, IngestEmailResult, QueryResult,
-  Workspace,
-} from "@flow/core";
-import {
-  CreateListInput as CreateListSchema,
-  CreateSpaceInput as CreateSpaceSchema,
-  CreateSubtaskInput as CreateSubtaskSchema,
-  ToggleSubtaskInput as ToggleSubtaskSchema,
-  CreateCommentInput as CreateCommentSchema,
-} from "@flow/shared";
-import type {
-  Actor,
-  ApiKey,
-  Attachment,
-  AuditEntry,
-  AutomationRule,
-  AutomationRunLog,
-  BoardSnapshot,
-  BulkResult,
-  BulkUpdateInput,
-  Comment,
-  CreateTaskInput,
-  EmailIntake,
-  ListHandoffsInput,
-  List,
-  MoveTaskInput,
-  NotificationPref,
-  ReplyHandoffInput,
-  RequestHandoffInput,
-  SearchTasksInput,
-  SearchTasksResult,
-  SetEmailIntakeInput,
-  Space,
-  SpaceVisibility,
-  Subtask,
-  Task,
-  TaskDetail,
-  UpdateTaskInput,
-  UpsertAutomationInput,
-  User,
-  WorkspaceRpc,
-} from "@flow/shared";
+import type { DurableObject } from "cloudflare:workers";
+import type { BackupStatus, Workspace } from "@flow/core";
+import type { ApiKey, SearchTasksResult, User } from "@flow/shared";
 import { workspaceName, type Env } from "./env.js";
 import { ApiError } from "./errors.js";
 
 /**
- * `CreateSpaceInput`, `CreateListInput`, `CreateSubtaskInput`,
- * `ToggleSubtaskInput` and `CreateCommentInput` ship from @flow/shared as Zod
- * schemas without companion `export type` aliases, unlike their siblings.
- * Inferring here keeps the contract the single source of truth without
- * redeclaring a shape.
+ * Turn every method on a class/interface into an async RPC method, matching
+ * how Cloudflare's DurableObjectStub exposes synchronous DO methods over RPC.
  */
-type CreateSpaceInput = z.infer<typeof CreateSpaceSchema>;
-type CreateListInput = z.infer<typeof CreateListSchema>;
-type CreateSubtaskInput = z.infer<typeof CreateSubtaskSchema>;
-type ToggleSubtaskInput = z.infer<typeof ToggleSubtaskSchema>;
-type CreateCommentInput = z.infer<typeof CreateCommentSchema>;
-
-type Ok = { ok: true };
+type PromisifyMethods<T> = {
+  [K in keyof T as T[K] extends (...args: never[]) => unknown ? K : never]: T[K] extends (
+    ...args: infer A
+  ) => infer R
+    ? (...args: A) => Promise<Awaited<R>>
+    : never;
+};
 
 /**
- * The RPC surface this Worker calls on the Workspace DO.
- *
- * `WorkspaceRpc` in @flow/shared is the authoritative contract but covers only
- * the eight task-centric methods and types their returns as `unknown`. This
- * interface extends it with everything else the REST surface needs and gives
- * every method a concrete return type, so drift between the Worker and the DO is
- * a typecheck failure rather than a runtime surprise.
- *
- * It is written to match what packages/core actually implements, including its
- * `actor: string | Actor` convention — passing the full `Actor` gets `via` and
- * `apiKeyId` into the audit trail, which is what CLAUDE.md requires and what the
- * contract's bare `actorUserId: string` has nowhere to put.
+ * The RPC surface this Worker calls on the Workspace DO, derived directly
+ * from `@flow/core`'s `Workspace` class so drift is a typecheck failure.
  */
-export interface WorkspaceApi extends WorkspaceRpc {
-  claimOwner(email: string): Promise<User | null>;
-
-  // --- reads ----------------------------------------------------------------
-  /**
-   * `forUserId` applies per-space permissions: private spaces the user is not a
-   * member of, and everything under them, are absent from the result. Owners and
-   * admins see everything. Omitting it returns the unfiltered workspace, which
-   * is for internal use only — every route and tool passes `auth.user.id`.
-   */
-  getSnapshot(forUserId?: string): Promise<BoardSnapshot>;
-  /** Throws "Space … is private" rather than returning a task the user can't see. */
-  getTaskDetail(taskId: string, forUserId?: string): Promise<TaskDetail>;
-  /** Up to TASK_DETAILS_MAX tasks in one turn; missing or hidden ids land in `errors`. */
-  getTaskDetails(
-    taskIds: string[],
-    forUserId?: string
-  ): Promise<{ details: TaskDetail[]; errors: Array<{ taskId: string; error: string }> }>;
-  searchTasks(input: SearchTasksInput, actor?: string | Actor): Promise<SearchTasksResult>;
-  listUsers(): Promise<User[]>;
-  listSubtasks(taskId: string): Promise<Subtask[]>;
-  listComments(taskId: string): Promise<Comment[]>;
-  listAttachments(taskId: string): Promise<Attachment[]>;
-  listAutomations(): Promise<AutomationRule[]>;
-
-  // --- notification preferences (self-service) ------------------------------
-  getNotificationPrefs(userId: string): Promise<NotificationPref>;
-  setNotificationPrefs(
-    userId: string,
-    patch: Partial<NotificationPref>
-  ): Promise<NotificationPref>;
-
-  // --- identity -------------------------------------------------------------
-  /** Bearer lookup by sha256 hex; ignores revoked keys and stamps lastUsedAt. */
-  resolveApiKey(tokenHash: string): Promise<{ key: ApiKey; user: User } | null>;
-  listApiKeys(): Promise<ApiKey[]>;
-  createApiKey(
-    input: { userId: string; name: string; tokenHash: string },
-    actor: string | Actor
-  ): Promise<ApiKey>;
-  revokeApiKey(keyId: string, actor: string | Actor): Promise<Ok>;
-  /** Owner/admin, from the web app only: allow or stop a key emailing ticket requesters. */
-  setApiKeyEmailRequesters(keyId: string, allowed: boolean, actor: string | Actor): Promise<ApiKey>;
-
-  // --- tasks ----------------------------------------------------------------
-  createTask(input: CreateTaskInput, actor: string | Actor): Promise<Task>;
-  updateTask(input: UpdateTaskInput, actor: string | Actor): Promise<Task>;
-  moveTask(input: MoveTaskInput, actor: string | Actor): Promise<Task>;
-  bulkUpdate(input: BulkUpdateInput, actor: string | Actor): Promise<BulkResult>;
-  /** `r2Keys` are the deleted attachments' objects; the route is responsible for removing them from R2. */
-  deleteTask(taskId: string, actor: string | Actor): Promise<Ok & { r2Keys: string[] }>;
-
-  // --- subtasks / comments --------------------------------------------------
-  createSubtask(input: CreateSubtaskInput, actor: string | Actor): Promise<Subtask>;
-  toggleSubtask(input: ToggleSubtaskInput, actor: string | Actor): Promise<Subtask>;
-  updateSubtask(
-    input: { subtaskId: string; title?: string; assigneeId?: string | null; dueDate?: number | null; note?: string | null; position?: number },
-    actor: string | Actor
-  ): Promise<Subtask>;
-  deleteSubtask(subtaskId: string, actor: string | Actor): Promise<Ok>;
-  createComment(input: CreateCommentInput, actor: string | Actor): Promise<Comment>;
-  deleteComment(commentId: string, actor: string | Actor): Promise<Ok>;
-
-  // --- spaces / lists -------------------------------------------------------
-  createSpace(input: CreateSpaceInput, actor: string | Actor): Promise<Space>;
-  updateSpace(
-    input: { spaceId: string; name?: string; color?: string | null; archived?: boolean; position?: number },
-    actor: string | Actor
-  ): Promise<Space>;
-  deleteSpace(spaceId: string, actor: string | Actor): Promise<Ok>;
-  /**
-   * Per-space permissions. Both are owner/admin-only — enforced by
-   * `requireAdmin` on the route AND again inside the DO against the actor's
-   * stored role, since these two decide who can see what.
-   */
-  setSpaceVisibility(
-    input: { spaceId: string; visibility: SpaceVisibility },
-    actor: string | Actor
-  ): Promise<Space>;
-  setSpaceMembers(
-    input: { spaceId: string; userIds: string[] },
-    actor: string | Actor
-  ): Promise<{ spaceId: string; userIds: string[] }>;
-  /** Member user ids for one space. Empty for a workspace-visible space. */
-  listSpaceMembers(spaceId: string): Promise<string[]>;
-  createList(input: CreateListInput, actor: string | Actor): Promise<List>;
-  updateList(
-    input: { listId: string; name?: string; archived?: boolean; position?: number; spaceId?: string },
-    actor: string | Actor
-  ): Promise<List>;
-  deleteList(listId: string, actor: string | Actor): Promise<Ok>;
-  /** Enable (minting a fresh token) or disable inbound intake for a list. */
-  setListInboundToken(
-    input: { listId: string; enabled: boolean },
-    actor: string | Actor
-  ): Promise<{ listId: string; inboundToken: string | null }>;
-  /** Inbound auth: resolve the list that owns a presented token. */
-  getListByInboundToken(inboundToken: string): Promise<List | null>;
-  /**
-   * One list WITH its `inboundToken` populated. Every other read — including
-   * `getSnapshot()` — returns `inboundToken: null`, so this is the only way to
-   * see the intake credential. Admin-gate every call site.
-   */
-  getListWithSecrets(listId: string): Promise<List | null>;
-
-  // --- agent handoffs -------------------------------------------------------
-  /**
-   * File a handoff: a task in `listId` assigned to `toUserId`, tagged
-   * "handoff", whose description is the ask. The recipient must be an active
-   * member who can see the list's space.
-   */
-  requestHandoff(input: RequestHandoffInput, actor: string | Actor): Promise<Task>;
-  /** Post a message (as a comment) and/or move the handoff's state. */
-  replyHandoff(
-    input: ReplyHandoffInput,
-    actor: string | Actor
-  ): Promise<{ task: Task; comment: Comment | null }>;
-  /** Handoffs assigned to the actor (incoming) or filed by them (outgoing), newest state change first. */
-  listHandoffs(input: ListHandoffsInput, actor: string | Actor): Promise<Task[]>;
-
-  // --- email intake ---------------------------------------------------------
-  /** Every list's email intake. Holds sender allowlists: admin-gate every call site. */
-  listEmailIntakes(): Promise<EmailIntake[]>;
-  /**
-   * Create or replace (`input`) or remove (`null`) one list's email intake.
-   * Owner/admin only, re-checked in the DO. Throws if the alias belongs to
-   * another list or the list doesn't exist.
-   */
-  setEmailIntake(
-    listId: string,
-    input: SetEmailIntakeInput | null,
-    actor: string | Actor
-  ): Promise<EmailIntake | null>;
-  /** Read-only pre-check the email() handler runs before parsing or uploading. */
-  checkEmailIntake(input: { alias: string; sender: string; messageId: string }): Promise<EmailIntakeCheck>;
-  /**
-   * Route one parsed message: a new ticket, or a comment on the ticket it
-   * replies to, written in the same turn as its dedupe record.
-   */
-  ingestEmail(input: IngestEmailInput, actor: string | Actor): Promise<IngestEmailResult>;
-
-  // --- attachments ----------------------------------------------------------
-  /**
-   * Metadata row, written after the R2 object lands.
-   *
-   * `id` is optional and additive: the Worker builds the R2 key as
-   * `at/<taskId>/<id>/<filename>` before uploading, so honouring it keeps the
-   * key and the attachment id identical. packages/core currently generates its
-   * own id and ignores this field, which is harmless — the key then embeds the
-   * upload id instead — but see the agent report for the one-line fix.
-   */
-  createAttachment(
-    input: {
-      taskId: string;
-      filename: string;
-      r2Key: string;
-      size: number;
-      mimeType: string;
-      id?: string;
-    },
-    actor: string | Actor
-  ): Promise<Attachment>;
-  deleteAttachment(
-    attachmentId: string,
-    actor: string | Actor
-  ): Promise<{ ok: true; r2Key: string }>;
-  /** Clears pending_object_deletes rows once the caller has actually removed the R2 objects. */
-  clearPendingObjectDeletes(r2Keys: string[]): Promise<{ ok: true; cleared: number }>;
-  getAttachment(attachmentId: string): Promise<Attachment | null>;
-  setAttachmentDriveStorage(
-    input: {
-      attachmentId: string;
-      driveFileId: string;
-      driveWebViewLink: string;
-      driveDestination: "shared" | "private";
-    },
-    actor: string | Actor
-  ): Promise<Attachment>;
-  markAttachmentDriveCleanupComplete(
-    attachmentId: string,
-    driveFileId: string,
-    actor: string | Actor
-  ): Promise<Attachment>;
-
-  /**
-   * Hierarchy + statuses + users, no task rows — one call for MCP's map tool.
-   * `forUserId` filters it by per-space permissions, like `getSnapshot`.
-   */
-  getWorkspaceMap(forUserId?: string): Promise<ReturnType<Workspace["getWorkspaceMap"]>>;
-
-  // --- sandbox --------------------------------------------------------------
-  seedSandbox(now?: number): Promise<{ ok: true }>;
-
-  // --- automations ----------------------------------------------------------
-  upsertAutomation(input: UpsertAutomationInput, actor: string | Actor): Promise<AutomationRule>;
-  deleteAutomation(ruleId: string, actor: string | Actor): Promise<Ok>;
-  /**
-   * The `automation_runs` log the engine writes on every firing, newest first.
-   * `before` is a keyset cursor over the row id, like `getAuditLog`.
-   */
-  listAutomationRuns(filter?: {
-    ruleId?: string;
-    taskId?: string;
-    before?: number;
-    limit?: number;
-  }): Promise<AutomationRunLog[]>;
-  /**
-   * Append an `ok: false` automation_runs row correcting the "queued" row the
-   * engine wrote at enqueue time. Called by the side-effects queue consumer
-   * for a permanent (non-retryable) delivery failure, and by the flow-dlq
-   * consumer once retries are exhausted. Never throws.
-   */
-  recordDeliveryFailure(input: {
-    ruleId: string;
-    taskId: string;
-    kind: "webhook" | "email";
-    detail: string;
-  }): Promise<Ok>;
-  /**
-   * The side-effects consumer's report on an emailed comment: "sent" once the
-   * mail service accepted it, "failed" once delivery gave up. Moves only a
-   * comment still "sending"; `ok` is false when there was nothing to move.
-   */
-  markEmailReply(commentId: string, status: "sent" | "failed"): Promise<{ ok: boolean }>;
-
-  // --- audit ----------------------------------------------------------------
-  /**
-   * packages/core filters on `entity`/`before`/`limit` only. `apiKeyId`,
-   * `userId` and `action` are passed through (ignored today) and additionally
-   * applied Worker-side by `queryAudit` below, so the documented filters are
-   * correct now and become a single indexed query once the DO supports them.
-   */
-  getAuditLog(filter: {
-    entity?: string;
-    before?: number;
-    limit?: number;
-    apiKeyId?: string;
-    userId?: string;
-    action?: string;
-  }): Promise<{ entries: AuditEntry[]; nextBefore: number | null }>;
-
-  // --- query ----------------------------------------------------------------
-  /**
-   * Read-only SQL over packages/core's QUERY_VIEWS. Refused SQL comes back as
-   * an Error whose message starts with "query failed:" or names the problem.
-   */
-  runQuery(text: string, maxRows: number | undefined, forUserId: string): Promise<QueryResult>;
-  /** Sandbox only: deletes the workspace's alarm and every row. Refuses unless SANDBOX is "true". */
-  wipeSandbox(): Promise<{ ok: true }>;
-
-  // --- ops ------------------------------------------------------------------
-  /**
-   * Run the daily backup immediately — same code path as the scheduled job,
-   * so a failed night can be re-run without waiting 24h. Admin-gated at the
-   * route; the DO method itself takes no actor because it exposes no data
-   * (it only writes to R2).
-   */
-  runBackupNow(): Promise<Record<string, number>>;
-  /**
-   * Last recorded backup outcome from `job_status`: success time plus object
-   * key / row count, failure time plus error message, and `stale` (no success
-   * in 36h). The error and key are admin-only; /api/health returns only
-   * `publicBackupHealth` of this.
-   */
-  getBackupStatus(): Promise<BackupStatus>;
-}
+export type WorkspaceApi = PromisifyMethods<
+  Omit<
+    Workspace,
+    keyof DurableObject | "fetch" | "alarm" | "webSocketMessage" | "webSocketClose" | "webSocketError"
+  >
+>;
 
 /**
  * The slice of BackupStatus that is safe on the unauthenticated /api/health:
@@ -469,10 +155,9 @@ export function workspaceStub(env: Env): DurableObjectStub<Workspace> {
 
 /** Cloudflare Access email -> workspace user. Case-insensitive. */
 export async function findUserByEmail(env: Env, email: string): Promise<User | null> {
-  const wanted = email.trim().toLowerCase();
+  const wanted = email.trim();
   if (wanted === "") return null;
-  const users = await workspace(env).listUsers();
-  return users.find((u) => u.email.toLowerCase() === wanted) ?? null;
+  return workspace(env).getUserByEmail(wanted);
 }
 
 /**
@@ -528,76 +213,4 @@ export async function findTaskByExternalIdTag(
     limit: 1,
   });
   return result.tasks[0] ?? null;
-}
-
-/**
- * Audit query with the filters the REST contract promises.
- *
- * `entity`/`before`/`limit` go to the DO. `apiKeyId`/`userId`/`action` are
- * applied here, paging until the page is full or the log is exhausted, so a
- * filter that the DO cannot index still returns a correctly-sized page instead
- * of a short one.
- */
-export async function queryAudit(
-  env: Env,
-  filter: {
-    entity?: string;
-    apiKeyId?: string;
-    userId?: string;
-    action?: string;
-    before?: number;
-    after?: number;
-    limit: number;
-  }
-): Promise<{ entries: AuditEntry[]; cursor: number | null }> {
-  const needsLocalFilter =
-    filter.apiKeyId !== undefined ||
-    filter.userId !== undefined ||
-    filter.action !== undefined ||
-    filter.after !== undefined;
-
-  const matches = (entry: AuditEntry): boolean => {
-    if (filter.apiKeyId !== undefined && entry.actor.apiKeyId !== filter.apiKeyId) return false;
-    if (filter.userId !== undefined && entry.actor.userId !== filter.userId) return false;
-    if (filter.action !== undefined && entry.action !== filter.action) return false;
-    if (filter.after !== undefined && entry.at < filter.after) return false;
-    return true;
-  };
-
-  const ws = workspace(env);
-  const collected: AuditEntry[] = [];
-  let before = filter.before;
-  // Bounded so a narrow filter over a huge log cannot run away.
-  const MAX_PAGES = 10;
-  const pageSize = needsLocalFilter ? Math.min(500, Math.max(filter.limit * 4, 100)) : filter.limit;
-
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const result = await ws.getAuditLog({
-      ...(filter.entity !== undefined ? { entity: filter.entity } : {}),
-      ...(before !== undefined ? { before } : {}),
-      limit: pageSize,
-      // Passed through for the day the DO indexes them.
-      ...(filter.apiKeyId !== undefined ? { apiKeyId: filter.apiKeyId } : {}),
-      ...(filter.userId !== undefined ? { userId: filter.userId } : {}),
-      ...(filter.action !== undefined ? { action: filter.action } : {}),
-    });
-
-    for (const entry of result.entries) {
-      if (matches(entry)) collected.push(entry);
-      if (collected.length >= filter.limit) break;
-    }
-
-    if (collected.length >= filter.limit || result.nextBefore === null) break;
-    // `after` bounds the walk: once we are past it, older pages cannot match.
-    const oldest = result.entries[result.entries.length - 1];
-    if (filter.after !== undefined && oldest && oldest.at < filter.after) break;
-    before = result.nextBefore;
-  }
-
-  const entries = collected.slice(0, filter.limit);
-  const last = entries[entries.length - 1];
-  return {
-    entries,
-    cursor: entries.length === filter.limit && last ? last.id : null,
-  };
 }

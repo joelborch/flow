@@ -1,4 +1,5 @@
 /// <reference types="@cloudflare/workers-types" />
+import { z } from "zod";
 import type { Attachment, Actor } from "@flow/shared";
 import { resolveInboundActor } from "./auth.js";
 import { workspace } from "./do.js";
@@ -60,27 +61,21 @@ export function gleapProjectToken(projectId: string, rawSecret?: string): string
   return asString(parsed[exactProjectId]) || null;
 }
 
+export const GleapScreenshotJobSchema = z
+  .object({
+    kind: z.literal("gleap-screenshot"),
+    taskId: z.string().trim().min(1),
+    ticketId: z.string().trim().min(1),
+    projectId: z.unknown().optional().transform((v) => (typeof v === "string" ? v.trim() : "")),
+    screenshotUrl: z
+      .union([z.string(), z.null()])
+      .transform((v) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null)),
+  })
+  .refine((v) => v.projectId !== "" || v.screenshotUrl !== null);
+
 export function parseGleapScreenshotJob(body: unknown): GleapScreenshotJob | null {
-  if (!isRecord(body) || body["kind"] !== "gleap-screenshot") return null;
-  const taskId = asString(body["taskId"]);
-  const ticketId = asString(body["ticketId"]);
-  const projectId = asString(body["projectId"]);
-  const screenshotUrl = body["screenshotUrl"];
-  if (screenshotUrl !== null && typeof screenshotUrl !== "string") return null;
-  const normalizedUrl =
-    typeof screenshotUrl === "string" && screenshotUrl.trim() !== ""
-      ? screenshotUrl.trim()
-      : null;
-  if (taskId === "" || ticketId === "" || (projectId === "" && normalizedUrl === null)) {
-    return null;
-  }
-  return {
-    kind: "gleap-screenshot",
-    taskId,
-    ticketId,
-    projectId,
-    screenshotUrl: normalizedUrl,
-  };
+  const parsed = GleapScreenshotJobSchema.safeParse(body);
+  return parsed.success ? parsed.data : null;
 }
 
 export function gleapRetryDelay(attempt: number): number {

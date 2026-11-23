@@ -134,6 +134,13 @@ export function normalizeMessageId(raw: string | null | undefined): string | nul
   return id === "" ? null : id;
 }
 
+/**
+ * Prefix of every error ingestEmail throws for a condition no retry can fix:
+ * no Message-ID, an attachment id already in use, or an inbound actor that may
+ * not write to the target list or task. The Worker rejects instead of retrying.
+ */
+export const EMAIL_INGEST_PERMANENT_ERROR = "Email intake permanent failure";
+
 /** Every message id in an In-Reply-To or References header value. */
 export function messageIdsIn(header: string | null | undefined): string[] {
   if (!header) return [];

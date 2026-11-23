@@ -25,11 +25,12 @@
 // survives all 5 flow-side-effects retries lands in flow-dlq, handled by
 // handleDeadLetterBatch: log, record, ack — no further retry queue.
 
+import { z } from "zod";
 import type { SideEffectPayload } from "@flow/core/automation";
 import type { WebhookPayload } from "@flow/shared";
 import {
+  GleapScreenshotJobSchema,
   gleapRetryDelay,
-  parseGleapScreenshotJob,
   reconcileGleapScreenshot,
   type GleapScreenshotJob,
 } from "../gleap-screenshot.js";
@@ -235,69 +236,60 @@ export function deliveryRetryDelay(attempts: number): number {
 
 // --- payload validation -----------------------------------------------------
 
-/** Narrow the queue body without pulling zod into apps/api. */
+const strOrEmpty = z.unknown().optional().transform((v) => (typeof v === "string" ? v : ""));
+const strArray = z
+  .unknown()
+  .optional()
+  .transform((v) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []));
+
+const WebhookPayloadSchema = z.object({
+  kind: z.literal("webhook"),
+  url: z.string().min(1),
+  secret: z
+    .unknown()
+    .optional()
+    .transform((v) => (typeof v === "string" && v.length > 0 ? v : null)),
+  body: z.custom<WebhookPayload>((v) => typeof v === "object" && v !== null),
+  ruleId: strOrEmpty,
+  taskId: strOrEmpty,
+});
+
+const EmailReplyPayloadSchema = z.object({
+  kind: z.literal("email-reply"),
+  to: z.string().min(1),
+  alias: z.string().min(1),
+  subject: strOrEmpty,
+  body: strOrEmpty,
+  inReplyTo: z
+    .unknown()
+    .optional()
+    .transform((v) => (typeof v === "string" ? v : null)),
+  references: strArray,
+  taskId: z.string().min(1),
+  commentId: z.string().min(1),
+});
+
+const EmailPayloadSchema = z.object({
+  kind: z.literal("email"),
+  to: strArray.refine((v) => v.length > 0),
+  cc: strArray,
+  bcc: strArray,
+  subject: strOrEmpty,
+  body: strOrEmpty,
+  ruleId: strOrEmpty,
+  taskId: strOrEmpty,
+});
+
+const QueuePayloadSchema = z.union([
+  GleapScreenshotJobSchema,
+  WebhookPayloadSchema,
+  EmailReplyPayloadSchema,
+  EmailPayloadSchema,
+]);
+
 export function parsePayload(body: unknown): SideEffectPayload | GleapScreenshotJob | null {
-  const screenshotJob = parseGleapScreenshotJob(body);
-  if (screenshotJob !== null) return screenshotJob;
-  if (typeof body !== "object" || body === null) return null;
-  const b = body as Record<string, unknown>;
-  const ruleId = typeof b["ruleId"] === "string" ? b["ruleId"] : "";
-  const taskId = typeof b["taskId"] === "string" ? b["taskId"] : "";
-
-  if (b["kind"] === "webhook") {
-    const url = b["url"];
-    const envelope = b["body"];
-    if (typeof url !== "string" || url.length === 0) return null;
-    if (typeof envelope !== "object" || envelope === null) return null;
-    const secret = typeof b["secret"] === "string" && b["secret"].length > 0 ? b["secret"] : null;
-    return { kind: "webhook", url, secret, body: envelope as WebhookPayload, ruleId, taskId };
-  }
-
-  if (b["kind"] === "email-reply") {
-    const to = b["to"];
-    const alias = b["alias"];
-    const commentId = b["commentId"];
-    if (typeof to !== "string" || to === "" || typeof alias !== "string" || alias === "") return null;
-    if (typeof commentId !== "string" || commentId === "" || taskId === "") return null;
-    const rawRefs = b["references"];
-    return {
-      kind: "email-reply",
-      to,
-      alias,
-      subject: typeof b["subject"] === "string" ? b["subject"] : "",
-      body: typeof b["body"] === "string" ? b["body"] : "",
-      inReplyTo: typeof b["inReplyTo"] === "string" ? b["inReplyTo"] : null,
-      references: Array.isArray(rawRefs) ? rawRefs.filter((r): r is string => typeof r === "string") : [],
-      taskId,
-      commentId,
-    };
-  }
-
-  if (b["kind"] === "email") {
-    const raw = b["to"];
-    const to = Array.isArray(raw) ? raw.filter((t): t is string => typeof t === "string") : [];
-    const rawCc = b["cc"];
-    const cc = Array.isArray(rawCc)
-      ? rawCc.filter((t): t is string => typeof t === "string")
-      : [];
-    const rawBcc = b["bcc"];
-    const bcc = Array.isArray(rawBcc)
-      ? rawBcc.filter((t): t is string => typeof t === "string")
-      : [];
-    if (to.length === 0) return null;
-    return {
-      kind: "email",
-      to,
-      cc,
-      bcc,
-      subject: typeof b["subject"] === "string" ? b["subject"] : "",
-      body: typeof b["body"] === "string" ? b["body"] : "",
-      ruleId,
-      taskId,
-    };
-  }
-
-  return null;
+  const parsed = QueuePayloadSchema.safeParse(body);
+  return parsed.success ? parsed.data : null;
 }
 
 // --- webhooks ---------------------------------------------------------------

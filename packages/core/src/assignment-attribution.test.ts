@@ -13,69 +13,8 @@ import {
   ASSIGNMENT_ATTRIBUTION_MIGRATION_ID,
   MIGRATIONS,
   applyMigrations,
-  type MigrationTxn,
 } from "./schema.js";
-
-vi.mock("cloudflare:workers", () => ({
-  DurableObject: class {
-    ctx: unknown;
-    env: unknown;
-    constructor(ctx: unknown, env: unknown) {
-      this.ctx = ctx;
-      this.env = env;
-    }
-  },
-}));
-
-function sqliteStorage(db: DatabaseSync): SqlStorage {
-  const exec = (query: string, ...params: unknown[]): unknown => {
-    const returnsRows = /^\s*SELECT/i.test(query) || /RETURNING/i.test(query);
-    if (!returnsRows) {
-      db.prepare(query).run(...(params as never[]));
-      return { toArray: () => [], one: () => undefined };
-    }
-    const rows = db.prepare(query).all(...(params as never[]));
-    return {
-      toArray: () => rows,
-      one: () => {
-        if (rows.length !== 1) throw new Error(`expected 1 row, got ${rows.length}`);
-        return rows[0];
-      },
-    };
-  };
-  return { exec } as unknown as SqlStorage;
-}
-
-function savepointTxn(db: DatabaseSync): MigrationTxn {
-  return <T,>(fn: () => T): T => {
-    db.prepare("SAVEPOINT _txn").run();
-    try {
-      const result = fn();
-      db.prepare("RELEASE _txn").run();
-      return result;
-    } catch (err) {
-      db.prepare("ROLLBACK TO _txn").run();
-      db.prepare("RELEASE _txn").run();
-      throw err;
-    }
-  };
-}
-
-function fakeCtx(db: DatabaseSync): DurableObjectState {
-  return {
-    id: { toString: () => "do_test" },
-    storage: {
-      sql: sqliteStorage(db),
-      getAlarm: async () => null,
-      setAlarm: async () => undefined,
-      transactionSync: savepointTxn(db),
-    },
-    blockConcurrencyWhile: async <T>(fn: () => Promise<T> | T): Promise<T> => fn(),
-    waitUntil: () => undefined,
-    getWebSockets: () => [],
-    acceptWebSocket: () => undefined,
-  } as unknown as DurableObjectState;
-}
+import { fakeCtx, savepointTxn, sqliteStorage } from "./testkit.js";
 
 const OWNER = "us_owner";
 const BLAKE = "us_blake";

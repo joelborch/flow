@@ -1,9 +1,9 @@
 # @flow/core — the Workspace Durable Object
 
 One DO instance (name `"main"`) holds the entire workspace in SQLite and is the
-**only writer**. REST, MCP and inbound-webhook handlers call its RPC methods and
-never touch SQL. Clients receive patches over a WebSocket and never re-fetch the
-board after a mutation.
+**only writer**. REST, MCP, and inbound-webhook handlers call its RPC methods
+and never touch SQL directly. Clients receive deltas over WebSocket instead of
+re-fetching the board after mutations.
 
 ```ts
 import { Workspace } from "@flow/core";
@@ -16,433 +16,64 @@ const task = await stub.createTask({ listId, title: "Ship it" }, actor);
 | File | Role |
 | --- | --- |
 | `src/index.ts` | The `Workspace` DO: RPC surface, mutation turns, WS handlers, alarm |
-| `src/schema.ts` | Tables, indexes, FTS triggers, the migration runner, seed |
+| `src/schema.ts` | Tables, indexes, FTS5 triggers, migration runner (`core-0001..0017`), seed |
 | `src/turn.ts` | `Turn`: one mutation = rows + deltas + audit, committed together |
-| `src/rows.ts` | SQL row shapes and their mappings to `@flow/shared` entities |
-| `src/statuses.ts` | Per-list status semantics and name resolution |
+| `src/rows.ts` | SQL row shapes and mappings to `@flow/shared` entities |
+| `src/statuses.ts` | Per-list status semantics and case-insensitive name resolution |
 | `src/position.ts` | Fractional ordering and column rebalancing |
 | `src/search.ts` | FTS5 + filters + keyset pagination |
-| `src/import.ts` | `ImportBatch` shapes (not in `@flow/shared` — see below) |
-| `src/id.ts` | Prefixed nanoid-style ids, no dependency |
+| `src/query.ts` | Read-only SQL query validation and `QUERY_VIEWS` execution |
+| `src/sandbox-seed.ts` | SQL seeding helpers and rate budget for the public sandbox |
+| `src/id.ts` | Prefixed nanoid-style ids (`crypto.getRandomValues`) |
 | `src/visibility.ts` | Per-space permissions: who can see and write which spaces |
-| `src/sync-floor.ts` | Resync floor: forces a snapshot after delta-less or visibility-changing mutations |
+| `src/sync-floor.ts` | Resync floor forcing a snapshot after visibility-changing turns |
 | `src/snooze.ts` | Snooze and wake semantics (hourly sweep, wake-on-comment) |
-| `src/handoffs.ts` | Agent handoff state rules: who may set which state, and the close/reopen move |
+| `src/handoffs.ts` | Agent handoff state rules, turn holders, and close/reopen moves |
 | `src/notifications.ts` | System email notifications: recipients, templates, prefs |
-| `src/users.ts` | Assignee resolution and validation |
+| `src/users.ts` | Assignee/waitingOn validation and lookup |
 | `src/alarm-observability.ts` | Structured log records for the alarm/job runner |
 | `src/email-intake.ts` | Email intake types, sender allowlist matching, Message-ID parsing |
-| `src/side-effect-size.ts` | Fits side effects to Queues limits: 128KB per message, 256KB/100 per batch |
-| `src/websocket-close.ts` | Maps peer close codes to ones the Worker may send |
-| `src/automation/` | The automation engine: triggers, matching, templates, recurrence, seeds |
+| `src/side-effect-size.ts` | Fits side effects to Queues limits (128KB/msg, 256KB/100 batch) |
+| `src/websocket-close.ts` | Maps peer close codes to legal Worker WebSocket close codes |
+| `src/automation/` | Automation engine: triggers, conditions, templates, recurrence, sweeps |
 
 ## The mutation turn
 
-Every normal mutation is a single synchronous run with no `await` in the middle,
-so SQLite write-coalescing commits it atomically:
+Every mutation runs synchronously without yielding (`await`):
 
-1. Write the rows.
-2. Append **one `Delta` per entity change** to `changes` (`seq` is the rowid, so
-   it is monotonic and gap-free).
-3. Write one `audit` row naming the actor, the mutation and the diff.
-4. Call `evaluateAutomations` once per delta. Automation actions re-enter
-   through `applyAction` **in the same turn**, so their deltas ride along in the
-   same broadcast. Each hop is depth-stamped and the engine caps the chain at
-   `AUTOMATION_MAX_DEPTH` (5). A rule that throws is logged and never fails the
-   user's mutation.
-5. Broadcast `{ type: "deltas", deltas }` to every hibernating socket, then
-   `waitUntil` the SIDE_EFFECTS queue sends. Outbound I/O is never inline.
+1. Write SQLite rows.
+2. Append one `Delta` per entity change to `changes` (`seq` is monotonic rowid).
+3. Write one `audit` row naming actor, action, and diff.
+4. Evaluate automations inline via `applyAction` (depth capped at `AUTOMATION_MAX_DEPTH` = 5). Rule errors log and never fail the caller's mutation.
+5. Broadcast `{ type: "deltas", deltas }` to hibernating WebSockets and `waitUntil` enqueue side effects to `SIDE_EFFECTS`.
 
-`update` deltas carry **changed fields only** (plus `updatedAt`); `create`
-carries the full object; `delete` carries `null`. Every mutation RPC returns the
-full authoritative entity — clients overwrite their optimistic copy with it.
+`update` deltas carry changed fields plus `updatedAt`; `create` carries the full entity; `delete` carries `null`. `prev` and child `taskId` are passed to automations in memory without persisting to `changes`.
 
-Two extras reach the automation engine but are never persisted or sent to
-clients: `prev` (pre-mutation values for the keys the patch touched, which is
-what makes `status_changed { from: [...] }` matchable) and `taskId` on deltas
-for child entities.
+## Actors and permissions
 
-## Actors
+Mutating methods take `actor: string | Actor` (a bare string expands to `via: "api"`). Pass the full `Actor` so `via` (`ui`, `api`, `mcp`, `webhook`, `automation`) and `apiKeyId` reach the audit trail.
 
-Mutating methods take `actor: string | Actor`. A bare string is treated as
-`{ userId, via: "api", apiKeyId: null, automationRuleId: null }`. Pass the full
-`Actor` so `via` and the API key id land in the audit trail — API keys
-impersonate a real user, and the key id is how you tell them apart. Comments
-also store the actor's `via` on the row (`Comment.via`), so a thread can show
-which replies an agent wrote; comments from before `core-0013-handoffs` read
-`null`, and imported ones `"import"`.
+Spaces default to `visibility: "workspace"` or can be set `"private"`. Owners and admins see everything; members see workspace-visible spaces plus private spaces they belong to in `space_members`.
 
-## Status semantics
+- **Reads filter**: `getSnapshot`, `getWorkspaceMap`, `getTaskDetail(s)`, `searchTasks`, and `runQuery` drop or refuse rows outside the caller's visible spaces.
+- **Writes throw**: Mutations check space access before writing (`Space sp_x is private; ask an owner/admin for access.`). System actors (`via: "automation"`) are exempt so automations still run.
+- **Broadcasts filter**: Per-connection socket attachments store `userId`; deltas touching private spaces are filtered per socket, and visibility/role/space-move boundary crossings issue `{ type: "resync" }` after bumping the resync floor.
+- **Privileged ops**: `setSpaceVisibility` and `setSpaceMembers` re-check the actor's stored owner/admin role inside the DO.
 
-Statuses are per-list and ordered: exactly one of type `open` first, exactly one
-`closed` last, any number of `custom` between. `CreateListInput` without
-`statuses` gets **To Do → In Progress → Done**.
+## Statuses, snapshot window, and handoffs
 
-Mutation inputs reference a status **by name, case-insensitively**. Unresolvable
-names throw listing every valid status with its type, because agents read these
-messages:
+- **Statuses**: Ordered per list — one `open` first, one `closed` last, any number of `custom` between. Default: `To Do -> In Progress -> Done`. Moving into `closed` sets `closedAt` and clears `waitingOn`; moving out clears `closedAt`.
+- **Snapshot window**: `getSnapshot()` omits closed tasks with `closedAt` older than 60 days (`SNAPSHOT_CLOSED_WINDOW_MS`); `searchTasks({ includeClosed: true })` queries all history.
+- **Agent handoffs**: Tasks tagged `handoff` carrying `{ requestedBy, state, returnFormat, contextTaskIds, stateChangedAt }` (`requested` -> `working`/`needs_input`/`done`/`declined`). Moving a handoff's status or assignee updates `handoff.state` and `waitingOn` consistently.
 
-```
-Unknown status "In Review" for list ls_abc. Valid statuses (in order):
-"To Do" (open), "In Progress" (custom), "Done" (closed).
-```
+## Email intake, snooze, and scheduled jobs
 
-Moving to a `closed`-type status sets `closedAt`; moving away clears it. Names
-are unique per list, case-insensitively — enforced in code, with a unique index
-as a backstop.
+- **`ingestEmail`**: Routes inbound mail to a new task or a threaded comment (`References` match) in the same transaction as its `email_messages` dedupe row and hourly rate checks.
+- **`createComment`** with `emailToRequester` queues an `email-reply` job (requiring `EMAIL_INTAKE_REPLY`, either UI caller or an API key with `canEmailRequesters`, never MCP); **`markEmailReply`** updates `emailStatus` (`sending` -> `sent` | `failed`).
+- **`alarm()`**: Runs due `scheduled_jobs` (`due_date_check` hourly including `runSnoozeWake`, `prune_changes` daily at 09:00 UTC, `backup` daily at 05:00 UTC to R2 `backups/YYYY-MM-DD.ndjson.gz` keeping 30 days plus sweeping `pending_object_deletes`). Any comment on a snoozed task wakes it in the same turn.
 
-## Snapshot size
+## Schema, migrations, seed, and IDs
 
-`getSnapshot()` omits closed tasks whose `closedAt` is more than **60 days** old,
-and their subtasks. Those rows stay fully queryable through
-`searchTasks({ includeClosed: true })` — the snapshot is a working-set payload,
-not an archive. Comments and attachments are never in the snapshot; they load
-per task via `getTaskDetail` / `listComments` / `listAttachments`.
-
-## RPC surface
-
-Implements `WorkspaceRpc` from `@flow/shared`, widened to typed returns and a
-`string | Actor` actor.
-
-**Reads** — `getSnapshot`, `getWorkspaceMap`, `getTaskDetail`, `searchTasks`,
-`listUsers`, `getUserByEmail`, `listSubtasks`,
-`listComments`, `listAttachments`, `getAttachment`, `listAutomations`,
-`listAutomationRuns`, `getAuditLog`.
-
-**Identity** — `resolveApiKey(tokenHash)` (bearer hot path: skips revoked keys,
-stamps `lastUsedAt`, no delta), `listApiKeys`, `createApiKey`, `revokeApiKey`,
-`upsertUser`, `getListByInboundToken`.
-
-**Tasks** — `createTask` (with inline subtasks), `updateTask`, `moveTask`,
-`bulkUpdate`, `deleteTask`.
-
-**Subtasks** — `createSubtask`, `updateSubtask`, `toggleSubtask`,
-`deleteSubtask`. Asana-style: done/not-done plus optional assignee and due date,
-no status pipeline.
-
-**Comments / attachments** — `createComment`, `deleteComment`,
-`createAttachment`, `deleteAttachment`. R2 upload happens in the api Worker;
-the DO stores metadata only. `createAttachment` honours a caller-supplied `id`
-(the Worker mints it first because the R2 key embeds it), and
-`deleteAttachment` returns the `r2Key` so the caller can delete the object.
-
-**Spaces / lists** — `createSpace`, `updateSpace`, `deleteSpace`, `createList`,
-`updateList`, `deleteList`, `setListInboundToken`.
-
-**Per-space permissions** — `setSpaceVisibility`, `setSpaceMembers`,
-`listSpaceMembers`, `visibleSpaceIds`. See below.
-
-**Agent handoffs** — `requestHandoff`, `replyHandoff`, `listHandoffs`. See
-below.
-
-**Automations** — `upsertAutomation`, `deleteAutomation`.
-
-**Sandbox / Jobs** — `seedSandbox`, `wipeSandbox`, `scheduleJob`.
-
-### Notable behaviours
-
-- **`searchTasks`** — FTS5 over title + description (tokens quoted and
-  prefix-matched, so user punctuation is inert), plus list/space/status/
-  assignee/tag/due/updated filters. Sorted by `(updatedAt DESC, id DESC)` rather
-  than relevance, because that ordering is stable under concurrent writes, which
-  is what makes the opaque cursor safe. Returns `{ tasks, cursor, total }`.
-- **`moveTask`** — pass `position` for a client-computed midpoint. Omit it and
-  the DO renumbers the target column if any adjacent pair has collapsed below
-  `1e-6`, then appends; either way the returned `Task` carries the final
-  position. A cross-list move re-resolves the status in the target list by name,
-  falling back to that list's open status.
-- **`bulkUpdate`** — up to 200 updates in one turn with per-item
-  `{ taskId, ok, error }`. One bad row never rolls back the good ones.
-- **`deleteTask`** — cascades subtasks, comments and attachments. Emits delete
-  deltas for the task and its subtasks (both are in the snapshot); comments and
-  attachments need none since they load lazily.
-- **`deleteSpace` / `deleteList`** — refuse while children exist, naming the
-  count and suggesting `archived: true` instead. `setListStatuses` refuses to
-  drop a status that still holds tasks, listing which and how many.
-
-## Per-space permissions
-
-A space is `visibility: "workspace"` (the default, and what every existing space
-is) or `"private"`. Owners and admins see every space; a member sees the
-workspace-visible ones plus the private ones they are in (`space_members`).
-Everything under a space — lists, tasks, subtasks, comments, attachments —
-inherits that decision; there is no per-list override. The rule itself lives in
-`src/visibility.ts` as `canSeeSpace`, and the three enforcement shapes all call
-it rather than re-deriving it.
-
-**Reads filter.** `getSnapshot(forUserId?)`, `getWorkspaceMap(forUserId?)` and
-`searchTasks(input, actor?)` take the caller's identity and drop what it may not
-see — `searchTasks` filters before `COUNT`, so `total` never teases rows the
-caller cannot open. `getTaskDetail(taskId, forUserId?)` throws instead. Omitting
-the id returns the unfiltered workspace and is for internal callers only.
-
-**Writes throw.** Every task, list, subtask, comment and attachment mutation
-resolves its entity to a space first and throws
-`Space sp_x is private; ask an owner/admin for access.` when the actor cannot
-see it. `moveTask` checks both ends, so a task can be neither dragged out of a
-hidden space nor smuggled into one. Actors with `via: "automation"` or
-`"import"` are system actors and exempt — a rule scoped to a private space must
-still fire for the member whose task tripped it.
-
-**Broadcasts drop per connection.** See the WebSocket section.
-
-`setSpaceVisibility` and `setSpaceMembers` are owner/admin-only, checked inside
-the DO against the actor's stored role as well as on the route: they decide who
-can see what, so the sole writer does not take the caller's word for it. Going
-private auto-adds the space's creator (`spaces.created_by`, storage-only), or the
-acting admin for an imported space that has no recorded creator.
-
-## Agent handoffs
-
-One person's agent files a request for a teammate's agent. A handoff is an
-ordinary task — title plus description is the ask, the assignee is the
-recipient, the due date is when it's needed, tag `handoff` — with a `handoff`
-object on top: `{ requestedBy, state, returnFormat, contextTaskIds,
-stateChangedAt }`. Replies are ordinary comments. States run requested →
-working / needs_input → done / declined. The rules are pure functions in
-`src/handoffs.ts`; `handoffs-storage.test.ts` covers the DO side.
-
-- **`requestHandoff(input, actor)`** is one task turn through the same
-  `applyTaskCreate` as `createTask`, so `task_created` automations fire, the
-  assignment is attributed to the requester (`assignedBy`), and the recipient
-  gets the "assigned" email. That email is handoff-only: an ordinary create
-  with an assignee still sends nothing, since assignment emails otherwise ride
-  the update path. Before any write it checks that the actor can write the
-  list, that `toUserId` exists, isn't the actor, isn't deactivated and can see
-  the list's space, and that every `contextTaskIds` entry exists and is
-  visible to both the actor and the recipient, whose agent will be told to
-  read it (de-duplicated, order kept). Each refusal names the user, space or
-  task involved.
-- **`replyHandoff(input, actor)`** posts `message` (if any) through
-  `applyCommentCreate`, so `via` is recorded and a snoozed task wakes, and
-  applies a state change (if any) as one task update carrying the new
-  `handoff`. The recipient is the task's *current* assignee, the requester is
-  `handoff.requestedBy`, and owners/admins may act as either. The recipient
-  may set any state; the requester may only set `declined`, and only while
-  the handoff is still open; a requester's
-  message with no state on a `needs_input` handoff moves it to `working`;
-  anyone else is refused (they can still `createComment`). Done and declined
-  move an open task to its list's closed status, and an open state moves a
-  closed task back to the list's open status. The reverse holds too: closing a
-  handoff task any other way (`updateTask`, `moveTask`, a rule) marks an open
-  handoff `done`, and reopening a finished one sets it to `working`, so the
-  strip and the lists never disagree with the board. An unchanged state is a
-  no-op.
-  Every check runs before the comment is written. A change writes two audit
-  rows: `handoff.reply` with the field diff, and `handoff.state` with
-  `{ from, to }`.
-- **`listHandoffs({ direction, states, limit }, actor)`** reads `incoming`
-  (assigned to the actor) or `outgoing` (filed by them), states defaulting to
-  requested / working / needs_input, newest `stateChangedAt` first, filtered in
-  SQL to spaces the actor can see before the limit. Explicit `states` filter
-  on handoff state alone, so naming `done` or `declined` returns their
-  (closed) tasks; the default also skips closed tasks, so a handoff someone
-  closed by hand without touching its state drops off everyone's list.
-
-All three re-validate their input with the contract's Zod schemas, the way
-`setEmailIntake` does, so a caller that skipped the route still gets the
-field-named error. `handoff` is in `TASK_DIFF_KEYS`, and `diffOf` compares
-object values by JSON, so a change ships the whole new object and an
-untouched handoff never appears in a patch.
-
-## Email intake and replies
-
-The Worker's `email()` handler parses each message and hands it to
-**`ingestEmail(input, actor)`**, which decides in one turn what it is: a new
-task in the intake's list (tagged `email`, plus `unverified` when Cloudflare
-couldn't authenticate the sender), a comment on the task an earlier message
-opened (matched through `References`, without touching its status), a
-duplicate, or a refusal (unknown alias, sender not on the allowlist, either
-rate limit). The outcome and its `email_messages` row commit together, so a
-redelivered message can never file twice. Errors no retry can fix carry the
-`EMAIL_INGEST_PERMANENT_ERROR` prefix, so the Worker bounces them.
-
-**`createComment`** with `emailToRequester` also emails the comment back to
-the sender whose email opened the task. Before anything is written it checks
-that `EMAIL_INTAKE_REPLY` is on, that the actor is a person in the app or an
-api key with `canEmailRequesters` (never MCP), and that the task has a
-requester whose intake alias still exists. The comment then records `emailTo`
-and `emailStatus: "sending"`, and an `email-reply` side effect is queued with
-the alias (for Reply-To), a `Re: <title>` subject and the thread's
-Message-IDs. **`markEmailReply(commentId, status)`** is the queue consumer's
-report: it moves a `sending` comment to `sent` or `failed` once, and later
-reports are ignored. **`setApiKeyEmailRequesters`** (owner/admin, never over
-MCP) turns the permission on or off for one key.
-
-## WebSocket protocol
-
-Upgrade at `/ws` on the DO's `fetch`, via the Hibernation API. The api Worker
-authenticates first and forwards the user id as the `X-Flow-User-Id` header
-(`?userId=us_…` still works for a direct-to-DO caller); the DO does not
-re-authenticate. That id is stored per connection with `serializeAttachment`, so
-the DO can hibernate between messages without dropping sockets — and so every
-broadcast knows whose permissions to apply.
-
-Deltas are filtered per connection. Each delta is stamped at emit time with the
-space it belongs to (`user` and `automation_rule` deltas belong to none and go
-to everyone); delete call sites pass the space explicitly, because by the time
-the delta is emitted the row it would have been resolved through is gone. At
-broadcast, a turn that touched no private space is sent as one payload to every
-socket exactly as before; otherwise each socket gets only the deltas its user
-may see, with the visible-space lookup memoised per user for the call. Replay
-after a reconnect is filtered the same way, and skipped entirely when the
-workspace has no private spaces.
-
-Client → server (`ClientMsg`):
-
-| Message | Server reply |
-| --- | --- |
-| `{ type: "hello", sinceSeq: null }` | `{ type: "snapshot", snapshot }` |
-| `{ type: "hello", sinceSeq: n }` | `{ type: "deltas", deltas }` — every delta with `seq > n` |
-| `{ type: "ping" }` | `{ type: "pong" }` |
-
-`hello` falls back to a full snapshot when `sinceSeq` is `null`, ahead of the
-server, more than **5,000** behind (`REPLAY_GAP_LIMIT`), or older than the
-oldest surviving row after a prune. Malformed frames are ignored. After the
-catch-up a client lives on broadcasts alone.
-
-`{ type: "resync" }` means "your delta stream is intentionally incomplete, pull
-a snapshot". It is sent after `seedSandbox` (to everyone), and after
-`setSpaceVisibility` or a private space's `setSpaceMembers` (to the affected
-non-admin connections only — a client that just lost access holds a subtree it
-must forget, and one that just gained access has never seen the rows, and
-neither is expressible as a patch). The same applies when any turn moves a task
-or list across spaces with a private end, including a `move_to_list`
-automation (`resyncForSpaceMoves`, run from `runTurn`), and to a user whose
-role crosses between member and owner/admin. Deactivating a user closes their
-sockets, and a deactivated user's `hello` is refused.
-
-## Alarm and scheduled jobs
-
-A DO gets one alarm, so `scheduled_jobs` multiplexes it. `alarm()` drains rows
-with `run_at <= now` (100 at a time, backup last), and claims each one before
-running it: recurring jobs are advanced to their next `run_at` (skipping missed
-intervals rather than firing a backlog), one-off jobs are deleted, and that
-write is made durable first. So a job that throws, or kills the isolate
-outright, costs only that one run instead of wedging the schedule. The alarm
-then re-arms to the next `run_at`. Each kind's last success and failure are
-kept in `job_status`; `getBackupStatus` reads the backup's, and `/api/health`
-reports it as `stale` after 36 hours without a success.
-
-| Kind | Cadence | Work |
-| --- | --- | --- |
-| `due_date_check` | hourly | `sweepDueDateAutomations` — fires `due_date_approaching` rules; the engine's `(rule, task, dueDate)` guard makes it idempotent — **and** the snooze wake pass below |
-| `prune_changes` | daily, 09:00 UTC | Keep the last 50,000 `changes` rows, cap `automation_runs`, and delete `audit` rows older than 365 days (`AUDIT_RETENTION_DAYS`) |
-| `backup` | daily, 05:00 UTC | Gzipped NDJSON of every table to R2 `backups/YYYY-MM-DD.ndjson.gz` (30 kept), then sweep `pending_object_deletes` |
-
-`scheduleJob({ runAt, kind, payload?, everyMs? })` adds more.
-
-## Snooze and waiting-on
-
-A task carries `snoozedUntil` (epoch ms, nullable) and `blockedNote` (≤200
-chars, nullable). Both are ordinary `UpdateTaskInput` fields — null clears them,
-and they ride the normal changed-fields delta, so no client needs a special
-path. A snoozed task is still open, still in its column and still at its
-position; it is simply hidden from the board and parked at the bottom of My
-Work. **Waking never changes the status**, and never clears `blockedNote`.
-
-Two things wake a task, and both go through `applyTaskUpdate` so each produces a
-real delta and an audit row (`task.wake`):
-
-1. **The clock.** The hourly `due_date_check` tick also runs `runSnoozeWake`,
-   which reads up to `WAKE_SWEEP_LIMIT` (500) snoozed rows oldest-first and
-   clears every one whose `snoozed_until <= now`. Actor is the owner's user id
-   with `via: "automation"`, matching the due-date sweep, plus one
-   `task.wake_sweep` audit row per pass. It rides the existing job rather than a
-   new recurring one because `seedJobs` only fires on an empty
-   `scheduled_jobs` table — a workspace that already exists would never pick a
-   newly-seeded job up. A `snooze_wake` job kind exists for a targeted catch-up.
-2. **Activity.** Any comment on a snoozed task clears the snooze **in the same
-   turn** (Linear's rule), so the comment delta and the wake delta commit and
-   broadcast together.
-
-The selection logic lives in `src/snooze.ts` as pure functions
-(`wakeCandidates`, `isSnoozed`, `wakesOnComment`), which is what `snooze.test.ts`
-exercises.
-
-## Schema and migrations
-
-Applied ids live in `_migrations`. The constructor does exactly **one** SELECT —
-a `COUNT(*)` against the number of known migrations — and returns immediately
-when the schema is current, so `blockConcurrencyWhile` only runs for a genuinely
-out-of-date instance. `PRAGMA user_version` is unavailable in DO SQLite, hence
-the table.
-
-Tables: `users`, `spaces`, `lists`, `statuses`, `tasks`, `subtasks`, `comments`,
-`attachments`, `space_members`, `api_keys`, `automation_rules`,
-`automation_runs`, `automation_due_fires`, `changes`, `audit`, `scheduled_jobs`,
-`tasks_fts`.
-
-`core-0014-email-replies` adds `comments.email_to` and `comments.email_status`
-(both NULL on an ordinary internal comment), `api_keys.can_email_requesters`
-(every key starts without it) and `email_messages.authenticated`, backfilled
-from each message's `email.ingest` audit row with anything the audit can't
-vouch for read as unverified.
-
-`core-0012-email-intake` adds `email_intakes` (one row per list that accepts
-mail; the alias is unique) and `email_messages`, the dedupe record keyed by
-(Message-ID, list) and written in the same turn as the task or comment it
-produced. The same rows drive threading and both hourly rate limits.
-
-`core-0013-handoffs` adds five nullable columns to `tasks`
-(`handoff_requested_by`, `handoff_state`, `handoff_return`, `handoff_context`
-as a JSON array, `handoff_state_changed_at`) and `comments.via`. A NULL
-`handoff_state` means "not a handoff", which is every earlier task, so nothing
-is backfilled. Two partial indexes, `(assignee_id, handoff_state,
-handoff_state_changed_at)` and `(handoff_requested_by, handoff_state,
-handoff_state_changed_at)` `WHERE handoff_state IS NOT NULL`, serve the two
-`listHandoffs` directions and hold only handoff rows.
-
-`core-0004-snooze` adds `tasks.snoozed_until` (INTEGER) and `tasks.blocked_note`
-(TEXT), both nullable with no default, plus a partial index on
-`snoozed_until IS NOT NULL` for the wake sweep. SQLite's `ALTER TABLE` has no
-`IF NOT EXISTS`, so the only guard against re-running it is the runner's applied
--id set — which is why it needs its own id rather than being folded into an
-existing migration.
-
-`core-0003-space-visibility` adds `spaces.visibility` (default `'workspace'`, so
-nothing needs backfilling), `spaces.created_by`, and `space_members`
-(`(space_id, user_id)` primary key, plus an index on `user_id` for the
-"which spaces can this person see" query).
-
-Indexes are on `tasks(listId, statusId, position)`, `tasks(assigneeId)`,
-`tasks(dueDate)`, `tasks(closedAt)`, `tasks(updatedAt)`, plus per-parent indexes
-on children and partial unique indexes on every `clickup_id`. `changes.seq` is an
-`INTEGER PRIMARY KEY` — the rowid — so range reads and `ORDER BY seq` already use
-the primary key and no extra index is warranted.
-
-`tasks_fts` is an FTS5 table over `title` + `description`, kept in sync by three
-triggers on `tasks` (insert / delete / update of those two columns). It is keyed
-by `task_id` rather than using external content, which costs a little storage and
-removes a coupling to the tasks rowid.
-
-Two storage-only columns remain in SQLite for live DO backwards compatibility:
-`clickup_id` on spaces/lists/tasks/subtasks/comments/users and
-`users.needs_email_update`, which flags placeholder emails.
-
-`audit` also carries denormalized `actor_user_id` and `api_key_id` columns so
-`getAuditLog` can filter by user, key, action or entity as one indexed query.
-
-## Seed
-
-On a workspace whose `users` table is empty, a single bootstrap user is created
-and nothing else — no spaces, no lists; imports or the UI create those.
-
-| Name | Email | Role |
-| --- | --- | --- |
-| Workspace Owner | owner@placeholder.flow | owner |
-
-The seed is static SQL with no access to env, so the owner starts with a
-placeholder address flagged `needs_email_update`. After deploying, set
-`OWNER_EMAIL`, sign in through Access (or `DEV_NO_AUTH=true` locally), and set
-the real address with `upsertUser`, which clears the flag once the address is
-no longer `@placeholder.flow`. Notifications are skipped for placeholder
-emails, so nothing is sent until then.
-
-## IDs
-
-`id("tk_")` → `tk_Kf3aQ8xZ1mLp`. 12 chars from a 64-symbol URL-safe alphabet
-(≈72 bits) via `crypto.getRandomValues`; the 64-symbol alphabet means `byte & 63`
-is unbiased. Prefixes: `tk_` task, `ls_` list, `sp_` space, `st_` status, `sb_`
-subtask, `cm_` comment, `at_` attachment, `us_` user, `ar_` automation rule,
-`ak_` api key.
+- Applied migration ids live in `_migrations` (`core-0001` through `core-0017`); `blockConcurrencyWhile` only runs when pending migrations exist. `tasks_fts` is kept in sync via triggers. Legacy storage columns `clickup_id` and `users.needs_email_update` remain in SQLite for live DO compatibility.
+- Fresh workspaces seed one bootstrap owner row (`owner@placeholder.flow`); `claimOwner` lets the first matching `OWNER_EMAIL` sign-in claim it cleanly.
+- IDs use 12 URL-safe chars from `crypto.getRandomValues` with entity prefixes: `tk_`, `ls_`, `sp_`, `st_`, `sb_`, `cm_`, `at_`, `us_`, `ar_`, `ak_`.

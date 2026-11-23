@@ -1,28 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { Hono } from "hono";
-import type { User } from "@flow/shared";
-import type { AppEnv, AuthContext, Env } from "../env.js";
-import { onError } from "../errors.js";
 import { handoffRoutes, listHandoffsInputFromQuery } from "./handoffs.js";
+import { authOf, authedApp, workspaceEnv } from "./testkit.js";
 
 // Real Hono routes against a stubbed DO binding. Who may move a handoff where
 // is the DO's rule and is tested there; what is under test here is the
 // validation, the query parsing and the error mapping on the way out.
 
-const user: User = {
-  id: "us_member",
-  email: "member@example.com",
-  name: "member",
-  role: "member",
-  deactivated: false,
-  createdAt: 1_700_000_000_000,
-};
-
-const auth: AuthContext = {
-  user,
-  apiKey: null,
-  actor: { userId: "us_member", via: "api", apiKeyId: null, automationRuleId: null },
-};
+const auth = authOf("member");
 
 const task = {
   id: "tk_h1",
@@ -39,16 +23,8 @@ const task = {
 };
 
 function appWith(stub: Record<string, unknown>) {
-  const app = new Hono<AppEnv>();
-  app.onError(onError);
-  app.use("*", async (c, next) => {
-    c.set("auth", auth);
-    return next();
-  });
-  app.route("/api", handoffRoutes);
-  const env = {
-    WORKSPACE: { idFromName: () => ({}), get: () => stub },
-  } as unknown as Env;
+  const app = authedApp(auth, handoffRoutes);
+  const env = workspaceEnv(stub);
   return {
     request: (path: string, init: RequestInit = {}) => app.request(path, init, env),
   };
