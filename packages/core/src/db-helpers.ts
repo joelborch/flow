@@ -568,6 +568,8 @@ export function requireSubtask(sql: SqlStorage, subtaskId: string): Subtask {
 export function requireListRow(sql: SqlStorage, listId: string): ListRow {
   const row = sql.exec<ListRow>(`SELECT ${LIST_COLUMNS} FROM lists WHERE id = ?`, listId).toArray()[0];
   if (!row) {
+    // No list names here: this runs before any visibility check, so naming
+    // "known lists" handed members the names of lists in private spaces.
     throw new Error(
       `List ${listId} not found. Use flow_get_workspace_map (or GET /api/lists) for the lists you can use.`
     );

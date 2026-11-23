@@ -112,6 +112,7 @@ export function applyTaskCreate(
     assigneeId,
     assignedBy,
     assignedAt: assignedBy === null ? null : t.now,
+    // A closed task is nobody's turn; a new handoff starts on its recipient.
     waitingOn:
       status.type === "closed"
         ? null

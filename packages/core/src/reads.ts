@@ -155,6 +155,9 @@ export function getSnapshot(host: WorkspaceHost, forUserId?: string): BoardSnaps
     tasks,
     subtasks,
     users: listUsers(sql),
+    // Automation rules are workspace wiring (webhook URLs, email targets,
+    // cross-space actions): owners and admins only. `visible === null` is
+    // exactly the privileged-or-internal case the space filters key off.
     automationRules: automationRulesForSnapshot(visible, () => listAutomations(sql)),
   };
 }
