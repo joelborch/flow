@@ -308,6 +308,40 @@ describe("resolveCloudflareAccount and formatted summaries", () => {
       });
       assert.equal(acct.label, "Acme (acc_1)");
 
+      const fromEnvMatch = resolveCloudflareAccount({
+        config: {},
+        env: { CLOUDFLARE_ACCOUNT_ID: "acc_1" },
+        whoami: { loggedIn: true, accounts: [{ id: "acc_1", name: "Acme" }] },
+      });
+      assert.equal(fromEnvMatch.label, "Acme (acc_1)");
+
+      const fromConfigNoWhoami = resolveCloudflareAccount({
+        config: { account_id: "acc_cfg" },
+        env: {},
+        whoami: null,
+      });
+      assert.equal(fromConfigNoWhoami.label, "acc_cfg (configured)");
+
+      assert.throws(
+        () =>
+          resolveCloudflareAccount({
+            config: { account_id: "acc_1" },
+            env: { CLOUDFLARE_ACCOUNT_ID: "acc_2" },
+            whoami: null,
+          }),
+        /conflicts with CLOUDFLARE_ACCOUNT_ID/
+      );
+
+      assert.throws(
+        () =>
+          resolveCloudflareAccount({
+            config: {},
+            env: { CLOUDFLARE_ACCOUNT_ID: "acc_unknown" },
+            whoami: { loggedIn: true, accounts: [{ id: "acc_1", name: "Acme" }] },
+          }),
+        /does not match any account from wrangler whoami/
+      );
+
       assert.throws(
         () =>
           resolveCloudflareAccount({
