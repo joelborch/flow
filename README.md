@@ -143,7 +143,7 @@ cd apps/api
 pnpm exec wrangler r2 bucket create flow-attachments
 pnpm exec wrangler queues create flow-side-effects
 pnpm exec wrangler queues create flow-dlq
-pnpm deploy    # builds the SPA, deploys the Worker
+pnpm run deploy  # guarded deploy: checks clean main, builds SPA, shows resolved config, deploys Worker
 ```
 
 The full runbook — custom domain, Cloudflare Access application setup, email sending, first-user bootstrap — is in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md).

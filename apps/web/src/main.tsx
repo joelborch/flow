@@ -86,7 +86,7 @@ function FallbackSidebar({ activeListId }: { activeListId: string | null }) {
   );
 }
 
-function Toasts() {
+export function Toasts() {
   // Cmd/Ctrl+Z reverses the newest change while its toast is up. A field with
   // a caret keeps its own undo.
   useEffect(() => {
@@ -102,9 +102,12 @@ function Toasts() {
   }, []);
 
   const items = toasts.value;
-  if (items.length === 0) return null;
   return (
-    <div class="pointer-events-none fixed bottom-4 left-1/2 z-[70] flex -translate-x-1/2 flex-col gap-1.5">
+    <div
+      role="status"
+      aria-live="polite"
+      class="pointer-events-none fixed bottom-4 left-1/2 z-[70] flex -translate-x-1/2 flex-col items-center gap-1.5"
+    >
       {items.map((t) =>
         t.action ? (
           <div
@@ -240,4 +243,5 @@ if (import.meta.env.DEV) {
   });
 }
 
-render(<App />, document.getElementById("app")!);
+const mount = document.getElementById("app");
+if (mount) render(<App />, mount);

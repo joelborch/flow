@@ -7,6 +7,7 @@ import { handleEmail } from "./email-intake.js";
 import { onError, notFoundHandler } from "./errors.js";
 import { mcpHandler } from "./mcp/index.js";
 import { handleDeadLetterBatch, handleSideEffectBatch } from "./side-effects/index.js";
+import { assertProductionConfig } from "./startup-config.js";
 import { apiKeyRoutes } from "./routes/api-keys.js";
 import { attachmentRoutes } from "./routes/attachments.js";
 import { auditRoutes } from "./routes/audit.js";
@@ -95,13 +96,17 @@ app.all("/mcp/*", (c) => mcpHandler(c.req.raw, c.env, c.get("auth")));
 app.get("/ws", handleWebSocketUpgrade);
 
 export default {
-  fetch: app.fetch,
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    assertProductionConfig(env);
+    return app.fetch(request, env, ctx);
+  },
   /**
    * Outbound side effects (webhooks, email) and their dead letters. Owned by
    * the automations agent. One Worker consumes both queues (wrangler.jsonc
    * has a consumer entry for each), dispatched on batch.queue.
    */
   async queue(batch: MessageBatch, env: Env): Promise<void> {
+    assertProductionConfig(env);
     if (batch.queue === "flow-dlq") {
       await handleDeadLetterBatch(batch, env);
       return;
@@ -112,5 +117,8 @@ export default {
    * Email Routing's catch-all on EMAIL_INTAKE_DOMAIN delivers here: an allowed
    * sender's mail opens a ticket, a reply comments on it (src/email-intake.ts).
    */
-  email: handleEmail,
+  async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
+    assertProductionConfig(env);
+    await handleEmail(message, env, ctx);
+  },
 } satisfies ExportedHandler<Env>;

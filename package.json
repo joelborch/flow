@@ -9,12 +9,12 @@
     "dev:web": "pnpm --filter @flow/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
-    "deploy": "pnpm --filter @flow/web build && node scripts/deploy-worker.mjs",
+    "test": "pnpm -r test && node --test scripts/deploy-guarded.test.mjs",
+    "deploy": "node scripts/deploy-guarded.mjs",
     "deploy:guarded": "node scripts/deploy-guarded.mjs",
     "build:demo": "pnpm --filter @flow/web build:demo",
-    "deploy:demo": "pnpm build:demo && pnpm --filter @flow/api exec wrangler deploy --config ../../demo/wrangler.jsonc",
-    "deploy:sandbox": "pnpm --filter @flow/api exec wrangler deploy --config ../../sandbox/wrangler.jsonc"
+    "deploy:demo": "node scripts/deploy-guarded.mjs --config demo/wrangler.jsonc",
+    "deploy:sandbox": "node scripts/deploy-guarded.mjs --config sandbox/wrangler.jsonc"
   },
   "devDependencies": {
     "typescript": "^5.7.2"
