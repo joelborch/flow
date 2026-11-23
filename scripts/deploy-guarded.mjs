@@ -64,7 +64,7 @@ export function parseDeployArgs(argv, opts = {}) {
 
   if (env.CLOUDFLARE_ENV?.trim()) {
     throw new Error(
-      `CLOUDFLARE_ENV is set ("${env.CLOUDFLARE_ENV}"); unset it and pass --env <name> explicitly so the target environment is unambiguous`
+      "CLOUDFLARE_ENV is set; unset it and pass --env <name> explicitly so the target environment is unambiguous"
     );
   }
 
@@ -589,17 +589,23 @@ export function resolveCloudflareAccount({ config, env = process.env, whoami = n
   const envId = typeof env.CLOUDFLARE_ACCOUNT_ID === "string" ? env.CLOUDFLARE_ACCOUNT_ID.trim() : "";
   if (cfgId && envId && cfgId !== envId) {
     throw new Error(
-      `account_id in config (${cfgId}) conflicts with CLOUDFLARE_ACCOUNT_ID (${envId})`
+      "account_id in config conflicts with CLOUDFLARE_ACCOUNT_ID; unset CLOUDFLARE_ACCOUNT_ID or align them"
     );
   }
-  const explicitId = cfgId || envId || null;
+  const lookupId = cfgId || envId || null;
   const accounts = Array.isArray(whoami?.accounts) ? whoami.accounts : [];
 
-  if (explicitId) {
-    const matched = accounts.find((a) => a && a.id === explicitId);
-    return matched
-      ? { id: matched.id, name: matched.name ?? null, label: `${matched.name} (${matched.id})` }
-      : { id: explicitId, name: null, label: `${explicitId} (configured)` };
+  if (lookupId) {
+    const matched = accounts.find((a) => a && a.id === lookupId);
+    if (matched) {
+      return { id: matched.id, name: matched.name ?? null, label: `${matched.name} (${matched.id})` };
+    }
+    if (cfgId) {
+      return { id: cfgId, name: null, label: `${cfgId} (configured)` };
+    }
+    throw new Error(
+      "CLOUDFLARE_ACCOUNT_ID does not match any account from wrangler whoami; run `wrangler login` or set account_id in config"
+    );
   }
 
   if (!whoami || whoami.loggedIn !== true) {
