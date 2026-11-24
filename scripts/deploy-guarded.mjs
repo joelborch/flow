@@ -50,6 +50,14 @@ export { PLACEHOLDER_EMAIL_DOMAINS, isPlaceholderEmail };
 const SECRET_VAR_PATTERN = /(SECRET|PASSWORD|PRIVATE_KEY|TOKEN|KEY)/i;
 const FORBIDDEN_ENV_FILE_VAR_PATTERN = /^(CLOUDFLARE_|WRANGLER_|CF_)/i;
 const ENV_FILE_NAME_PATTERN = /^(\.env(\..+)?|\.dev\.vars(\..+)?)$/;
+const TOP_LEVEL_ONLY_WRANGLER_KEYS = [
+  "site",
+  "keep_vars",
+  "alias",
+  "text_blobs",
+  "data_blobs",
+  "wasm_modules",
+];
 const INHERITABLE_WRANGLER_KEYS = [
   "name",
   "main",
@@ -59,19 +67,13 @@ const INHERITABLE_WRANGLER_KEYS = [
   "compatibility_flags",
   "workers_dev",
   "preview_urls",
-  "keep_vars",
   "base_dir",
   "tsconfig",
-  "site",
   "build",
-  "alias",
   "route",
   "routes",
   "triggers",
   "migrations",
-  "text_blobs",
-  "data_blobs",
-  "wasm_modules",
   "rules",
   "find_additional_modules",
   "no_bundle",
@@ -384,7 +386,9 @@ function resolveContainedPath(rawValue, fieldName, baseDir, realRoot, { mustExis
  * when `envName` is null). Follows Wrangler inheritance: inheritable settings
  * (`route`, `routes`, `workers_dev`, `preview_urls`, `triggers`, `migrations`,
  * etc.) inherit independently into `env.<name>` unless overridden on the env
- * block; `vars`, `define`, and bindings are NOT inherited.
+ * block; top-level-only keys (`site`, `keep_vars`, `alias`, `*_blobs`,
+ * `wasm_modules`) are taken strictly from top-level `config` and refused under
+ * `env.<name>`; `vars`, `define`, and bindings are NOT inherited.
  */
 export function resolveEffectiveConfig(config, envName = null) {
   if (!envName) {
@@ -398,7 +402,15 @@ export function resolveEffectiveConfig(config, envName = null) {
     throw new Error(`wrangler environment "${envName}" is not defined in config.env`);
   }
   const envBlock = config.env[envName];
+  for (const key of TOP_LEVEL_ONLY_WRANGLER_KEYS) {
+    if (envBlock[key] !== undefined) {
+      throw new Error(`env.${envName}.${key} is not allowed (top-level only in Wrangler)`);
+    }
+  }
   const merged = {};
+  for (const key of TOP_LEVEL_ONLY_WRANGLER_KEYS) {
+    if (config[key] !== undefined) merged[key] = config[key];
+  }
   for (const key of INHERITABLE_WRANGLER_KEYS) {
     if (envBlock[key] !== undefined) merged[key] = envBlock[key];
     else if (config[key] !== undefined) merged[key] = config[key];
@@ -408,7 +420,9 @@ export function resolveEffectiveConfig(config, envName = null) {
   }
   // Non-inheritable bindings/vars/define come exclusively from the selected env block.
   for (const [key, val] of Object.entries(envBlock)) {
-    if (!INHERITABLE_WRANGLER_KEYS.includes(key)) merged[key] = val;
+    if (!INHERITABLE_WRANGLER_KEYS.includes(key) && !TOP_LEVEL_ONLY_WRANGLER_KEYS.includes(key)) {
+      merged[key] = val;
+    }
   }
   return {
     environment: envName,
@@ -536,13 +550,20 @@ function validateTargetBlock(
     }
   }
 
+  let resolvedSiteBucket = null;
   let resolvedSiteEntryPoint = null;
   if (target.site !== undefined) {
     if (!isPlainObject(target.site)) {
       throw new Error(`${labelPrefix}site must be an object`);
     }
     if (target.site.bucket !== undefined) {
-      resolveContainedPath(target.site.bucket, `${labelPrefix}site.bucket`, configDir, realRoot);
+      resolvedSiteBucket = resolveContainedPath(
+        target.site.bucket,
+        `${labelPrefix}site.bucket`,
+        configDir,
+        realRoot,
+        { mustExist: checkDefaultSiteEntry }
+      );
     }
     const rawEntry = target.site["entry-point"];
     if (rawEntry !== undefined) {
@@ -660,6 +681,7 @@ function validateTargetBlock(
   return {
     resolvedMain,
     resolvedAssetsDir,
+    resolvedSiteBucket,
     resolvedSiteEntryPoint,
     resolvedBaseDir: effectiveBaseDir,
     resolvedTsconfigs,
@@ -725,13 +747,22 @@ export function assertNoIgnoredSourceFiles(checkoutRoot) {
 }
 
 /**
- * Verify that `main`, `tsconfig`, `site["entry-point"]`, `assets.directory` (or
- * `apps/web` for built SPA outputs) are tracked by git in `realRoot`, no
- * tracked file hides edits via index flags, and no gitignored/excluded files
- * exist under `apps/api/src`, `apps/web/src`, or `packages`.
+ * Verify that `main`, `tsconfig`, `site.bucket`, `site["entry-point"]`, and
+ * `assets.directory` (or `apps/web` for built SPA outputs) are tracked by git in
+ * `realRoot`, no tracked file hides edits via index flags, and no
+ * gitignored/excluded files exist under `apps/api/src`, `apps/web/src`, or
+ * `packages`.
  */
 export function assertTrackedDeployPaths(
-  { resolvedMain, resolvedAssetsDir, resolvedSiteEntryPoint = null, resolvedTsconfigs = [], configDir, resolvedBaseDir },
+  {
+    resolvedMain,
+    resolvedAssetsDir,
+    resolvedSiteBucket = null,
+    resolvedSiteEntryPoint = null,
+    resolvedTsconfigs = [],
+    configDir,
+    resolvedBaseDir,
+  },
   checkoutRoot
 ) {
   const realRoot = realpathSync(checkoutRoot);
@@ -770,6 +801,10 @@ export function assertTrackedDeployPaths(
 
   if (resolvedMain) {
     assertGitTrackedFile(resolvedMain, "main");
+  }
+
+  if (resolvedSiteBucket) {
+    assertGitTrackedDir(resolvedSiteBucket, "site.bucket");
   }
 
   if (resolvedSiteEntryPoint) {
@@ -828,8 +863,9 @@ export function assertTrackedDeployPaths(
  * Verify `configPath`, its effective target, and all `env.<name>` blocks keep
  * every path (`main`, `assets.directory`, `base_dir`, `site.bucket`,
  * `site["entry-point"]`, `tsconfig`, `text_blobs`, `build`, `alias`) inside
- * `checkoutRoot`, and verify git-tracked `main`, `site`, `tsconfig`, and
- * `assets` targets unless `checkGitTracked: false`.
+ * `checkoutRoot`, forbid top-level-only fields inside `env.<name>`, and verify
+ * git-tracked `main`, `site`, `tsconfig`, and `assets` targets unless
+ * `checkGitTracked: false`.
  */
 export function validateDeployConfig(configPath, checkoutRoot, opts = {}) {
   const requireAssetsExist = opts.requireAssetsExist ?? false;
@@ -873,6 +909,11 @@ export function validateDeployConfig(configPath, checkoutRoot, opts = {}) {
       if (!isPlainObject(envBlock)) {
         throw new Error(`env.${blockName} must be an object`);
       }
+      for (const key of TOP_LEVEL_ONLY_WRANGLER_KEYS) {
+        if (envBlock[key] !== undefined) {
+          throw new Error(`env.${blockName}.${key} is not allowed (top-level only in Wrangler)`);
+        }
+      }
       validateTargetBlock(
         envBlock,
         `env.${blockName}.`,
@@ -912,6 +953,7 @@ export function validateDeployConfig(configPath, checkoutRoot, opts = {}) {
     configSha256,
     resolvedMain: effectivePaths.resolvedMain,
     resolvedAssetsDir: effectivePaths.resolvedAssetsDir,
+    resolvedSiteBucket: effectivePaths.resolvedSiteBucket,
     resolvedSiteEntryPoint: effectivePaths.resolvedSiteEntryPoint,
   };
 }
@@ -1121,6 +1163,12 @@ function summarizeBindings(config) {
   if (config.r2_buckets?.length) {
     parts.push(`R2[${config.r2_buckets.map((b) => `${b.binding}:${b.bucket_name}`).join(", ")}]`);
   }
+  if (config.kv_namespaces?.length) {
+    parts.push(`KV[${config.kv_namespaces.map((k) => k.binding).join(", ")}]`);
+  }
+  if (config.d1_databases?.length) {
+    parts.push(`D1[${config.d1_databases.map((d) => `${d.binding}:${d.database_name ?? d.database_id ?? "?"}`).join(", ")}]`);
+  }
   if (config.queues?.producers?.length) {
     parts.push(`Queues[${config.queues.producers.map((q) => `${q.binding}:${q.queue}`).join(", ")}]`);
   }
@@ -1130,8 +1178,35 @@ function summarizeBindings(config) {
   if (config.ratelimits?.length) {
     parts.push(`RateLimits[${config.ratelimits.map((r) => r.name).join(", ")}]`);
   }
-  if (config.triggers?.crons?.length) {
-    parts.push(`Crons[${config.triggers.crons.join(", ")}]`);
+  if (config.hyperdrive?.length) {
+    parts.push(`Hyperdrive[${config.hyperdrive.map((h) => h.binding).join(", ")}]`);
+  }
+  if (config.vectorize?.length) {
+    parts.push(`Vectorize[${config.vectorize.map((v) => `${v.binding}:${v.index_name ?? "?"}`).join(", ")}]`);
+  }
+  if (config.ai?.binding) {
+    parts.push(`AI[${config.ai.binding}]`);
+  }
+  if (config.analytics_engine_datasets?.length) {
+    parts.push(`Analytics[${config.analytics_engine_datasets.map((a) => a.binding).join(", ")}]`);
+  }
+  if (config.browser?.binding) {
+    parts.push(`Browser[${config.browser.binding}]`);
+  }
+  if (config.mtls_certificates?.length) {
+    parts.push(`mTLS[${config.mtls_certificates.map((m) => m.binding).join(", ")}]`);
+  }
+  if (config.dispatch_namespaces?.length) {
+    parts.push(`Dispatch[${config.dispatch_namespaces.map((d) => `${d.binding}:${d.namespace}`).join(", ")}]`);
+  }
+  if (config.workflows?.length) {
+    parts.push(`Workflows[${config.workflows.map((w) => `${w.binding}:${w.name}`).join(", ")}]`);
+  }
+  if (config.images?.binding) {
+    parts.push(`Images[${config.images.binding}]`);
+  }
+  if (config.version_metadata?.binding) {
+    parts.push(`VersionMeta[${config.version_metadata.binding}]`);
   }
   return parts.join(", ") || "(none)";
 }

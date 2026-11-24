@@ -21,7 +21,8 @@ const BASE_STATEMENTS: string[] = [
   // --- users -------------------------------------------------------------
   // `needs_email_update` and `clickup_id` are storage-only columns (not part
   // of the shared User contract): the first flags placeholder emails from the
-  // ClickUp import, the second keeps importBatch idempotent.
+  // ClickUp import, the second is preserved for legacy ClickUp migration
+  // schema compatibility.
   `CREATE TABLE users (
      id TEXT PRIMARY KEY,
      email TEXT NOT NULL,
