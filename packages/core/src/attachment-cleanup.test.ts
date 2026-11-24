@@ -24,9 +24,9 @@ vi.mock("cloudflare:workers", () => ({
 
 function sqliteStorage(db: DatabaseSync): SqlStorage {
   const exec = (query: string, ...params: unknown[]): unknown => {
-    // Turn.emit's INSERT ... RETURNING seq needs .all()/.one() too — unlike
-    // the other harnesses' importBatch-only tests, deleteTask and
-    // createAttachment go through the normal turn machinery and emit deltas.
+    // Turn.emit's INSERT ... RETURNING seq needs .all()/.one() too because
+    // deleteTask and createAttachment go through the normal turn machinery
+    // and emit deltas.
     const isRead = /^\s*SELECT/i.test(query) || /\bRETURNING\b/i.test(query);
     if (!isRead) {
       db.prepare(query).run(...(params as never[]));
