@@ -70,14 +70,6 @@ export function resetHealthCache(): void {
 }
 
 /**
- * The single workspace DO stub, typed as the surface above.
- *
- * The cast is deliberate and confined here: `DurableObjectStub<Workspace>` erases
- * nothing at runtime, but the DO's methods are synchronous in-class and become
- * promise-returning across the RPC boundary, which the stub type does not model
- * for a superset interface.
- */
-/**
  * Error messages that look like runtime faults rather than crafted domain
  * errors. Domain throws in packages/core are written for callers ("unknown
  * status 'X' for list Y; valid statuses are ...") and should surface as 422s;

@@ -49,21 +49,28 @@ All failures return `{"error": "<message>"}`:
 
 ## Gleap setup & screenshots
 
-Point Gleap outbound webhooks at `POST /api/inbound/<listId>` with `Authorization: Bearer <inboundToken>` (or `?token=...`). Known Gleap ticket payloads map to clean `Description` / `Info` / `Metadata` tasks tagged `gleap` + `ext:<ticketId>` with delayed screenshot reconciliation queued to `GLEAP_PROJECT_TOKENS_JSON`. Unknown project IDs or unallowed `GLEAP_ATTACHMENT_HOSTS` fail closed.
+Point Gleap outbound webhooks at `POST /api/inbound/<listId>` with `Authorization: Bearer <inboundToken>` (or `?token=...`). Known Gleap ticket payloads map to clean `Description` / `Info` / `Metadata` tasks tagged `gleap` + `ext:<ticketId>` with delayed screenshot reconciliation queued using `GLEAP_PROJECT_TOKENS_JSON`. Unknown project IDs or unallowed `GLEAP_ATTACHMENT_HOSTS` fail closed.
+
+Store `GLEAP_PROJECT_TOKENS_JSON` as an encrypted **Worker secret** (not a plain config var) inside **your own Cloudflare account using your own gitignored `apps/api/wrangler.jsonc`** (or in local gitignored `apps/api/.dev.vars` during dev):
+
+```bash
+pnpm --filter @flow/api exec wrangler secret put GLEAP_PROJECT_TOKENS_JSON --config wrangler.jsonc
+```
 
 ## Configuration
 
 Copy `apps/api/wrangler.example.jsonc` to gitignored `apps/api/wrangler.jsonc` (see [docs/SELF_HOSTING.md](../../docs/SELF_HOSTING.md)).
 
-| Var / Secret | Purpose |
-| --- | --- |
-| `APP_HOSTNAME` | Public hostname used in webhook payloads and notification links |
-| `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | Cloudflare Access team domain and audience tag |
-| `OWNER_EMAIL` | Fallback bootstrap owner for Access first-login and `DEV_NO_AUTH` |
-| `EMAIL_DRY_RUN` | `"true"` logs outbound automation email instead of sending |
-| `EMAIL_FROM`, `EMAIL_FROM_NAME`, `EMAIL_BRAND_NAME`, `EMAIL_REQUESTER_FROM_NAME` | Outbound mail identity and HTML branding |
-| `EMAIL_INTAKE_DOMAIN`, `EMAIL_INTAKE_REPLY` | Inbound Mail Routing domain and reply-to-requester toggle |
-| `GLEAP_ATTACHMENT_HOSTS`, `GLEAP_PROJECT_TOKENS_JSON` | Allowed screenshot hosts and per-project API token map |
+| Var / Secret | Kind | Purpose |
+| --- | --- | --- |
+| `APP_HOSTNAME` | Var | Public hostname used in webhook payloads and notification links |
+| `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | Var | Cloudflare Access team domain and audience tag |
+| `OWNER_EMAIL` | Var | Fallback bootstrap owner for Access first-login and `DEV_NO_AUTH` |
+| `EMAIL_DRY_RUN` | Var | `"true"` logs outbound automation email instead of sending |
+| `EMAIL_FROM`, `EMAIL_FROM_NAME`, `EMAIL_BRAND_NAME`, `EMAIL_REQUESTER_FROM_NAME` | Var | Outbound mail identity and HTML branding |
+| `EMAIL_INTAKE_DOMAIN`, `EMAIL_INTAKE_REPLY` | Var | Inbound Mail Routing domain and reply-to-requester toggle |
+| `GLEAP_ATTACHMENT_HOSTS` | Var | Allowed screenshot hosts |
+| `GLEAP_PROJECT_TOKENS_JSON` | Secret | Encrypted per-project API token JSON map (`wrangler secret put`) |
 
 Bindings: `WORKSPACE` (DO), `ATTACHMENTS` (R2), `SIDE_EFFECTS` (Queue), `ASSETS` (SPA).
 
