@@ -828,10 +828,10 @@ bounded delays until `screenshotUrl` is ready. The image is fetched only over
 HTTPS from `GLEAP_ATTACHMENT_HOSTS`, every redirect is revalidated, the body is
 limited to 20 MB and the resulting R2 attachment id is deterministic so queue
 retries cannot add duplicates. Each Gleap project needs its own API token.
-Store the exact project-ID-to-token JSON object as one encrypted Worker secret:
+Store the exact project-ID-to-token JSON object as one encrypted Worker secret in your own Cloudflare account using your own config (`apps/api/wrangler.jsonc`):
 
 ```bash
-pnpm --filter @flow/api exec wrangler secret put GLEAP_PROJECT_TOKENS_JSON
+pnpm --filter @flow/api exec wrangler secret put GLEAP_PROJECT_TOKENS_JSON --config wrangler.jsonc
 ```
 
 For local development, put a value such as
