@@ -1,5 +1,5 @@
 /**
- * The 18 tools named in `MCP_TOOLS`.
+ * The 19 tools named in `MCP_TOOLS`.
  *
  * Every one is a thin wrapper over the same DO RPC method the REST route calls,
  * so a task created over MCP fires exactly the automations a task created in the
@@ -400,7 +400,7 @@ export function registerFlowTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Update task",
       description:
-        "Change fields on one taskId — title, description, status NAME, assigneeId, waitingOn (pass the turn: the user id whose move it is, without changing the owner; null hands it back to the assignee; that person is emailed) with optional turnNote (what you need from them; posted as a comment and quoted in their email), priority, dueDate/startDate, tags, snoozedUntil (epoch ms; hides the task from the board until then, or null to wake it now — waking never changes the status) and blockedNote (what outside the team it is blocked on, such as a client reply, 200 chars; for a teammate use waitingOn); omitted fields are left alone and null clears a nullable field.",
+        "Change fields on one taskId — title, description, status NAME, assigneeId, waitingOn (pass the turn: the user id whose move it is, without changing the owner; null clears waitingOn without sending a turn email — to hand the turn back with an email or turnNote, pass that person's user id) with optional turnNote (what you need from them; posted as a comment and quoted in their email), priority, dueDate/startDate, tags, snoozedUntil (epoch ms; hides the task from the board until then, or null to wake it now — waking never changes the status) and blockedNote (what outside the team it is blocked on, such as a client reply, 200 chars; for a teammate use waitingOn); omitted fields are left alone and null clears a nullable field.",
       inputSchema: UpdateTaskArgs.shape,
       outputSchema: UpdateTaskOut.shape,
       annotations: WRITE_IDEMPOTENT,

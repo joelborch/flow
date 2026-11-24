@@ -103,6 +103,32 @@ describe("email side effects", () => {
     );
   });
 
+  it("trims whitespace-padded EMAIL_FROM so live sends match assertLiveEmailSender", async () => {
+    const send = vi.fn().mockResolvedValue(undefined);
+    await deliverEmail(
+      {
+        kind: "email",
+        to: ["to@example.com"],
+        cc: [],
+        bcc: [],
+        subject: "Trimmed sender",
+        body: "Body",
+        ruleId: "ar_1",
+        taskId: "tk_1",
+      },
+      {
+        EMAIL_DRY_RUN: "false",
+        EMAIL_FROM: "  flow@mail.acme-ops.com \n",
+        SEND_EMAIL: { send } as unknown as SendEmail,
+      }
+    );
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: expect.objectContaining({ email: "flow@mail.acme-ops.com" }),
+      })
+    );
+  });
+
   it("sends multipart: plain-text markdown plus the branded HTML shell", async () => {
     const send = vi.fn().mockResolvedValue(undefined);
     await deliverEmail(
