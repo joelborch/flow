@@ -23,7 +23,7 @@ The snapshot payload has its own bound: closed tasks whose `closedAt` is older t
 
 ## The mutation turn
 
-Every normal mutation runs as one synchronous turn (`runTurn` in `packages/core/src/notify-drain.ts`, invoked via `packages/core/src/index.ts`) with no `await` in the middle, so SQLite write-coalescing commits it atomically:
+Every normal mutation runs as one synchronous turn (`executeTurn` in `packages/core/src/notify-drain.ts`, wired as `runTurn` in `packages/core/src/index.ts`) with no `await` in the middle, so SQLite write-coalescing commits it atomically:
 
 1. **Write the rows.**
 2. **Append one `Delta` per entity change** to the `changes` table. `seq` is the rowid: monotonic, gap-free.
