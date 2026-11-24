@@ -1,202 +1,53 @@
 /// <reference types="@cloudflare/workers-types" />
 import { DurableObject } from "cloudflare:workers";
-import {
-  ClientMsg as ClientMsgSchema,
-  ListHandoffsInput as ListHandoffsSchema,
-  ReplyHandoffInput as ReplyHandoffSchema,
-  RequestHandoffInput as RequestHandoffSchema,
-  SetEmailIntakeInput as SetEmailIntakeSchema,
-} from "@flow/shared";
 import type {
-  Action,
-  Actor,
-  ApiKey,
-  Attachment,
-  AuditEntry,
-  AutomationRule,
-  AutomationRunLog,
-  BoardSnapshot,
-  BulkResult,
-  BulkUpdateInput,
-  Comment,
-  CreateCommentInput,
-  CreateListInput,
-  CreateSpaceInput,
-  CreateSubtaskInput,
-  CreateTaskInput,
-  Delta,
-  EmailIntake,
-  Handoff,
-  HandoffState,
-  List,
-  ListHandoffsInput,
-  MoveTaskInput,
-  NotificationPref,
-  ReplyHandoffInput,
-  RequestHandoffInput,
-  Role,
-  SearchTasksInput,
-  SearchTasksResult,
-  ServerMsg,
-  SetEmailIntakeInput,
-  Space,
-  SpaceVisibility,
-  Status,
-  Subtask,
-  Task,
-  TaskDetail,
-  ToggleSubtaskInput,
-  UpdateTaskInput,
-  UpsertAutomationInput,
-  User,
-  WorkspaceRpc,
+  Actor, ApiKey, Attachment, AuditEntry, AutomationRule, AutomationRunLog, BoardSnapshot,
+  BulkResult, BulkUpdateInput, Comment, CreateTaskInput, EmailIntake, List, ListHandoffsInput, MoveTaskInput,
+  NotificationPref, ReplyHandoffInput, RequestHandoffInput, SearchTasksInput, SearchTasksResult,
+  SetEmailIntakeInput, Space, SpaceVisibility, Status, Subtask, Task, TaskDetail, UpdateTaskInput,
+  UpsertAutomationInput, User, WorkspaceRpc,
 } from "@flow/shared";
-import { AUTOMATION_MAX_DEPTH, mergeNotificationPrefs } from "@flow/shared";
-
-import { evaluateAutomations } from "./automation/engine.js";
-import { dueDateWithCutoff, nextRecurringDue } from "./automation/recurrence.js";
-import { pruneDueFires, sweepDueDateAutomations } from "./automation/schedule.js";
-import type {
-  AutomationContext,
-  AutomationDelta,
-  AutomationScheduleContext,
-  SideEffectPayload,
-  TaskFacts,
-} from "./automation/types.js";
+import { armAlarm, getBackupStatus, handleAlarm, runBackupNow, runJob, scheduleJob } from "./alarm.js";
+import { deleteAutomation, listAutomationRuns, upsertAutomation } from "./automation-apply.js";
+import type { JobRow } from "./rows.js";
 import {
-  EMAIL_INTAKE_HOURLY_LIMIT,
-  EMAIL_INTAKE_LIST_HOURLY_LIMIT,
-  EMAIL_INGEST_PERMANENT_ERROR,
-  EMAIL_INTAKE_TAG,
-  EMAIL_INTAKE_UNVERIFIED_TAG,
-  EMAIL_REPLY_REFERENCE_LIMIT,
-  SYNTHETIC_ID_PREFIX,
-  type EmailIngestAttachment,
-  type EmailIntakeCheck,
-  type EmailReplyTarget,
-  type IngestEmailInput,
-  type IngestEmailResult,
-  normalizeMessageId,
-  replySubject,
-  senderAllowed,
-} from "./email-intake.js";
+  type BackupStatus, type CreateApiKeyInput, type CreateAttachmentInput, type Env,
+  type ParsedCommentInput, type ParsedListInput, type ParsedSpaceInput, type ParsedSubtaskInput,
+  type ParsedToggleInput, type SetAttachmentDriveStorageInput, type UpsertUserInput,
+  type WorkspaceHost, getAttachment, listAttachments, listAutomations, listComments, listSubtasks,
+  listUsers, markEmailReply, recordDeliveryFailure, requireSpace,
+} from "./db-helpers.js";
+import { checkEmailIntake, ingestEmail, listEmailIntakes, setEmailIntake } from "./email-intake-store.js";
+import type { EmailIntakeCheck, IngestEmailInput, IngestEmailResult } from "./email-intake.js";
+import { listHandoffs, replyHandoff, requestHandoff } from "./handoffs-store.js";
+import { executeTaskTurn, executeTurn, getNotificationPrefs, setNotificationPrefs } from "./notify-drain.js";
+import { QueryRateLimiter, type QueryResult } from "./query.js";
 import {
-  HANDOFF_TAG,
-  OPEN_HANDOFF_STATES,
-  decideHandoffState,
-  handoffStateForStatusMove,
-  handoffTurnHolder,
-  handoffStatusMove,
-} from "./handoffs.js";
-import { id, token } from "./id.js";
+  getAuditLog, getListByInboundToken, getListWithSecrets, getSnapshot, getTaskDetail, getTaskDetails,
+  getUserByEmail, getWorkspaceMap, listApiKeys, resolveApiKey, runQuery, searchTasks,
+} from "./reads.js";
+import { SandboxWriteBudget } from "./sandbox-seed.js";
 import {
-  between,
-  columnHasCollapsed,
-  needsRebalance,
-  nextPosition,
-  nextSubtaskPosition,
-  nextTaskPosition,
-  rebalanceTaskColumn,
-} from "./position.js";
-import {
-  type ApiKeyRow,
-  type AttachmentRow,
-  type AuditRow,
-  type ChangeRow,
-  type CommentRow,
-  type EmailIntakeRow,
-  type JobRow,
-  type ListRow,
-  type RuleRow,
-  type SnapshotTaskRowSql,
-  type SpaceRow,
-  type SubtaskRow,
-  type TaskRowSql,
-  type UserRow,
-  tagsText,
-  toApiKey,
-  toAttachment,
-  toAuditEntry,
-  toComment,
-  toEmailIntake,
-  toList,
-  toListWithSecrets,
-  toRule,
-  toSnapshotTask,
-  toSpace,
-  toSubtask,
-  toTask,
-  toUser,
-} from "./rows.js";
-import {
-  type NotifyKind,
-  PREF_KEY,
-  notificationTag,
-  readNotificationPrefs,
-  recipientsFor,
-  renderNotification,
-  taskUrl,
-  writeNotificationPrefs,
-} from "./notifications.js";
-import {
-  ASSIGNMENT_ATTRIBUTION_MIGRATION_ID,
-  CHANGES_SPACE_ID_MIGRATION_ID,
-  PLACEHOLDER_EMAIL_DOMAIN,
-  needsMigration,
-  runMigrations,
-  seedIfEmpty,
-  seedJobs,
+  ASSIGNMENT_ATTRIBUTION_MIGRATION_ID, CHANGES_SPACE_ID_MIGRATION_ID, needsMigration,
+  runMigrations, seedIfEmpty, seedJobs,
 } from "./schema.js";
-import { QueryRateLimiter, type QueryResult, runReadOnlyQuery } from "./query.js";
-import { searchTasks as runSearch } from "./search.js";
-import { type SnoozedRow, WAKE_SWEEP_LIMIT, wakeCandidates, wakesOnComment } from "./snooze.js";
+import { bumpResyncFloor } from "./sync-floor.js";
 import {
-  closedStatus,
-  getStatus,
-  insertStatuses,
-  listStatuses,
-  normalizeStatusSpecs,
-  openStatus,
-  resolveStatusName,
-} from "./statuses.js";
-import { REPLAY_GAP_LIMIT, bumpResyncFloor, needsSnapshot, resyncFloor } from "./sync-floor.js";
-import { type ScopedDelta, Turn, diffOf, toActor } from "./turn.js";
-import { requireAssignee } from "./users.js";
-import { websocketCloseReplyCode } from "./websocket-close.js";
-import { alarmLog } from "./alarm-observability.js";
-import { SIDE_EFFECTS_MESSAGE_BYTES, chunkSideEffects } from "./side-effect-size.js";
+  bulkUpdate, clearPendingObjectDeletes, createAttachment, createComment, createSubtask, createTask,
+  deleteAttachment, deleteComment, deleteSubtask, deleteTask, markAttachmentDriveCleanupComplete,
+  moveTask, setAttachmentDriveStorage, toggleSubtask, updateSubtask, updateTask,
+} from "./task-mutations.js";
+import { listSpaceMemberIds, visibleSpaceIds } from "./visibility.js";
 import {
-  automationRulesForSnapshot,
-  canSeeSpace,
-  deltaVisibleTo,
-  isPrivilegedDeltaEntity,
-  isSpaceMember,
-  isSpaceScopedEntity,
-  UNRESOLVED_SPACE_ID,
-  isSystemActor,
-  listSpaceMemberIds,
-  privateSpaceError,
-  privateSpaceIds,
-  isPrivilegedRole,
-  roleOf,
-  visibleSpaceIds,
-} from "./visibility.js";
+  claimOwner, createApiKey, createList, createSpace, deleteList, deleteSpace, revokeApiKey,
+  seedSandbox, setApiKeyEmailRequesters, setListInboundToken, setSpaceMembers, setSpaceVisibility,
+  updateList, updateSpace, upsertUser, wipeSandbox,
+} from "./workspace-mutations.js";
+import { handleWsClose, handleWsError, handleWsFetch, handleWsMessage } from "./ws.js";
 
-import {
-  SANDBOX_KEY_NAME,
-  SANDBOX_MEMBER_ID,
-  SANDBOX_WRITES_PER_MINUTE,
-  SandboxBusy,
-  SandboxWriteBudget,
-  seedSandboxWorkspace,
-} from "./sandbox-seed.js";
 export {
-  SANDBOX_KEY_NAME,
-  SANDBOX_MEMBER_ID,
-  SANDBOX_WRITES_PER_MINUTE,
-  SandboxBusy,
-  SandboxWriteBudget,
-};
+  SANDBOX_KEY_NAME, SANDBOX_MEMBER_ID, SANDBOX_WRITES_PER_MINUTE, SandboxBusy, SandboxWriteBudget,
+} from "./sandbox-seed.js";
 export type {
   EmailIngestAttachment, EmailIntakeCheck, IngestEmailInput, IngestEmailResult,
 } from "./email-intake.js";
@@ -207,214 +58,27 @@ export {
 } from "./email-intake.js";
 export { ID_PREFIX, INBOUND_TOKEN_PREFIX, id, token } from "./id.js";
 export { HANDOFF_TAG, OPEN_HANDOFF_STATES } from "./handoffs.js";
-
-export interface Env {
-  WORKSPACE: DurableObjectNamespace<Workspace>;
-  ATTACHMENTS: R2Bucket;
-  SIDE_EFFECTS: Queue;
-  ASSETS: Fetcher;
-  /**
-   * Both come from wrangler `vars` and are read by the automation engine
-   * (`{{task.url}}` and the send_email dry-run flag). Optional here so a test
-   * harness can omit them; apps/api narrows them to required strings.
-   */
-  APP_HOSTNAME?: string;
-  EMAIL_DRY_RUN?: string;
-  /** "true" lets a person email a comment back to a ticket's requester. Off when unset. */
-  EMAIL_INTAKE_REPLY?: string;
-  /**
-   * "true" on the public sandbox Worker (sandbox/wrangler.jsonc). Each sandbox
-   * workspace lives for an hour and is then wiped, so it schedules no recurring
-   * jobs: an alarm would wake the dead workspace for nothing, and a backup would
-   * write to R2 on the visitor's behalf.
-   */
-  SANDBOX?: string;
-}
-
+export {
+  AUDIT_PRUNE_BATCH, AUDIT_PRUNE_MAX_BATCHES, AUDIT_RETENTION_DAYS, AUTOMATION_RUNS_RETENTION,
+  BACKUP_RETENTION, BACKUP_STALE_MS, CHANGES_RETENTION, SNAPSHOT_CLOSED_WINDOW_MS, type BackupStatus,
+  type CreateApiKeyInput, type CreateAttachmentInput, type Env, type SetAttachmentDriveStorageInput,
+  type UpsertUserInput,
+} from "./db-helpers.js";
 // Queues' per-message (128KB) and per-sendBatch (100 msgs / 256KB) limits:
 // oversized payloads are truncated to fit, and chunking respects both caps.
 export {
-  SIDE_EFFECTS_BATCH_BYTES,
-  SIDE_EFFECTS_BATCH_SIZE,
-  SIDE_EFFECTS_MESSAGE_BYTES,
-  TRUNCATION_MARKER,
-  chunkSideEffects,
-  fitSideEffect,
-  sideEffectBytes,
+  SIDE_EFFECTS_BATCH_BYTES, SIDE_EFFECTS_BATCH_SIZE, SIDE_EFFECTS_MESSAGE_BYTES,
+  TRUNCATION_MARKER, chunkSideEffects, fitSideEffect, sideEffectBytes,
 } from "./side-effect-size.js";
-
-// Zod schemas carry defaults, so the *output* type is what the DO receives.
-// Deriving these from the schemas keeps packages/shared the only definition.
-type ParsedListInput = ReturnType<typeof CreateListInput.parse>;
-type ParsedSpaceInput = ReturnType<typeof CreateSpaceInput.parse>;
-type ParsedSubtaskInput = ReturnType<typeof CreateSubtaskInput.parse>;
-type ParsedToggleInput = ReturnType<typeof ToggleSubtaskInput.parse>;
-type ParsedCommentInput = ReturnType<typeof CreateCommentInput.parse>;
-
-const DAY_MS = 86_400_000;
-
-/** Closed tasks older than this drop out of the board snapshot. */
-export const SNAPSHOT_CLOSED_WINDOW_MS = 60 * DAY_MS;
+/** Re-exported so callers can reuse the fractional-ordering maths. */
+export { between as positionBetween, POSITION_STEP } from "./position.js";
 // REPLAY_GAP_LIMIT lives in ./sync-floor.ts with the rest of the
 // snapshot-vs-replay decision; re-exported below to keep the surface stable.
-/** Rows kept by the prune_changes job. */
-export const CHANGES_RETENTION = 50_000;
-/**
- * Run-log rows kept by the same job. Capped by count rather than age because
- * `automation_runs` is indexed on (rule_id, at) and (task_id, at), so a bare
- * date-range delete would be a full scan; `id` is the rowid, so this is not.
- */
-export const AUTOMATION_RUNS_RETENTION = 20_000;
-/** Objects kept under `backups/` in R2 — one per day, so 30 is ~a month. */
-export const BACKUP_RETENTION = 30;
-/**
- * Audit rows older than this are deleted by the same daily job. Unlike
- * automation_runs this one can be age-based: `idx_audit_at` covers `at`, so
- * the oldest-first range read is an index walk, not a table scan.
- */
-export const AUDIT_RETENTION_DAYS = 365;
-/**
- * Rows per audit DELETE, and DELETEs per daily run. A first run over a big
- * backlog stops at 100k rows and leaves the rest for tomorrow instead of
- * turning one alarm into an unbounded one.
- */
-export const AUDIT_PRUNE_BATCH = 5_000;
-export const AUDIT_PRUNE_MAX_BATCHES = 20;
-/** /api/health reports the backup stale when its last success is older than this. */
-export const BACKUP_STALE_MS = 36 * 3_600_000;
-
-/** Last outcome of the daily backup, as persisted in `job_status`. */
-export interface BackupStatus {
-  lastSuccessAt: number | null;
-  /** R2 key, row count and gzipped bytes of the last successful backup. */
-  lastSuccess: { key: string; rows: number; bytes: number } | null;
-  lastFailureAt: number | null;
-  lastFailureError: string | null;
-  /** No successful backup within BACKUP_STALE_MS (or ever). */
-  stale: boolean;
-}
-
-interface ConnState {
-  userId: string;
-}
-
-/**
- * Header the api Worker uses to hand the authenticated user id to the DO on the
- * `/ws` upgrade (`WS_USER_HEADER` in apps/api/src/env.ts — same string, and the
- * two packages cannot import from each other). The Worker strips any
- * client-supplied copy first, which is what makes it safe to trust.
- */
-const WS_USER_HEADER = "X-Flow-User-Id";
-
-export interface UpsertUserInput {
-  id?: string;
-  email: string;
-  name?: string;
-  role?: Role;
-  deactivated?: boolean;
-  clickupId?: string | null;
-}
-
-export interface CreateApiKeyInput {
-  userId: string;
-  name: string;
-  /** sha256 hex of the bearer token. The plaintext never reaches the DO. */
-  tokenHash: string;
-}
-
-export interface CreateAttachmentInput {
-  /**
-   * Optional caller-assigned id. The api Worker mints it before uploading
-   * because the R2 key embeds it; when omitted the DO generates one.
-   */
-  id?: string;
-  taskId: string;
-  filename: string;
-  r2Key: string;
-  size: number;
-  mimeType: string;
-}
-
-export interface SetAttachmentDriveStorageInput {
-  attachmentId: string;
-  driveFileId: string;
-  driveWebViewLink: string;
-  driveDestination: "shared" | "private";
-}
-
-/** core-0013-handoffs; mapped to `Task.handoff` by `toHandoff` in ./rows.ts. */
-const HANDOFF_COLUMNS = `handoff_requested_by, handoff_state, handoff_return, handoff_context,
-  handoff_state_changed_at`;
-
-const TASK_COLUMNS = `id, list_id, title, description, status_id, assignee_id, assigned_by, assigned_at,
-  waiting_on, priority, due_date, start_date, snoozed_until, blocked_note, tags, position,
-  created_by, created_at, updated_at, closed_at, clickup_id,
-  ${HANDOFF_COLUMNS}`;
-
-/**
- * The snapshot projection: board-render columns only, with the description
- * collapsed to a boolean in SQL. Keep it in step with `SnapshotTask` in
- * packages/shared/src/events.ts and `toSnapshotTask` in ./rows.ts.
- */
-const SNAPSHOT_TASK_COLUMNS = `id, list_id, title, status_id, assignee_id, assigned_by, assigned_at, waiting_on, priority,
-  due_date, tags, position, created_at, updated_at, snoozed_until, blocked_note,
-  ${HANDOFF_COLUMNS}, (description != '') AS has_description`;
-
-/** Every space read goes through this, so `visibility` can never be forgotten. */
-const SPACE_COLUMNS = `id, name, color, position, archived, visibility, created_at, clickup_id`;
-
-const LIST_COLUMNS = `id, space_id, name, position, archived, inbound_token, created_at, clickup_id`;
-
-const EMAIL_INTAKE_COLUMNS = `list_id, alias, allowed_senders, created_at, updated_at`;
-
-/** Every api key read goes through this; can_email_requesters is core-0014-email-replies. */
-const API_KEY_COLUMNS = `id, user_id, name, token_hash, created_at, last_used_at, revoked_at, can_email_requesters`;
-
-/** Every comment read goes through this; `email_*` is core-0014-email-replies. */
-const COMMENT_COLUMNS = `id, task_id, author_id, body, created_at, via, email_to, email_status`;
-
-const USER_COLUMNS = `id, email, name, role, deactivated, created_at, needs_email_update, clickup_id`;
-
-const SUBTASK_COLUMNS = `id, task_id, title, done, assignee_id, assigned_by, assigned_at,
-  due_date, note, position, created_at`;
-
-const ATTACHMENT_COLUMNS = `id, task_id, filename, r2_key, storage_provider, drive_file_id,
-  drive_web_view_link, drive_destination, migration_state, size, mime_type, uploaded_by, created_at`;
-
-/** The window both email rate limits count over. */
-const EMAIL_RATE_WINDOW_MS = 3_600_000;
-
-/**
- * How many of a message's In-Reply-To/References ids threading looks up. The
- * Worker caps the list too, but one turn must never run an unbounded number of
- * queries on what a sender put in a header.
- */
-const EMAIL_THREAD_REFERENCE_LIMIT = 20;
-
-const permanentEmailError = (detail: string): Error =>
-  new Error(`${EMAIL_INGEST_PERMANENT_ERROR}: ${detail}`);
-
-const TASK_DIFF_KEYS = [
-  "listId",
-  "title",
-  "description",
-  "statusId",
-  "assigneeId",
-  "assignedBy",
-  "assignedAt",
-  "waitingOn",
-  "priority",
-  "dueDate",
-  "startDate",
-  "snoozedUntil",
-  "blockedNote",
-  "tags",
-  "position",
-  "closedAt",
-  // An object: diffOf compares it by value, so an unchanged handoff emits
-  // nothing and a changed one ships whole.
-  "handoff",
-] as const;
+export { REPLAY_GAP_LIMIT } from "./sync-floor.js";
+export {
+  QUERY_DEFAULT_ROWS, QUERY_MAX_ROWS, QUERY_MEMBER_MAX_ROWS, QUERY_MEMBER_PER_MINUTE,
+  QUERY_VIEWS, QueryRejected, type QueryResult,
+} from "./query.js";
 
 /**
  * The workspace Durable Object: a single instance holds the entire workspace
@@ -426,16 +90,30 @@ const TASK_DIFF_KEYS = [
  */
 export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   private readonly sql: SqlStorage;
-  /** Cached view of the armed alarm so mutations rarely await getAlarm(). */
-  private armedAlarm: number | null = null;
   /** Members' runQuery budget; in memory, so an eviction resets it. */
   private readonly queryLimiter = new QueryRateLimiter();
   /** Sandbox only: one write budget every visitor shares (see SandboxWriteBudget). */
   private readonly sandboxWrites = new SandboxWriteBudget();
+  private readonly host: WorkspaceHost;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    this.host = {
+      ctx,
+      env,
+      sql: this.sql,
+      queryLimiter: this.queryLimiter,
+      sandboxWrites: this.sandboxWrites,
+      /** Cached view of the armed alarm so mutations rarely await getAlarm(). */
+      armedAlarm: null,
+      maxSeq: () => this.maxSeq(),
+      runTurn: (actor, fn, silent = false) => executeTurn(this.host, actor, fn, silent),
+      runTaskTurn: (actor, fn) => executeTaskTurn(this.host, actor, fn),
+      armAlarm: () => armAlarm(this.host),
+      getSnapshot: (forUserId) => getSnapshot(this.host, forUserId),
+    };
+
     // Hot path: one SELECT on _migrations plus seedJobs' per-kind guards
     // (three COUNTs on a table with a handful of rows). Only a genuinely
     // out-of-date instance — or one missing a newly-added job kind — pays
@@ -459,16 +137,20 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         }
         seedIfEmpty(this.sql);
         if (env.SANDBOX !== "true") seedJobs(this.sql);
-        await this.armAlarm();
+        await armAlarm(this.host);
       });
     } else if (env.SANDBOX !== "true" && seedJobs(this.sql) > 0) {
       // A job kind added after this workspace last migrated (seedJobs used to
       // run only on an empty scheduled_jobs table, which left new kinds dead
       // on existing workspaces). Re-arm so the new job's run_at is honored.
       ctx.blockConcurrencyWhile(async () => {
-        await this.armAlarm();
+        await armAlarm(this.host);
       });
     }
+  }
+
+  private maxSeq(): number {
+    return this.sql.exec<{ v: number }>("SELECT COALESCE(MAX(seq), 0) AS v FROM changes").one().v;
   }
 
   // =========================================================================
@@ -479,967 +161,23 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * WebSocket upgrade at `/ws`. The api Worker authenticates the request and
    * forwards it with `?userId=us_…`; the DO does not re-authenticate.
    */
-  fetch(req: Request): Response {
-    const url = new URL(req.url);
-    if (url.pathname !== "/ws") {
-      return new Response("workspace do: unknown path", { status: 404 });
-    }
-    if ((req.headers.get("Upgrade") ?? "").toLowerCase() !== "websocket") {
-      return new Response("expected websocket upgrade", { status: 426 });
-    }
-    const pair = new WebSocketPair();
-    const server = pair[1];
-    this.ctx.acceptWebSocket(server);
-    // The Worker sends the id as a header; the `?userId=` form is kept as a
-    // fallback for direct-to-DO callers (tests, a curl against the stub).
-    const state: ConnState = {
-      userId: req.headers.get(WS_USER_HEADER) ?? url.searchParams.get("userId") ?? "",
-    };
-    server.serializeAttachment(state);
-    return new Response(null, { status: 101, webSocket: pair[0] });
-  }
-
+  fetch(req: Request): Response { return handleWsFetch(this.host, req); }
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    if (typeof message !== "string") return;
-    const parsed = ClientMsgSchema.safeParse(safeJson(message));
-    if (!parsed.success) return; // ignore malformed frames
-    const msg = parsed.data;
-
-    if (msg.type === "ping") {
-      this.send(ws, { type: "pong" });
-      return;
-    }
-
-    // hello: catch the client up, then it lives on broadcast deltas alone. The
-    // snapshot and the replay are both filtered by the identity this socket was
-    // accepted with, so a member never receives private-space rows either way.
-    const userId = this.connUserId(ws);
-    // upsertUser closes a deactivated user's sockets, and the Worker refuses
-    // them at upgrade; this catches a socket accepted in between the two.
-    if (this.isDeactivated(userId)) {
-      this.closeSocket(ws, 1008, "user deactivated");
-      return;
-    }
-    const maxSeq = this.maxSeq();
-    if (msg.sinceSeq === null) {
-      this.send(ws, { type: "snapshot", snapshot: this.getSnapshot(userId) });
-      return;
-    }
-    const { min } = this.sql
-      .exec<{ min: number | null }>("SELECT MIN(seq) AS min FROM changes")
-      .one();
-    // The resync floor covers the delta-less mutations (import, membership,
-    // visibility): they change board state without writing to `changes`, so a
-    // replay from a seq at or below the floor would silently skip them — the
-    // snapshot path is the only correct answer there. See ./sync-floor.ts.
-    const snapshotNeeded = needsSnapshot({
-      sinceSeq: msg.sinceSeq,
-      maxSeq,
-      minSeq: min,
-      floor: resyncFloor(this.sql),
-      gapLimit: REPLAY_GAP_LIMIT,
-    });
-    if (snapshotNeeded) {
-      this.send(ws, { type: "snapshot", snapshot: this.getSnapshot(userId) });
-      return;
-    }
-    const deltas = this.filterReplay(this.replay(msg.sinceSeq), userId);
-    if (deltas.length > 0) this.send(ws, { type: "deltas", deltas });
+    return handleWsMessage(this.host, ws, message);
   }
-
-  /**
-   * Apply per-space permissions to a replayed range.
-   *
-   * Each `changes` row carries the space id it was stamped with at emit time,
-   * which is authoritative even after the underlying row is deleted. Rows
-   * written before the `core-0007-changes-space-id` migration have a null
-   * stored id and fall back to live resolution, memoised by entity id.
-   *
-   * Null-fallback semantics (fail closed): when the stored id is null AND live
-   * resolution also returns null, a space-scoped entity (task, list, comment,
-   * …) is mapped to UNRESOLVED_SPACE_ID — never in any member's visible set,
-   * so members do not receive it, while owners/admins (visible === null) still
-   * do. A deleted private-space row must not decay into "visible to everyone".
-   * Workspace-scoped deltas (`user`) keep their null space and reach everyone.
-   *
-   * The whole pass is skipped when the workspace has no private spaces or the
-   * user is an owner/admin — the normal case, keeping reconnects cheap.
-   */
-  private filterReplay(scoped: ScopedDelta[], userId: string): Delta[] {
-    const deltas = scoped.map((s) => s.delta);
-    if (scoped.length === 0) return deltas;
-    // Privileged-entity deltas (automation rules) must be filtered for members
-    // even when the workspace has no private spaces, so the cheap early-out
-    // only applies when neither filter has anything to do.
-    const hasPrivilegedEntity = deltas.some((d) => isPrivilegedDeltaEntity(d.entity));
-    if (!hasPrivilegedEntity && privateSpaceIds(this.sql).size === 0) return deltas;
-    const visible = visibleSpaceIds(this.sql, userId);
-    if (visible === null) return deltas;
-
-    const memo = new Map<string, string | null>();
-    const liveSpaceId = (d: Delta): string | null => {
-      const key = `${d.entity}:${d.id}`;
-      if (!memo.has(key)) memo.set(key, this.spaceIdForDelta(d.entity, d.id, undefined));
-      return memo.get(key) ?? null;
-    };
-    return scoped
-      .filter((s) => {
-        const stored = s.spaceId ?? liveSpaceId(s.delta);
-        const spaceId =
-          stored === null && isSpaceScopedEntity(s.delta.entity) ? UNRESOLVED_SPACE_ID : stored;
-        return deltaVisibleTo(s.delta.entity, spaceId, visible);
-      })
-      .map((s) => s.delta);
-  }
-
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
-    // The reply can race a close we started (a deactivated user's socket), in
-    // which case the socket is already closing and close() throws.
-    this.closeSocket(ws, websocketCloseReplyCode(code), reason);
+    handleWsClose(ws, code, reason);
   }
-
-  async webSocketError(_ws: WebSocket, error: unknown): Promise<void> {
-    console.error("websocket error", error);
-  }
-
-  private send(ws: WebSocket, msg: ServerMsg): void {
-    try {
-      ws.send(JSON.stringify(msg));
-    } catch (err) {
-      console.error("websocket send failed", err);
-    }
-  }
-
-  private broadcast(msg: ServerMsg): void {
-    const payload = JSON.stringify(msg);
-    for (const ws of this.ctx.getWebSockets()) {
-      try {
-        ws.send(payload);
-      } catch {
-        // Connection is going away; close/error handlers clean up.
-      }
-    }
-  }
-
-  /** The user id stamped on a hibernated socket at accept time. */
-  private connUserId(ws: WebSocket): string {
-    try {
-      return (ws.deserializeAttachment() as ConnState | null)?.userId ?? "";
-    } catch {
-      return "";
-    }
-  }
-
-  /**
-   * Broadcast a turn's deltas, dropping the ones each connection may not see.
-   *
-   * The common case is that no private space was touched, and then this is the
-   * old single-payload broadcast — one JSON.stringify, one send per socket. Only
-   * when a delta comes from a private space do we go per-connection, and even
-   * then the visible-space lookup is memoised per user for the call, so ten
-   * sockets belonging to three people cost three lookups.
-   */
-  private broadcastDeltas(scoped: ScopedDelta[]): void {
-    if (scoped.length === 0) return;
-    const restricted = privateSpaceIds(this.sql);
-    // Same fail-closed rule as filterReplay: a space-scoped delta whose space
-    // did not resolve at emit time gets the unresolved sentinel, so when any
-    // private space exists it is withheld from members instead of defaulting
-    // to visible. Space-less deltas (`user`) keep null and reach everyone.
-    const effective = scoped.map((s): ScopedDelta => ({
-      delta: s.delta,
-      spaceId:
-        s.spaceId === null && isSpaceScopedEntity(s.delta.entity) ? UNRESOLVED_SPACE_ID : s.spaceId,
-    }));
-    const touchesPrivate =
-      restricted.size > 0 &&
-      effective.some(
-        (s) => s.spaceId !== null && (restricted.has(s.spaceId) || s.spaceId === UNRESOLVED_SPACE_ID)
-      );
-    // Automation-rule deltas are owner/admin-only, so their presence forces the
-    // per-connection path exactly as a private-space delta does.
-    const touchesPrivileged = effective.some((s) => isPrivilegedDeltaEntity(s.delta.entity));
-    if (!touchesPrivate && !touchesPrivileged) {
-      this.broadcast({ type: "deltas", deltas: effective.map((s) => s.delta) });
-      return;
-    }
-
-    const seen = new Map<string, Set<string> | null>();
-    const visibleFor = (userId: string): Set<string> | null => {
-      if (!seen.has(userId)) seen.set(userId, visibleSpaceIds(this.sql, userId));
-      return seen.get(userId) ?? null;
-    };
-
-    for (const ws of this.ctx.getWebSockets()) {
-      // `visible === null` is visibleSpaceIds's owner/admin signal, so it is
-      // also what admits the privileged-entity deltas.
-      const visible = visibleFor(this.connUserId(ws));
-      const deltas = effective
-        .filter((s) => deltaVisibleTo(s.delta.entity, s.spaceId, visible))
-        .map((s) => s.delta);
-      if (deltas.length === 0) continue;
-      this.send(ws, { type: "deltas", deltas });
-    }
-  }
-
-  /**
-   * Tell affected clients to pull a fresh, correctly-filtered snapshot.
-   *
-   * A visibility flip or a membership change cannot be expressed as a patch —
-   * a client that just lost access holds a whole subtree it must forget, and one
-   * that just gained access has never seen the rows. `resync` is the existing
-   * escape hatch for exactly that, and it goes only to the connections whose
-   * view actually changed: owners and admins already see everything, so their
-   * boards are untouched.
-   */
-  private resyncFor(affects: (userId: string) => boolean): void {
-    for (const ws of this.ctx.getWebSockets()) {
-      const userId = this.connUserId(ws);
-      if (isPrivilegedRole(roleOf(this.sql, userId))) continue;
-      if (!affects(userId)) continue;
-      this.send(ws, { type: "resync" });
-    }
-  }
-
-  /**
-   * Resync the users for whom a task or list changed space in this turn.
-   *
-   * A move is broadcast as an ordinary update stamped with the NEW space, which
-   * is only a correct patch for someone who sees both ends: a member who sees
-   * only the destination gets `{listId, statusId, …}` for a task they never
-   * held, and one who sees only the source never learns it left (nor, for a
-   * list, that its tasks went with it). Like a visibility flip, that cannot be
-   * patched, so the floor is bumped and exactly those users resync. Same-list
-   * and same-space moves stop at the first checks, so ordinary drags stay cheap.
-   *
-   * Runs before `flush`, so an affected client sees `resync` first and drops
-   * the half-patch that follows instead of briefly rendering it.
-   */
-  private resyncForSpaceMoves(t: Turn): void {
-    const moves: Array<{ from: string | null; to: string | null }> = [];
-    for (const { delta, spaceId } of t.entries) {
-      if (delta.op !== "update" || delta.data === null) continue;
-      let from: string | null;
-      if (delta.entity === "task" && "listId" in delta.data) {
-        const prevListId = delta.prev?.["listId"];
-        if (typeof prevListId !== "string") continue;
-        from = this.spaceIdForList(prevListId);
-      } else if (delta.entity === "list" && "spaceId" in delta.data) {
-        const prevSpaceId = delta.prev?.["spaceId"];
-        if (typeof prevSpaceId !== "string") continue;
-        from = prevSpaceId;
-      } else {
-        continue;
-      }
-      if (from !== spaceId) moves.push({ from, to: spaceId });
-    }
-    if (moves.length === 0) return;
-
-    // Between two workspace-visible spaces everyone sees both ends already.
-    const restricted = privateSpaceIds(this.sql);
-    const isRestricted = (id: string | null) => id !== null && restricted.has(id);
-    if (!moves.some((m) => isRestricted(m.from) || isRestricted(m.to))) return;
-
-    // Offline clients replaying across this seq would hit the same hole.
-    bumpResyncFloor(this.sql, this.maxSeq());
-    this.resyncFor((userId) => {
-      const visible = visibleSpaceIds(this.sql, userId);
-      if (visible === null) return false;
-      const sees = (id: string | null) => id !== null && visible.has(id);
-      return moves.some((m) => sees(m.from) !== sees(m.to));
-    });
-  }
-
-  /** Every open socket accepted for this user id (see `ConnState`). */
-  private socketsFor(userId: string): WebSocket[] {
-    return this.ctx.getWebSockets().filter((ws) => this.connUserId(ws) === userId);
-  }
-
-  private closeSocket(ws: WebSocket, code: number, reason: string): void {
-    try {
-      ws.close(code, reason);
-    } catch {
-      // Already closing; the close handler cleans up.
-    }
-  }
-
-  /** Unknown ids are not "deactivated": they keep the member treatment. */
-  private isDeactivated(userId: string): boolean {
-    if (userId === "") return false;
-    const row = this.sql
-      .exec<{ deactivated: number }>("SELECT deactivated FROM users WHERE id = ?", userId)
-      .toArray()[0];
-    return row?.deactivated === 1;
-  }
-
-  /**
-   * Replayed deltas paired with the space id STORED on each `changes` row at
-   * emit time (null for pre-migration rows and genuinely space-less deltas).
-   * The stored value survives row deletion, which live resolution does not.
-   */
-  private replay(sinceSeq: number): ScopedDelta[] {
-    return this.sql
-      .exec<ChangeRow>(
-        `SELECT seq, op, entity, entity_id, data, actor_user_id, at, space_id
-         FROM changes WHERE seq > ? ORDER BY seq LIMIT ?`,
-        sinceSeq,
-        REPLAY_GAP_LIMIT
-      )
-      .toArray()
-      .map(
-        (r): ScopedDelta => ({
-          delta: {
-            seq: r.seq,
-            op: r.op as Delta["op"],
-            entity: r.entity as Delta["entity"],
-            id: r.entity_id,
-            data: r.data === null ? null : (JSON.parse(r.data) as Record<string, unknown>),
-            actorUserId: r.actor_user_id,
-            at: r.at,
-          },
-          spaceId: r.space_id,
-        })
-      );
-  }
-
-  private maxSeq(): number {
-    return this.sql.exec<{ v: number }>("SELECT COALESCE(MAX(seq), 0) AS v FROM changes").one().v;
-  }
-
-  // =========================================================================
-  // Mutation turns
-  // =========================================================================
-
-  private runTurn<T>(actor: Actor, fn: (t: Turn) => T, silent = false): T {
-    // Before anything is written, so a refused turn changes nothing.
-    if (this.env.SANDBOX === "true") this.sandboxWrites.take();
-    const t = new Turn(this.sql, actor, Date.now(), silent, (entity, entityId, taskId) =>
-      this.spaceIdForDelta(entity, entityId, taskId)
-    );
-    const result = fn(t);
-    this.drainAutomations(t);
-    // After automations, so a rule that reassigns or moves a task also notifies.
-    this.drainNotifications(t);
-    // After automations too: a move_to_list rule can carry a task across spaces.
-    this.resyncForSpaceMoves(t);
-    this.flush(t);
-    return result;
-  }
-
-  /**
-   * A mutation turn whose result is a Task, re-read after the automation drain.
-   *
-   * Automations run inline in this same turn, so by the time the turn ends the
-   * row may no longer look like what the mutation itself wrote — a rule can have
-   * moved the task, changed its status or retagged it. Returning the pre-drain
-   * value made `move()` report the status the caller asked for while the board
-   * (fed by deltas) showed the automation's. Re-reading closes that gap.
-   *
-   * The row can only be missing if something deleted the task mid-turn, which
-   * nothing does today; the pre-drain value is the honest fallback.
-   */
-  private runTaskTurn(actor: Actor, fn: (t: Turn) => Task): Task {
-    const before = this.runTurn(actor, fn);
-    const row = this.taskRow(before.id);
-    return row === null ? before : toTask(row);
-  }
-
-  /**
-   * Feed every delta produced in this turn to the automation engine, including
-   * deltas the automations themselves produced (depth-stamped, capped at
-   * AUTOMATION_MAX_DEPTH). A rule that throws never fails the user's mutation.
-   */
-  private drainAutomations(t: Turn): void {
-    if (t.silent) return;
-    const HARD_CAP = 5_000;
-    let i = 0;
-    let evaluated = 0;
-    while (i < t.entries.length) {
-      const entry = t.entries[i]!;
-      i++;
-      if (entry.evaluated) continue;
-      entry.evaluated = true;
-      // Deltas at or past the cap are still handed over: the engine recognises
-      // the depth itself and writes a clean "depth cap" automation_runs entry
-      // instead of silently dropping the chain. It takes no actions, so the
-      // loop still terminates.
-      if (++evaluated > HARD_CAP) {
-        console.error("automation fan-out cap reached; stopping evaluation for this turn");
-        break;
-      }
-      try {
-        evaluateAutomations(this.automationContext(t, entry.depth), entry.delta);
-      } catch (err) {
-        console.error("automation evaluation failed", entry.delta.entity, entry.delta.id, err);
-      }
-    }
-  }
-
-  // =========================================================================
-  // System email notifications
-  //
-  // Independent of automation rules: always-on per each recipient's prefs. Runs
-  // after the automation drain so a rule-driven reassign/move/status change also
-  // notifies. Silent (import) turns emit no deltas, so — like automations — this
-  // never fires on import. A recipient is never emailed about their own action.
-  // =========================================================================
-
-  private drainNotifications(t: Turn): void {
-    if (t.silent) return;
-    // Snapshot: notification enqueues never append deltas, but iterate a copy so
-    // the loop bound is fixed regardless.
-    for (const entry of [...t.entries]) {
-      try {
-        this.notifyForDelta(t, entry.delta);
-      } catch (err) {
-        console.error("notification failed", entry.delta.entity, entry.delta.id, err);
-      }
-    }
-  }
-
-  private notifyForDelta(t: Turn, delta: AutomationDelta): void {
-    const actorId = delta.actorUserId;
-    const data = delta.data ?? {};
-
-    // A new handoff tells its recipient. Only handoffs: an ordinary task
-    // created with an assignee has never emailed anyone (assignment
-    // notifications ride the update path below), and changing that for every
-    // create is a separate decision from filing a request for a teammate.
-    if (delta.entity === "task" && delta.op === "create") {
-      if (data["handoff"] == null) return;
-      const facts = this.loadTaskFacts(delta.id);
-      if (facts === null) return;
-      const newAssigneeId = (data["assigneeId"] as string | null) ?? null;
-      for (const rid of recipientsFor("assigned", { assigneeId: null, creatorId: facts.task.createdBy, newAssigneeId }, actorId)) {
-        this.sendNotification(t, "assigned", facts, rid, actorId, {});
-      }
-      return;
-    }
-
-    if (delta.entity === "task" && delta.op === "update") {
-      const facts = this.loadTaskFacts(delta.id);
-      if (facts === null) return;
-
-      if ("assigneeId" in data) {
-        const newAssigneeId = (data["assigneeId"] as string | null) ?? null;
-        for (const rid of recipientsFor("assigned", { assigneeId: null, creatorId: facts.task.createdBy, newAssigneeId }, actorId)) {
-          this.sendNotification(t, "assigned", facts, rid, actorId, {});
-        }
-      }
-      // The ball landing on someone tells them, unless the same change also
-      // assigned them (one email, not two) or the task is closed.
-      if ("waitingOn" in data && facts.task.closedAt === null) {
-        const newWaitingOn = (data["waitingOn"] as string | null) ?? null;
-        const alreadyTold = "assigneeId" in data && data["assigneeId"] === newWaitingOn;
-        if (!alreadyTold) {
-          const commentBody = this.turnCommentBody(t, delta.id, actorId);
-          for (const rid of recipientsFor("turn", { assigneeId: null, creatorId: facts.task.createdBy, newWaitingOn }, actorId)) {
-            this.sendNotification(t, "turn", facts, rid, actorId, commentBody === null ? {} : { commentBody });
-          }
-        }
-      }
-      if ("statusId" in data) {
-        const statusName = getStatus(this.sql, String(data["statusId"]))?.name ?? facts.statusName;
-        // Status ids are per-list: a cross-list move from "Done" to "Done" swaps
-        // the id but is not a status change anyone should be emailed about.
-        const prevStatusId = delta.prev?.["statusId"];
-        const prevName =
-          typeof prevStatusId === "string" ? getStatus(this.sql, prevStatusId)?.name : undefined;
-        if (prevName?.toLowerCase() !== statusName.toLowerCase()) {
-          for (const rid of recipientsFor("status", { assigneeId: facts.task.assigneeId, creatorId: facts.task.createdBy }, actorId)) {
-            this.sendNotification(t, "status", facts, rid, actorId, { statusName });
-          }
-        }
-      }
-      return;
-    }
-
-    if (delta.entity === "comment" && delta.op === "create") {
-      const taskId = (delta.taskId ?? (data["taskId"] as string | undefined)) ?? undefined;
-      if (taskId === undefined) return;
-      const facts = this.loadTaskFacts(taskId);
-      if (facts === null) return;
-      const commentBody = String(data["body"] ?? "");
-      // Whoever this same change passed the turn to reads the comment in their
-      // "Your turn" email, so they aren't sent it twice.
-      const toldByTurn = this.turnEmailRecipient(t, taskId, actorId, facts);
-      for (const rid of recipientsFor("comment", { assigneeId: facts.task.assigneeId, creatorId: facts.task.createdBy }, actorId)) {
-        if (rid === toldByTurn) continue;
-        this.sendNotification(t, "comment", facts, rid, actorId, { commentBody });
-      }
-    }
-  }
-
-  /** The actor's latest comment on the task in this turn: the note that came with a pass. */
-  private turnCommentBody(t: Turn, taskId: string, actorId: string): string | null {
-    let body: string | null = null;
-    for (const { delta } of t.entries) {
-      if (delta.entity !== "comment" || delta.op !== "create" || delta.actorUserId !== actorId) continue;
-      const owner = (delta as AutomationDelta).taskId ?? (delta.data?.["taskId"] as string | undefined);
-      if (owner === taskId) body = String(delta.data?.["body"] ?? "");
-    }
-    return body;
-  }
-
-  /**
-   * Who this turn's changes send a "Your turn" email to for the task, or null.
-   * Mirrors the turn branch of notifyForDelta, including the preference gate,
-   * so a comment is only held back from someone who really gets that email.
-   */
-  private turnEmailRecipient(t: Turn, taskId: string, actorId: string, facts: TaskFacts): string | null {
-    if (facts.task.closedAt !== null) return null;
-    let recipient: string | null = null;
-    for (const { delta } of t.entries) {
-      if (delta.entity !== "task" || delta.op !== "update" || delta.id !== taskId) continue;
-      if (delta.actorUserId !== actorId) continue;
-      const data = delta.data ?? {};
-      if (!("waitingOn" in data)) continue;
-      const newWaitingOn = (data["waitingOn"] as string | null) ?? null;
-      if ("assigneeId" in data && data["assigneeId"] === newWaitingOn) continue;
-      recipient = newWaitingOn === actorId ? null : newWaitingOn;
-    }
-    if (recipient === null) return null;
-    return readNotificationPrefs(this.sql, recipient)[PREF_KEY.turn] ? recipient : null;
-  }
-
-  /**
-   * Resolve one recipient, gate on their prefs and a real email, render the
-   * template and enqueue a kind:"email" side effect. Dry-run is applied
-   * transitively by the queue consumer (EMAIL_DRY_RUN).
-   */
-  private sendNotification(
-    t: Turn,
-    kind: NotifyKind,
-    facts: TaskFacts,
-    recipientId: string,
-    actorId: string,
-    extra: { statusName?: string; commentBody?: string }
-  ): void {
-    const recipient = this.userById(recipientId);
-    // No user, deactivated, or no real (non-placeholder) email => skip.
-    if (recipient === null || recipient.deactivated || !hasRealEmail(recipient.email)) return;
-
-    // Space gate: a stakeholder (task creator / assignee) who can no longer
-    // see the task's space — removed from a private space's membership — must
-    // not be emailed its titles, statuses or comment bodies. Owners/admins
-    // pass unconditionally via canSeeSpace's privileged short-circuit. A
-    // space row that has gone missing is treated as private (fail closed).
-    if (!isPrivilegedRole(recipient.role)) {
-      const visibility =
-        this.sql
-          .exec<{ visibility: string }>("SELECT visibility FROM spaces WHERE id = ?", facts.space.id)
-          .toArray()[0]?.visibility ?? "private";
-      const access = {
-        visibility: visibility === "private" ? ("private" as const) : ("workspace" as const),
-        isMember: isSpaceMember(this.sql, facts.space.id, recipientId),
-      };
-      if (!canSeeSpace(recipient.role, access)) return;
-    }
-
-    const prefs = readNotificationPrefs(this.sql, recipientId);
-    if (!prefs[PREF_KEY[kind]]) return;
-
-    const actor = this.userById(actorId);
-    const rendered = renderNotification(kind, {
-      taskTitle: facts.task.title,
-      // APP_HOSTNAME is required deployment config; "localhost" keeps links
-      // well-formed (never a real domain) if a deployment forgets to set it.
-      taskUrl: taskUrl(this.env.APP_HOSTNAME ?? "localhost", facts.task.id),
-      actorName: actor?.name ?? "Someone",
-      ...(extra.statusName !== undefined ? { statusName: extra.statusName } : {}),
-      ...(extra.commentBody !== undefined ? { commentBody: extra.commentBody } : {}),
-    });
-
-    const payload: SideEffectPayload = {
-      kind: "email",
-      to: [recipient.email],
-      cc: [],
-      bcc: [],
-      subject: rendered.subject,
-      body: rendered.body,
-      ruleId: notificationTag(kind),
-      taskId: facts.task.id,
-    };
-    t.enqueue(payload);
-  }
-
-  private userById(userId: string): User | null {
-    const row = this.sql
-      .exec<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`, userId)
-      .toArray()[0];
-    return row ? toUser(row) : null;
-  }
+  async webSocketError(_ws: WebSocket, error: unknown): Promise<void> { handleWsError(error); }
 
   // =========================================================================
   // Notification preferences (per user, self-service via the REST layer)
   // =========================================================================
 
-  getNotificationPrefs(userId: string): NotificationPref {
-    return readNotificationPrefs(this.sql, userId);
-  }
-
+  getNotificationPrefs(userId: string): NotificationPref { return getNotificationPrefs(this.sql, userId); }
   /** Merge the patch onto the user's current prefs and persist the full set. */
   setNotificationPrefs(userId: string, patch: Partial<NotificationPref>): NotificationPref {
-    const current = readNotificationPrefs(this.sql, userId);
-    const next = mergeNotificationPrefs({ ...current, ...patch });
-    writeNotificationPrefs(this.sql, userId, next, Date.now());
-    return next;
-  }
-
-  private flush(t: Turn): void {
-    this.broadcastDeltas(t.scopedBroadcastable());
-
-    // Queues' sendBatch caps at 100 messages / 256KB, and each message at
-    // 128KB. A single bulk operation (e.g. a bulk status change firing a
-    // webhook rule) can enqueue far more than that in one turn, and one big
-    // task description can blow the per-message cap, so chunkSideEffects
-    // truncates oversized payloads and chunks on both batch limits rather than
-    // let sendBatch throw the whole chunk away. Anything that still never
-    // reaches the queue gets an ok:false run-log row, because the engine
-    // already logged it as "queued".
-    const chunks = chunkSideEffects(t.sideEffects, (payload, bytes) =>
-      this.recordEnqueueFailures(
-        [payload],
-        `not sent: payload is ${bytes} bytes even after truncation, over the ${SIDE_EFFECTS_MESSAGE_BYTES}-byte queue message budget`
-      )
-    );
-    for (const chunk of chunks) {
-      const batch = chunk.map((body) => ({ body }));
-      this.ctx.waitUntil(
-        this.env.SIDE_EFFECTS.sendBatch(batch).catch((err: unknown) => {
-          console.error("side effect enqueue failed", { messages: chunk.length }, err);
-          this.recordEnqueueFailures(
-            chunk,
-            `not sent: queue rejected the batch (${err instanceof Error ? err.message : String(err)})`
-          );
-        })
-      );
-    }
-
-    // Cheap indexed MIN; only re-arms when an automation queued a new job.
-    const { next } = this.sql
-      .exec<{ next: number | null }>("SELECT MIN(run_at) AS next FROM scheduled_jobs")
-      .one();
-    if (next !== null && next !== this.armedAlarm) this.ctx.waitUntil(this.armAlarm());
-  }
-
-  /**
-   * Same ok:false row the queue consumer writes for a failed delivery, for
-   * side effects that never made it onto the queue at all. Only automation
-   * payloads have a rule to log against; notification emails (ruleId
-   * "notify:*") get the console line alone. An emailed comment that never
-   * reached the queue is marked failed on its card, in a turn of its own
-   * because this can run while the turn that wrote it is still flushing.
-   */
-  private recordEnqueueFailures(payloads: readonly unknown[], detail: string): void {
-    for (const payload of payloads) {
-      const p = payload as { kind?: unknown; ruleId?: unknown; taskId?: unknown; url?: unknown; commentId?: unknown };
-      if (p.kind === "email-reply" && typeof p.commentId === "string") {
-        const commentId = p.commentId;
-        this.ctx.waitUntil(Promise.resolve().then(() => this.markEmailReply(commentId, "failed")));
-        continue;
-      }
-      if (p.kind !== "webhook" && p.kind !== "email") continue;
-      if (typeof p.ruleId !== "string" || typeof p.taskId !== "string") continue;
-      if (p.ruleId.startsWith("notify:")) continue;
-      const target = p.kind === "webhook" ? `webhook ${String(p.url)}` : "email";
-      this.recordDeliveryFailure({
-        ruleId: p.ruleId,
-        taskId: p.taskId,
-        kind: p.kind,
-        detail: `${target} ${detail}`,
-      });
-    }
-  }
-
-  private automationContext(t: Turn, depth: number): AutomationContext {
-    return {
-      sql: this.sql,
-      now: t.now,
-      // Same fallback as sendNotification: APP_HOSTNAME is required config,
-      // "localhost" is a neutral stand-in that can never leak traffic.
-      appHostname: this.env.APP_HOSTNAME ?? "localhost",
-      depth,
-      emailDryRun: this.env.EMAIL_DRY_RUN !== "false",
-      loadTaskFacts: (taskId: string) => this.loadTaskFacts(taskId),
-      statusNameById: (statusId: string) => getStatus(this.sql, statusId)?.name ?? null,
-      applyAction: (action: Action, taskId: string, d: number, ruleId?: string) =>
-        this.applyAction(t, action, taskId, d, ruleId),
-      enqueueSideEffect: (payload: SideEffectPayload) => t.enqueue(payload),
-    };
-  }
-
-  /** Everything the engine needs about one task, resolved by name not id. */
-  private loadTaskFacts(taskId: string): TaskFacts | null {
-    const row = this.taskRow(taskId);
-    if (row === null) return null;
-    const task = toTask(row);
-    const listRow = this.sql
-      .exec<ListRow>(
-        `SELECT ${LIST_COLUMNS}
-         FROM lists WHERE id = ?`,
-        task.listId
-      )
-      .toArray()[0];
-    if (!listRow) return null;
-    const spaceRow = this.sql
-      .exec<SpaceRow>(
-        `SELECT ${SPACE_COLUMNS} FROM spaces WHERE id = ?`,
-        listRow.space_id
-      )
-      .toArray()[0];
-
-    const assigneeRow =
-      task.assigneeId === null
-        ? undefined
-        : this.sql
-            .exec<{ id: string; name: string; email: string }>(
-              "SELECT id, name, email FROM users WHERE id = ?",
-              task.assigneeId
-            )
-            .toArray()[0];
-
-    const counts = this.sql
-      .exec<{ total: number; done: number }>(
-        "SELECT COUNT(*) AS total, COALESCE(SUM(done), 0) AS done FROM subtasks WHERE task_id = ?",
-        taskId
-      )
-      .one();
-
-    return {
-      task,
-      statusName: getStatus(this.sql, task.statusId)?.name ?? "",
-      list: { id: listRow.id, name: listRow.name, spaceId: listRow.space_id },
-      space: { id: listRow.space_id, name: spaceRow?.name ?? "" },
-      assignee: assigneeRow
-        ? { id: assigneeRow.id, name: assigneeRow.name, email: assigneeRow.email }
-        : null,
-      subtaskTotal: counts.total,
-      subtaskDone: counts.done,
-    };
-  }
-
-  /**
-   * Re-entry point for automation actions. Mutations land in the SAME turn as
-   * the trigger, so the client receives one coherent batch of deltas, and the
-   * deltas they produce are stamped with `depth` — which is how the cap holds.
-   *
-   * `depth` is the engine's `ctx.depth + 1`: the depth at which this action
-   * executes. Outbound actions (call_webhook, send_email) never arrive here —
-   * the engine queues those itself.
-   *
-   * Template strings (`{{task.title}}` etc.) are the engine's responsibility:
-   * whatever text arrives on a create_task/create_subtask action is used
-   * verbatim.
-   */
-  private applyAction(
-    t: Turn,
-    action: Action,
-    taskId: string,
-    depth: number,
-    ruleId?: string
-  ): void {
-    if (depth > AUTOMATION_MAX_DEPTH) {
-      throw new Error(
-        `Automation depth cap of ${AUTOMATION_MAX_DEPTH} reached for task ${taskId}; ` +
-          `action not applied (likely a rule loop).`
-      );
-    }
-    const outer = t.depth;
-    const outerRule = t.automationRuleId;
-    t.depth = depth;
-    // Everything audited between here and the `finally` was decided by this
-    // rule, so it is attributed to the automation rather than to t.actor's
-    // plain API call. Saved and restored because rules nest.
-    t.automationRuleId = ruleId ?? outerRule;
-    try {
-      switch (action.kind) {
-        case "set_status":
-          this.applyTaskUpdate(t, { taskId, status: action.statusName }, "automation.set_status");
-          break;
-        case "set_assignee":
-          this.applyTaskUpdate(t, { taskId, assigneeId: action.userId }, "automation.set_assignee");
-          break;
-        case "set_priority":
-          this.applyTaskUpdate(t, { taskId, priority: action.priority }, "automation.set_priority");
-          break;
-        case "set_due_date": {
-          const dueDate = dueDateWithCutoff(t.now, action.cutoffHour, action.timeZone, action.businessDays);
-          this.applyTaskUpdate(t, { taskId, dueDate }, "automation.set_due_date");
-          break;
-        }
-        case "add_tags": {
-          const current = toTask(this.requireTaskRow(taskId)).tags;
-          const seen = new Set(current.map((x) => x.toLowerCase()));
-          const merged = [...current];
-          for (const tag of action.tags) {
-            const clean = tag.trim();
-            if (clean !== "" && !seen.has(clean.toLowerCase())) {
-              seen.add(clean.toLowerCase());
-              merged.push(clean);
-            }
-          }
-          if (merged.length !== current.length) {
-            this.applyTaskUpdate(t, { taskId, tags: merged }, "automation.add_tags");
-          }
-          break;
-        }
-        case "remove_tags": {
-          const current = toTask(this.requireTaskRow(taskId)).tags;
-          const removed = new Set(action.tags.map((tag) => tag.trim().toLowerCase()));
-          const filtered = current.filter((tag) => !removed.has(tag.toLowerCase()));
-          if (filtered.length !== current.length) {
-            this.applyTaskUpdate(t, { taskId, tags: filtered }, "automation.remove_tags");
-          }
-          break;
-        }
-        case "create_next_recurring_task": {
-          const source = toTask(this.requireTaskRow(taskId));
-          if (source.dueDate === null) {
-            throw new Error(`Recurring task ${taskId} has no due date.`);
-          }
-          if (!source.tags.some((tag) => tag.toLowerCase() === action.identityTag.toLowerCase())) {
-            throw new Error(
-              `Recurring task ${taskId} is missing identity tag ${action.identityTag}.`
-            );
-          }
-          const dueDate = nextRecurringDue(source.dueDate, action.recurrence, action.timeZone);
-          const duplicate = this.sql
-            .exec<TaskRowSql>(
-              `SELECT ${TASK_COLUMNS} FROM tasks WHERE list_id = ? AND due_date = ?`,
-              source.listId,
-              dueDate
-            )
-            .toArray()
-            .map(toTask)
-            .some((task) =>
-              task.tags.some((tag) => tag.toLowerCase() === action.identityTag.toLowerCase())
-            );
-          if (!duplicate) {
-            this.applyTaskCreate(t, {
-              listId: source.listId,
-              title: source.title,
-              description: source.description,
-              ...(action.statusName === null ? {} : { status: action.statusName }),
-              assigneeId: source.assigneeId,
-              priority: source.priority,
-              dueDate,
-              tags: source.tags,
-            });
-          }
-          break;
-        }
-        case "create_task":
-          this.applyTaskCreate(t, {
-            listId: action.listId,
-            title: action.title,
-            description: action.description,
-            ...(action.statusName === null ? {} : { status: action.statusName }),
-            assigneeId: action.assigneeId,
-            priority: action.priority,
-            dueDate:
-              action.dueInDays === null ? null : t.now + action.dueInDays * DAY_MS,
-            tags: action.tags,
-          });
-          break;
-        case "create_subtask":
-          this.applySubtaskCreate(t, {
-            taskId,
-            title: action.title,
-            assigneeId: action.assigneeId,
-            dueDate:
-              action.dueInDays === null || action.dueInDays === undefined
-                ? null
-                : t.now + action.dueInDays * DAY_MS,
-          });
-          break;
-        case "move_to_list":
-          this.applyTaskMove(t, { taskId, listId: action.listId }, "automation.move_to_list");
-          break;
-        case "call_webhook":
-        case "send_email":
-          // Outbound I/O never happens inline; the engine enqueues these
-          // directly, so reaching here means a rule was mis-routed.
-          console.error("applyAction received an outbound action", action.kind);
-          break;
-      }
-    } finally {
-      t.depth = outer;
-      t.automationRuleId = outerRule;
-    }
-  }
-
-  // =========================================================================
-  // Per-space permissions
-  //
-  // One rule, applied in three shapes: reads filter, writes throw, and the
-  // broadcast drops. Everything below a space inherits the space's decision, so
-  // all three start by resolving the entity to a space id.
-  // =========================================================================
-
-  private spaceIdForList(listId: string): string | null {
-    return (
-      this.sql
-        .exec<{ space_id: string }>("SELECT space_id FROM lists WHERE id = ?", listId)
-        .toArray()[0]?.space_id ?? null
-    );
-  }
-
-  private spaceIdForTask(taskId: string): string | null {
-    return (
-      this.sql
-        .exec<{ space_id: string }>(
-          `SELECT l.space_id AS space_id FROM tasks t JOIN lists l ON l.id = t.list_id
-           WHERE t.id = ?`,
-          taskId
-        )
-        .toArray()[0]?.space_id ?? null
-    );
-  }
-
-  private spaceIdForChild(
-    table: "subtasks" | "comments" | "attachments",
-    childId: string
-  ): string | null {
-    return (
-      this.sql
-        .exec<{ space_id: string }>(
-          `SELECT l.space_id AS space_id FROM ${table} c
-             JOIN tasks t ON t.id = c.task_id JOIN lists l ON l.id = t.list_id
-           WHERE c.id = ?`,
-          childId
-        )
-        .toArray()[0]?.space_id ?? null
-    );
-  }
-
-  /**
-   * The space a delta belongs to, for the per-connection broadcast filter.
-   * `user` deltas go to everyone; `automation_rule` deltas gate on role.
-   */
-  private spaceIdForDelta(
-    entity: Delta["entity"],
-    entityId: string,
-    taskId: string | undefined
-  ): string | null {
-    switch (entity) {
-      case "space":
-        return entityId;
-      case "list":
-        return this.spaceIdForList(entityId);
-      case "task":
-        return this.spaceIdForTask(entityId);
-      case "subtask":
-      case "comment":
-      case "attachment":
-        if (taskId !== undefined) return this.spaceIdForTask(taskId);
-        return this.spaceIdForChild(
-          entity === "subtask" ? "subtasks" : entity === "comment" ? "comments" : "attachments",
-          entityId
-        );
-      default:
-        return null;
-    }
+    return setNotificationPrefs(this.sql, userId, patch);
   }
 
   /**
@@ -1450,65 +188,10 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     const visible = visibleSpaceIds(this.sql, userId);
     return visible === null ? null : [...visible];
   }
-
   /** Members of a space, oldest first. Owner/admin-gated by the caller. */
   listSpaceMembers(spaceId: string): string[] {
-    this.requireSpace(spaceId);
+    requireSpace(this.sql, spaceId);
     return listSpaceMemberIds(this.sql, spaceId);
-  }
-
-  /**
-   * The write guard. Throws the descriptive error when the actor cannot see the
-   * space the mutation lands in.
-   *
-   * A null `spaceId` means the entity resolved to nothing — the row is missing,
-   * and the caller's own `requireX` produces the better "not found" message a
-   * moment later, so this stays out of the way. System actors (automations,
-   * import) are exempt by design.
-   */
-  private assertSpaceWritable(actor: Actor, spaceId: string | null): void {
-    const refusal = this.spaceWriteRefusal(actor, spaceId);
-    if (refusal !== null) throw new Error(refusal);
-  }
-
-  /** The write guard's verdict without the throw: the error message, or null when allowed. */
-  private spaceWriteRefusal(actor: Actor, spaceId: string | null): string | null {
-    if (spaceId === null || isSystemActor(actor)) return null;
-    const row = this.sql
-      .exec<SpaceRow>(`SELECT ${SPACE_COLUMNS} FROM spaces WHERE id = ?`, spaceId)
-      .toArray()[0];
-    if (!row) return null;
-    const space = toSpace(row);
-    if (space.visibility !== "private") return null;
-    const allowed = canSeeSpace(roleOf(this.sql, actor.userId), {
-      visibility: space.visibility,
-      isMember: isSpaceMember(this.sql, spaceId, actor.userId),
-    });
-    return allowed ? null : privateSpaceError(spaceId);
-  }
-
-  private assertTaskWritable(actor: Actor, taskId: string): void {
-    this.assertSpaceWritable(actor, this.spaceIdForTask(taskId));
-  }
-
-  private assertListWritable(actor: Actor, listId: string): void {
-    this.assertSpaceWritable(actor, this.spaceIdForList(listId));
-  }
-
-  /**
-   * Defence in depth for the two membership mutations. The routes already gate
-   * them with `requireAdmin`, but these change who can see what, so the DO — the
-   * only writer — checks the actor's stored role itself rather than trusting
-   * that every future caller remembers to.
-   */
-  private requirePrivileged(actor: Actor, action: string): void {
-    if (isSystemActor(actor)) return;
-    const role = roleOf(this.sql, actor.userId);
-    if (!isPrivilegedRole(role)) {
-      throw new Error(
-        `${action} requires the owner or admin role; ${actor.userId} is a ${role ?? "non-member"}.`
-      );
-    }
   }
 
   // =========================================================================
@@ -1525,106 +208,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * Omitting it returns the unfiltered workspace and is for internal callers
    * only — every request-serving path passes the authenticated user's id.
    */
-  getSnapshot(forUserId?: string): BoardSnapshot {
-    const cutoff = Date.now() - SNAPSHOT_CLOSED_WINDOW_MS;
-    const seq = this.maxSeq();
-    // Only an absent id means "unfiltered". An empty one is an unidentified
-    // caller — a socket accepted without an id, say — and gets the same
-    // treatment as an unknown member: workspace-visible spaces and nothing else.
-    const visible = forUserId === undefined ? null : visibleSpaceIds(this.sql, forUserId);
-
-    const spaces = this.sql
-      .exec<SpaceRow>(
-        `SELECT ${SPACE_COLUMNS} FROM spaces ORDER BY position`
-      )
-      .toArray()
-      .map(toSpace)
-      .filter((sp) => visible === null || visible.has(sp.id));
-    // The visible-list set is what the task and subtask filters key off, so the
-    // hierarchy can only ever be filtered consistently: no orphan list under a
-    // hidden space, no task whose list is gone.
-    const visibleListIds =
-      visible === null
-        ? null
-        : new Set(
-            this.sql
-              .exec<{ id: string; space_id: string }>("SELECT id, space_id FROM lists")
-              .toArray()
-              .filter((r) => visible.has(r.space_id))
-              .map((r) => r.id)
-          );
-
-    // One pass over statuses, grouped in memory, instead of a query per list.
-    const statusesByList = new Map<string, Status[]>();
-    for (const s of this.sql
-      .exec<{
-        id: string;
-        list_id: string;
-        name: string;
-        color: string;
-        type: string;
-        position: number;
-      }>("SELECT id, list_id, name, color, type, position FROM statuses ORDER BY list_id, position")
-      .toArray()) {
-      const bucket = statusesByList.get(s.list_id);
-      const status: Status = {
-        id: s.id,
-        name: s.name,
-        color: s.color,
-        type: s.type as Status["type"],
-        position: s.position,
-      };
-      if (bucket) bucket.push(status);
-      else statusesByList.set(s.list_id, [status]);
-    }
-
-    const lists = this.sql
-      .exec<ListRow>(
-        `SELECT ${LIST_COLUMNS}
-         FROM lists ORDER BY space_id, position`
-      )
-      .toArray()
-      .filter((r) => visibleListIds === null || visibleListIds.has(r.id))
-      .map((r) => toList(r, statusesByList.get(r.id) ?? []));
-
-    const tasks = this.sql
-      .exec<SnapshotTaskRowSql>(
-        `SELECT ${SNAPSHOT_TASK_COLUMNS} FROM tasks
-         WHERE closed_at IS NULL OR closed_at >= ?
-         ORDER BY list_id, status_id, position`,
-        cutoff
-      )
-      .toArray()
-      .filter((r) => visibleListIds === null || visibleListIds.has(r.list_id))
-      .map(toSnapshotTask);
-
-    const visibleTaskIds = visibleListIds === null ? null : new Set(tasks.map((t) => t.id));
-    const subtasks = this.sql
-      .exec<SubtaskRow>(
-        `SELECT s.id, s.task_id, s.title, s.done, s.assignee_id, s.assigned_by, s.assigned_at,
-                s.due_date, s.note, s.position, s.created_at
-         FROM subtasks s JOIN tasks t ON t.id = s.task_id
-         WHERE t.closed_at IS NULL OR t.closed_at >= ?
-         ORDER BY s.task_id, s.position`,
-        cutoff
-      )
-      .toArray()
-      .filter((r) => visibleTaskIds === null || visibleTaskIds.has(r.task_id))
-      .map(toSubtask);
-
-    return {
-      seq,
-      spaces,
-      lists,
-      tasks,
-      subtasks,
-      users: this.listUsers(),
-      // Automation rules are workspace wiring (webhook URLs, email targets,
-      // cross-space actions): owners and admins only. `visible === null` is
-      // exactly the privileged-or-internal case the space filters key off.
-      automationRules: automationRulesForSnapshot(visible, () => this.listAutomations()),
-    };
-  }
+  getSnapshot(forUserId?: string): BoardSnapshot { return getSnapshot(this.host, forUserId); }
 
   /**
    * Lightweight hierarchy for MCP `flow_get_workspace_map` and pickers.
@@ -1636,47 +220,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       Space & { lists: Array<{ id: string; name: string; archived: boolean; statuses: Status[]; openTasks: number }> }
     >;
     users: User[];
-  } {
-    const visible = forUserId === undefined ? null : visibleSpaceIds(this.sql, forUserId);
-    const counts = new Map<string, number>();
-    for (const r of this.sql
-      .exec<{ list_id: string; n: number }>(
-        "SELECT list_id, COUNT(*) AS n FROM tasks WHERE closed_at IS NULL GROUP BY list_id"
-      )
-      .toArray()) {
-      counts.set(r.list_id, r.n);
-    }
-    const snapshotLists = this.sql
-      .exec<ListRow>(
-        `SELECT ${LIST_COLUMNS}
-         FROM lists ORDER BY space_id, position`
-      )
-      .toArray();
-    const spaces = this.sql
-      .exec<SpaceRow>(
-        `SELECT ${SPACE_COLUMNS} FROM spaces ORDER BY position`
-      )
-      .toArray()
-      .map(toSpace)
-      .filter((sp) => visible === null || visible.has(sp.id));
-
-    return {
-      seq: this.maxSeq(),
-      spaces: spaces.map((sp) => ({
-        ...sp,
-        lists: snapshotLists
-          .filter((l) => l.space_id === sp.id)
-          .map((l) => ({
-            id: l.id,
-            name: l.name,
-            archived: l.archived !== 0,
-            statuses: listStatuses(this.sql, l.id),
-            openTasks: counts.get(l.id) ?? 0,
-          })),
-      })),
-      users: this.listUsers(),
-    };
-  }
+  } { return getWorkspaceMap(this.host, forUserId); }
 
   /**
    * One task with its children. `forUserId` refuses the read when the task
@@ -1685,20 +229,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * task that is simply someone else's.
    */
   getTaskDetail(taskId: string, forUserId?: string): TaskDetail {
-    const row = this.requireTaskRow(taskId);
-    if (forUserId !== undefined) {
-      this.assertSpaceWritable(toActor(forUserId), this.spaceIdForTask(taskId));
-    }
-    const task = toTask(row);
-    const replyTo = this.emailReplyTarget(task)?.to ?? null;
-    return {
-      task,
-      subtasks: this.listSubtasks(taskId),
-      comments: this.listComments(taskId),
-      attachments: this.listAttachments(taskId),
-      emailReplyTo: replyTo,
-      emailReplySubject: replyTo === null ? null : replySubject(task.title),
-    };
+    return getTaskDetail(this.host, taskId, forUserId);
   }
 
   /**
@@ -1712,16 +243,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     taskIds: string[],
     forUserId?: string
   ): { details: TaskDetail[]; errors: Array<{ taskId: string; error: string }> } {
-    const details: TaskDetail[] = [];
-    const errors: Array<{ taskId: string; error: string }> = [];
-    for (const taskId of taskIds) {
-      try {
-        details.push(this.getTaskDetail(taskId, forUserId));
-      } catch (err) {
-        errors.push({ taskId, error: err instanceof Error ? err.message : String(err) });
-      }
-    }
-    return { details, errors };
+    return getTaskDetails(this.host, taskIds, forUserId);
   }
 
   /**
@@ -1729,81 +251,21 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * to the spaces that user may see (including `total`, so paging stays honest).
    */
   searchTasks(input: SearchTasksInput, actor?: string | Actor): SearchTasksResult {
-    const visible = actor === undefined ? null : visibleSpaceIds(this.sql, toActor(actor).userId);
-    return runSearch(this.sql, input, visible);
+    return searchTasks(this.sql, input, actor);
   }
-
-  listUsers(): User[] {
-    return this.sql
-      .exec<UserRow>(`SELECT ${USER_COLUMNS} FROM users ORDER BY created_at`)
-      .toArray()
-      .map(toUser);
-  }
-
-  getUserByEmail(email: string): User | null {
-    const row = this.sql
-      .exec<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE lower(email) = lower(?)`, email.trim())
-      .toArray()[0];
-    return row ? toUser(row) : null;
-  }
+  listUsers(): User[] { return listUsers(this.sql); }
+  getUserByEmail(email: string): User | null { return getUserByEmail(this.sql, email); }
 
   /**
    * First-login bootstrap: lets OWNER_EMAIL claim the seeded owner@placeholder.flow row.
    */
-  claimOwner(email: string): User | null {
-    const trimmed = email.trim();
-    if (trimmed === "") return null;
-    const existing = this.getUserByEmail(trimmed);
-    if (existing) return existing;
-    const placeholder = this.getUserByEmail(`owner@${PLACEHOLDER_EMAIL_DOMAIN}`);
-    if (!placeholder || placeholder.role !== "owner" || placeholder.deactivated) return null;
-    return this.upsertUser({ id: placeholder.id, email: trimmed }, placeholder.id);
-  }
-
-  listSubtasks(taskId: string): Subtask[] {
-    return this.sql
-      .exec<SubtaskRow>(`SELECT ${SUBTASK_COLUMNS} FROM subtasks WHERE task_id = ? ORDER BY position`, taskId)
-      .toArray()
-      .map(toSubtask);
-  }
-
-  listComments(taskId: string): Comment[] {
-    return this.sql
-      .exec<CommentRow>(
-        `SELECT ${COMMENT_COLUMNS} FROM comments WHERE task_id = ? ORDER BY created_at`,
-        taskId
-      )
-      .toArray()
-      .map(toComment);
-  }
-
-  listAttachments(taskId: string): Attachment[] {
-    return this.sql
-      .exec<AttachmentRow>(
-        `SELECT ${ATTACHMENT_COLUMNS} FROM attachments WHERE task_id = ? ORDER BY created_at`,
-        taskId
-      )
-      .toArray()
-      .map(toAttachment);
-  }
-
+  claimOwner(email: string): User | null { return claimOwner(this.host, email); }
+  listSubtasks(taskId: string): Subtask[] { return listSubtasks(this.sql, taskId); }
+  listComments(taskId: string): Comment[] { return listComments(this.sql, taskId); }
+  listAttachments(taskId: string): Attachment[] { return listAttachments(this.sql, taskId); }
   /** Single attachment row — the api Worker needs r2Key to stream a download. */
-  getAttachment(attachmentId: string): Attachment | null {
-    const row = this.sql
-      .exec<AttachmentRow>(`SELECT ${ATTACHMENT_COLUMNS} FROM attachments WHERE id = ?`, attachmentId)
-      .toArray()[0];
-    return row ? toAttachment(row) : null;
-  }
-
-  listAutomations(): AutomationRule[] {
-    return this.sql
-      .exec<RuleRow>(
-        `SELECT id, name, enabled, scope, trigger, conditions, actions, created_at, updated_at
-         FROM automation_rules ORDER BY created_at`
-      )
-      .toArray()
-      .map(toRule);
-  }
+  getAttachment(attachmentId: string): Attachment | null { return getAttachment(this.sql, attachmentId); }
+  listAutomations(): AutomationRule[] { return listAutomations(this.sql); }
 
   /**
    * Automation run log, newest first.
@@ -1814,49 +276,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    */
   listAutomationRuns(
     filter: { ruleId?: string; taskId?: string; before?: number; limit?: number } = {}
-  ): AutomationRunLog[] {
-    const where: string[] = [];
-    const params: SqlStorageValue[] = [];
-    if (filter.ruleId !== undefined) {
-      where.push("rule_id = ?");
-      params.push(filter.ruleId);
-    }
-    if (filter.taskId !== undefined) {
-      where.push("task_id = ?");
-      params.push(filter.taskId);
-    }
-    if (filter.before !== undefined) {
-      where.push("id < ?");
-      params.push(filter.before);
-    }
-    const limit = Math.min(Math.max(filter.limit ?? 100, 1), 500);
-    return this.sql
-      .exec<{
-        id: number;
-        rule_id: string;
-        task_id: string;
-        trigger: string;
-        results: string;
-        depth: number;
-        at: number;
-      }>(
-        `SELECT id, rule_id, task_id, trigger, results, depth, at FROM automation_runs
-         ${where.length === 0 ? "" : `WHERE ${where.join(" AND ")}`}
-         ORDER BY id DESC LIMIT ?`,
-        ...params,
-        limit
-      )
-      .toArray()
-      .map((r) => ({
-        id: r.id,
-        ruleId: r.rule_id,
-        taskId: r.task_id,
-        trigger: r.trigger,
-        results: JSON.parse(r.results) as AutomationRunLog["results"],
-        depth: r.depth,
-        at: r.at,
-      }));
-  }
+  ): AutomationRunLog[] { return listAutomationRuns(this.sql, filter); }
 
   /**
    * Correct the "queued" automation_runs row a webhook/email action wrote at
@@ -1870,34 +290,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * consumer that called it.
    */
   recordDeliveryFailure(input: {
-    ruleId: string;
-    taskId: string;
-    kind: "webhook" | "email";
-    detail: string;
-  }): { ok: true } {
-    try {
-      this.sql.exec(
-        `INSERT INTO automation_runs (rule_id, task_id, trigger, results, depth, at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        input.ruleId,
-        input.taskId,
-        "delivery_failure",
-        JSON.stringify([
-          {
-            action: input.kind === "webhook" ? "call_webhook" : "send_email",
-            ok: false,
-            dryRun: false,
-            detail: input.detail,
-          },
-        ]),
-        0,
-        Date.now()
-      );
-    } catch (err) {
-      console.error("automation: cannot record delivery failure", err);
-    }
-    return { ok: true };
-  }
+    ruleId: string; taskId: string; kind: "webhook" | "email"; detail: string;
+  }): { ok: true } { return recordDeliveryFailure(this.sql, input); }
 
   getAuditLog(
     filter: {
@@ -1912,49 +306,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       after?: number;
       limit?: number;
     } = {}
-  ): { entries: AuditEntry[]; nextBefore: number | null } {
-    const where: string[] = [];
-    const params: SqlStorageValue[] = [];
-    if (filter.entity !== undefined) {
-      where.push("entity = ?");
-      params.push(filter.entity);
-    }
-    if (filter.action !== undefined) {
-      where.push("action = ?");
-      params.push(filter.action);
-    }
-    if (filter.userId !== undefined) {
-      where.push("actor_user_id = ?");
-      params.push(filter.userId);
-    }
-    if (filter.apiKeyId !== undefined) {
-      where.push("api_key_id = ?");
-      params.push(filter.apiKeyId);
-    }
-    if (filter.before !== undefined) {
-      where.push("id < ?");
-      params.push(filter.before);
-    }
-    if (filter.after !== undefined) {
-      where.push("at >= ?");
-      params.push(filter.after);
-    }
-    const limit = Math.min(Math.max(filter.limit ?? 100, 1), 500);
-    const rows = this.sql
-      .exec<AuditRow>(
-        `SELECT id, actor, action, entity, diff, at FROM audit
-         ${where.length === 0 ? "" : `WHERE ${where.join(" AND ")}`}
-         ORDER BY id DESC LIMIT ?`,
-        ...params,
-        limit
-      )
-      .toArray();
-    const last = rows[rows.length - 1];
-    return {
-      entries: rows.map(toAuditEntry),
-      nextBefore: rows.length === limit && last ? last.id : null,
-    };
-  }
+  ): { entries: AuditEntry[]; nextBefore: number | null } { return getAuditLog(this.sql, filter); }
 
   /**
    * Deletes this workspace outright: its alarm, then every row. Only the
@@ -1962,28 +314,8 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * have moved on to a fresh one, and it refuses anywhere SANDBOX isn't on, so
    * a stray call can never empty a real workspace.
    */
-  async wipeSandbox(): Promise<{ ok: true }> {
-    if (this.env.SANDBOX !== "true") {
-      throw new Error("wipeSandbox only runs on the sandbox Worker (SANDBOX=\"true\").");
-    }
-    await this.ctx.storage.deleteAlarm();
-    await this.ctx.storage.deleteAll();
-    return { ok: true };
-  }
-
-  seedSandbox(now: number = Date.now()): { ok: true } {
-    if (this.env.SANDBOX !== "true") {
-      throw new Error('seedSandbox only runs on the sandbox Worker (SANDBOX="true").');
-    }
-    const owner = this.sql
-      .exec<{ id: string }>("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1")
-      .toArray()[0];
-    if (!owner) throw new Error("sandbox workspace has no owner to seed as");
-    seedSandboxWorkspace(this.sql, owner.id, now);
-    bumpResyncFloor(this.sql, this.maxSeq());
-    this.broadcast({ type: "resync" });
-    return { ok: true };
-  }
+  async wipeSandbox(): Promise<{ ok: true }> { return wipeSandbox(this.host); }
+  seedSandbox(now: number = Date.now()): { ok: true } { return seedSandbox(this.host, now); }
 
   /**
    * Read-only SQL over the query views (see ./query.ts), as forUserId sees
@@ -1991,43 +323,13 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * member, who also gets a lower row cap and a per-minute budget.
    */
   runQuery(text: string, maxRows: number | undefined, forUserId: string): QueryResult {
-    const visible = visibleSpaceIds(this.sql, forUserId);
-    if (visible !== null) this.queryLimiter.take(forUserId);
-    return runReadOnlyQuery(this.sql, (fn) => this.ctx.storage.transactionSync(fn), text, maxRows, visible);
+    return runQuery(this.host, text, maxRows, forUserId);
   }
-
   /** Auth hot path: resolve a bearer token hash, stamping last_used_at. */
   resolveApiKey(tokenHash: string): { key: ApiKey; user: User } | null {
-    const rows = this.sql
-      .exec<ApiKeyRow>(
-        `SELECT ${API_KEY_COLUMNS} FROM api_keys WHERE token_hash = ?`,
-        tokenHash
-      )
-      .toArray();
-    const row = rows[0];
-    if (!row || row.revoked_at !== null) return null;
-    const users = this.sql
-      .exec<UserRow>(
-        `SELECT id, email, name, role, deactivated, created_at, needs_email_update, clickup_id
-         FROM users WHERE id = ?`,
-        row.user_id
-      )
-      .toArray();
-    const user = users[0];
-    if (!user) return null;
-    // Not a delta-worthy change: no audit row, no broadcast.
-    this.sql.exec("UPDATE api_keys SET last_used_at = ? WHERE id = ?", Date.now(), row.id);
-    return { key: toApiKey(row), user: toUser(user) };
+    return resolveApiKey(this.sql, tokenHash);
   }
-
-  listApiKeys(): ApiKey[] {
-    return this.sql
-      .exec<ApiKeyRow>(
-        `SELECT ${API_KEY_COLUMNS} FROM api_keys ORDER BY created_at`
-      )
-      .toArray()
-      .map(toApiKey);
-  }
+  listApiKeys(): ApiKey[] { return listApiKeys(this.sql); }
 
   /**
    * Resolve the list behind an inbound webhook bearer token.
@@ -2036,15 +338,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * route) uses it for auth and never puts the list in a response body.
    */
   getListByInboundToken(inboundToken: string): List | null {
-    const rows = this.sql
-      .exec<ListRow>(
-        `SELECT ${LIST_COLUMNS}
-         FROM lists WHERE inbound_token = ?`,
-        inboundToken
-      )
-      .toArray();
-    const row = rows[0];
-    return row ? toListWithSecrets(row, listStatuses(this.sql, row.id)) : null;
+    return getListByInboundToken(this.sql, inboundToken);
   }
 
   /**
@@ -2052,408 +346,25 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * gates it — and the reason `getSnapshot()` can null the token unconditionally
    * without breaking the "show me the intake credential" flow.
    */
-  getListWithSecrets(listId: string): List | null {
-    const rows = this.sql
-      .exec<ListRow>(
-        `SELECT ${LIST_COLUMNS}
-         FROM lists WHERE id = ?`,
-        listId
-      )
-      .toArray();
-    const row = rows[0];
-    return row ? toListWithSecrets(row, listStatuses(this.sql, row.id)) : null;
-  }
+  getListWithSecrets(listId: string): List | null { return getListWithSecrets(this.sql, listId); }
 
   // =========================================================================
   // Task mutations
   // =========================================================================
-
-  createTask(input: CreateTaskInput, actor: string | Actor): Task {
-    return this.runTaskTurn(toActor(actor), (t) => {
-      this.assertListWritable(t.actor, input.listId);
-      return this.applyTaskCreate(t, input);
-    });
-  }
-
-  /**
-   * `handoff` is internal (requestHandoff): CreateTaskInput has no handoff
-   * field, so no client can file one except through that RPC.
-   */
-  private applyTaskCreate(t: Turn, input: CreateTaskInput, handoff: Handoff | null = null): Task {
-    const listRow = this.requireListRow(input.listId);
-    const status =
-      input.status === undefined
-        ? openStatus(this.sql, listRow.id)
-        : resolveStatusName(this.sql, listRow.id, input.status);
-
-    // Unknown ids used to land in the row unchecked (assignee_id has no FK), so
-    // the task silently pointed at nobody. Validate before anything is written.
-    requireAssignee(this.sql, input.assigneeId);
-    requireAssignee(this.sql, input.waitingOn, "waitingOn");
-    for (const sub of input.subtasks ?? []) requireAssignee(this.sql, sub.assigneeId);
-
-    const tags = normalizeTags(input.tags ?? []);
-    const taskId = id("tk_");
-    const assigneeId = input.assigneeId ?? null;
-    const assignedBy = this.humanAssigner(t, assigneeId);
-    const task: Task = {
-      id: taskId,
-      listId: listRow.id,
-      title: input.title,
-      description: input.description,
-      statusId: status.id,
-      assigneeId,
-      assignedBy,
-      assignedAt: assignedBy === null ? null : t.now,
-      // A closed task is nobody's turn; a new handoff starts on its recipient.
-      waitingOn:
-        status.type === "closed"
-          ? null
-          : (input.waitingOn ??
-            (handoff === null ? null : handoffTurnHolder(handoff.state, assigneeId, handoff.requestedBy))),
-      priority: input.priority ?? null,
-      dueDate: input.dueDate ?? null,
-      startDate: input.startDate ?? null,
-      // A brand-new task is never born asleep; snoozing is an explicit update.
-      snoozedUntil: null,
-      blockedNote: null,
-      tags,
-      position: nextTaskPosition(this.sql, listRow.id, status.id),
-      createdBy: t.actor.userId,
-      createdAt: t.now,
-      updatedAt: t.now,
-      closedAt: status.type === "closed" ? t.now : null,
-      clickupId: null,
-      handoff,
-    };
-
-    this.insertTaskRow(task);
-    t.emit("create", "task", taskId, task as unknown as Record<string, unknown>);
-    t.audit("task.create", taskId, { listId: task.listId, title: task.title });
-
-    // Inline subtasks: each gets its own delta so clients patch incrementally.
-    for (const sub of input.subtasks ?? []) {
-      this.applySubtaskCreate(t, {
-        taskId,
-        title: sub.title,
-        assigneeId: sub.assigneeId ?? null,
-        dueDate: null,
-      });
-    }
-    return task;
-  }
-
-  updateTask(input: UpdateTaskInput, actor: string | Actor): Task {
-    return this.runTaskTurn(toActor(actor), (t) => {
-      this.assertTaskWritable(t.actor, input.taskId);
-      return this.applyTaskUpdate(t, input, "task.update");
-    });
-  }
-
-  /**
-   * `handoff` is internal (replyHandoff), for the same reason as on
-   * applyTaskCreate: UpdateTaskInput cannot carry it. It lands in the same
-   * UPDATE as any status move, so a handoff closing its task is one delta.
-   */
-  private applyTaskUpdate(t: Turn, input: UpdateTaskInput, action: string, explicitHandoff?: Handoff): Task {
-    const row = this.requireTaskRow(input.taskId);
-    const before = toTask(row);
-    // replyHandoff passes the handoff it decided on; any other status change
-    // to a handoff task may imply one (see handoffStateForStatusMove).
-    let handoff = explicitHandoff;
-
-    const sets: string[] = [];
-    const params: SqlStorageValue[] = [];
-    const set = (column: string, value: SqlStorageValue): void => {
-      sets.push(`${column} = ?`);
-      params.push(value);
-    };
-
-    if (input.title !== undefined && input.title !== before.title) set("title", input.title);
-    if (input.description !== undefined && input.description !== before.description) {
-      set("description", input.description);
-    }
-    if (input.assigneeId !== undefined && (input.assigneeId ?? null) !== before.assigneeId) {
-      requireAssignee(this.sql, input.assigneeId);
-      const assigneeId = input.assigneeId ?? null;
-      const assignedBy = this.humanAssigner(t, assigneeId);
-      set("assignee_id", assigneeId);
-      set("assigned_by", assignedBy);
-      set("assigned_at", assignedBy === null ? null : t.now);
-    }
-    if (input.waitingOn !== undefined) requireAssignee(this.sql, input.waitingOn, "waitingOn");
-    // Whether the task ends this update closed; the status block below updates it.
-    let endsClosed = before.closedAt !== null;
-    if (input.priority !== undefined && (input.priority ?? null) !== before.priority) {
-      set("priority", input.priority ?? null);
-    }
-    if (input.dueDate !== undefined && (input.dueDate ?? null) !== before.dueDate) {
-      set("due_date", input.dueDate ?? null);
-    }
-    if (input.startDate !== undefined && (input.startDate ?? null) !== before.startDate) {
-      set("start_date", input.startDate ?? null);
-    }
-    // Snooze and its note are ordinary nullable fields: null clears them, and
-    // they ride the normal changed-fields delta. Nothing here touches the
-    // status — a task wakes up exactly where it went to sleep.
-    if (input.snoozedUntil !== undefined && (input.snoozedUntil ?? null) !== before.snoozedUntil) {
-      set("snoozed_until", input.snoozedUntil ?? null);
-    }
-    if (input.blockedNote !== undefined && (input.blockedNote ?? null) !== before.blockedNote) {
-      set("blocked_note", input.blockedNote ?? null);
-    }
-    if (input.tags !== undefined) {
-      const tags = normalizeTags(input.tags);
-      if (JSON.stringify(tags) !== JSON.stringify(before.tags)) {
-        set("tags", JSON.stringify(tags));
-        set("tags_text", tagsText(tags));
-      }
-    }
-    if (input.status !== undefined) {
-      const status = resolveStatusName(this.sql, before.listId, input.status);
-      if (status.id !== before.statusId) {
-        set("status_id", status.id);
-        // Closed-type membership is what drives closedAt, both directions.
-        if (status.type === "closed" && before.closedAt === null) set("closed_at", t.now);
-        else if (status.type !== "closed" && before.closedAt !== null) set("closed_at", null);
-        endsClosed = status.type === "closed";
-        // The task joins the end of its new column.
-        set("position", nextTaskPosition(this.sql, before.listId, status.id));
-        if (handoff === undefined) handoff = this.impliedHandoff(t, before, status.type === "closed");
-      }
-    }
-    // A closed task is nobody's turn: closing clears it, and a turn can't be
-    // set on a closed task, so a reopened task never comes back pointing at
-    // whoever held it last.
-    //
-    // Otherwise an explicit waitingOn wins. Without one, a handoff whose state
-    // or recipient just changed puts the turn where that state says, and
-    // reassigning an ordinary task clears a turn left on someone else, so the
-    // new owner starts with it.
-    const finalAssigneeId = input.assigneeId !== undefined ? (input.assigneeId ?? null) : before.assigneeId;
-    const finalHandoff = handoff ?? before.handoff;
-    const assigneeChanged = finalAssigneeId !== before.assigneeId;
-    const handoffMoved = finalHandoff !== null && finalHandoff.state !== before.handoff?.state;
-    let wantedWaitingOn = before.waitingOn;
-    if (input.waitingOn !== undefined) {
-      wantedWaitingOn = input.waitingOn ?? null;
-    } else if (finalHandoff !== null && (handoffMoved || assigneeChanged)) {
-      wantedWaitingOn = handoffTurnHolder(finalHandoff.state, finalAssigneeId, finalHandoff.requestedBy);
-    } else if (assigneeChanged) {
-      wantedWaitingOn = null;
-    }
-    const nextWaitingOn = endsClosed ? null : wantedWaitingOn;
-    if (nextWaitingOn !== before.waitingOn) set("waiting_on", nextWaitingOn);
-    // A turn note says what the next person needs to do, so it only makes
-    // sense on a change that hands the turn to someone. Checked before any
-    // write, because a throw does not roll back what the turn already wrote.
-    if (input.turnNote !== undefined && (nextWaitingOn === null || nextWaitingOn === before.waitingOn)) {
-      throw new Error(
-        nextWaitingOn === null
-          ? "turnNote needs waitingOn set to a person in the same update (and the task left open)."
-          : `The turn is already on ${nextWaitingOn}, so there is nothing to pass. Use a comment to add a note.`
-      );
-    }
-    if (handoff !== undefined && JSON.stringify(handoff) !== JSON.stringify(before.handoff)) {
-      const [requestedBy, state, returnFormat, context, stateChangedAt] = handoffValues(handoff);
-      set("handoff_requested_by", requestedBy);
-      set("handoff_state", state);
-      set("handoff_return", returnFormat);
-      set("handoff_context", context);
-      set("handoff_state_changed_at", stateChangedAt);
-    }
-
-    if (sets.length === 0) return before; // no-op: no delta, no audit row
-
-    set("updated_at", t.now);
-    this.sql.exec(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`, ...params, before.id);
-
-    const after = toTask(this.requireTaskRow(before.id));
-    const patch = diffOf(
-      before as unknown as Record<string, unknown>,
-      after as unknown as Record<string, unknown>,
-      TASK_DIFF_KEYS
-    );
-    patch.updatedAt = after.updatedAt;
-    // `prev` lets status_changed / assignee_changed / tag_added rules see what
-    // the value used to be; a Delta's data holds changed fields only.
-    t.emit("update", "task", after.id, patch, { prev: prevOf(before as unknown as Record<string, unknown>, patch) });
-    t.audit(action, after.id, patch);
-    // The note is an ordinary comment, so it shows in the thread for everyone;
-    // notifyForDelta quotes it in the turn email instead of sending a second one.
-    if (input.turnNote !== undefined) this.applyCommentCreate(t, { taskId: after.id, body: input.turnNote });
-    return after;
-  }
-
-  moveTask(input: MoveTaskInput, actor: string | Actor): Task {
-    return this.runTaskTurn(toActor(actor), (t) => {
-      // Both ends: you may not drag a task out of a space you cannot see, and
-      // you may not smuggle one into a private space you are not a member of.
-      this.assertTaskWritable(t.actor, input.taskId);
-      if (input.listId !== undefined) this.assertListWritable(t.actor, input.listId);
-      return this.applyTaskMove(t, input, "task.move");
-    });
-  }
-
-  private applyTaskMove(t: Turn, input: MoveTaskInput, action: string): Task {
-    const row = this.requireTaskRow(input.taskId);
-    const before = toTask(row);
-    const targetListId = input.listId ?? before.listId;
-    if (input.listId !== undefined) this.requireListRow(input.listId);
-
-    // Statuses are per-list, so a cross-list move must re-resolve the status.
-    let status: Status;
-    if (input.status !== undefined) {
-      status = resolveStatusName(this.sql, targetListId, input.status);
-    } else if (targetListId !== before.listId) {
-      const old = getStatus(this.sql, before.statusId);
-      const candidates = listStatuses(this.sql, targetListId);
-      status =
-        (old ? candidates.find((s) => s.name.toLowerCase() === old.name.toLowerCase()) : undefined) ??
-        openStatus(this.sql, targetListId);
-    } else {
-      status = getStatus(this.sql, before.statusId) ?? openStatus(this.sql, targetListId);
-    }
-
-    let position: number;
-    if (input.position !== undefined) {
-      position = input.position;
-    } else {
-      // Clients omit `position` when their own midpoint would underflow, so
-      // renumber the target column first and only then append. Either way the
-      // Task returned below carries the authoritative final position.
-      if (columnHasCollapsed(this.sql, targetListId, status.id)) {
-        rebalanceTaskColumn(this.sql, targetListId, status.id);
-      }
-      position = nextTaskPosition(this.sql, targetListId, status.id);
-    }
-
-    const closedAt =
-      status.type === "closed" ? (before.closedAt ?? t.now) : null;
-    const impliedHandoff = this.impliedHandoff(t, before, status.type === "closed");
-    if (impliedHandoff !== undefined) {
-      const [, state, , , stateChangedAt] = handoffValues(impliedHandoff);
-      this.sql.exec(
-        "UPDATE tasks SET handoff_state = ?, handoff_state_changed_at = ?, waiting_on = ? WHERE id = ?",
-        state,
-        stateChangedAt,
-        handoffTurnHolder(impliedHandoff.state, before.assigneeId, impliedHandoff.requestedBy),
-        before.id
-      );
-    }
-
-    this.sql.exec(
-      `UPDATE tasks SET list_id = ?, status_id = ?, position = ?, closed_at = ?, updated_at = ?,
-         waiting_on = CASE WHEN ? = 1 THEN NULL ELSE waiting_on END
-       WHERE id = ?`,
-      targetListId,
-      status.id,
-      position,
-      closedAt,
-      t.now,
-      status.type === "closed" ? 1 : 0,
-      before.id
-    );
-
-    // A client-supplied midpoint can collapse after enough inserts; renumber
-    // the column once and re-read rather than let ordering go non-deterministic.
-    const neighbours = this.sql
-      .exec<{ prev: number | null; next: number | null }>(
-        `SELECT (SELECT MAX(position) FROM tasks WHERE list_id = ? AND status_id = ? AND position < ?) AS prev,
-                (SELECT MIN(position) FROM tasks WHERE list_id = ? AND status_id = ? AND position > ?) AS next`,
-        targetListId,
-        status.id,
-        position,
-        targetListId,
-        status.id,
-        position
-      )
-      .one();
-    if (needsRebalance(neighbours.prev, position) || needsRebalance(position, neighbours.next)) {
-      rebalanceTaskColumn(this.sql, targetListId, status.id);
-    }
-
-    const after = toTask(this.requireTaskRow(before.id));
-    const patch = diffOf(
-      before as unknown as Record<string, unknown>,
-      after as unknown as Record<string, unknown>,
-      TASK_DIFF_KEYS
-    );
-    if (Object.keys(patch).length === 0) return after;
-    patch.updatedAt = after.updatedAt;
-    t.emit("update", "task", after.id, patch, { prev: prevOf(before as unknown as Record<string, unknown>, patch) });
-    t.audit(action, after.id, patch);
-    return after;
-  }
+  createTask(input: CreateTaskInput, actor: string | Actor): Task { return createTask(this.host, input, actor); }
+  updateTask(input: UpdateTaskInput, actor: string | Actor): Task { return updateTask(this.host, input, actor); }
+  moveTask(input: MoveTaskInput, actor: string | Actor): Task { return moveTask(this.host, input, actor); }
 
   /**
    * Per-item results: one bad row never rolls back the good ones, and the
    * caller can retry exactly the failures.
    */
   bulkUpdate(input: BulkUpdateInput, actor: string | Actor): BulkResult {
-    return this.runTurn(toActor(actor), (t) => {
-      const results: BulkResult["results"] = [];
-      for (const update of input.updates) {
-        try {
-          // Per item, like every other bulk failure: one task in a space the
-          // caller cannot see fails that row and leaves the rest of the batch.
-          this.assertTaskWritable(t.actor, update.taskId);
-          const task = this.applyTaskUpdate(t, update, "task.bulk_update");
-          results.push({ taskId: task.id, ok: true, error: null });
-        } catch (err) {
-          results.push({
-            taskId: update.taskId ?? null,
-            ok: false,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-      return { results };
-    });
+    return bulkUpdate(this.host, input, actor);
   }
-
   /** Returns the r2Keys of any deleted attachments so the caller can clean up R2. */
   deleteTask(taskId: string, actor: string | Actor): { ok: true; r2Keys: string[] } {
-    return this.runTurn(toActor(actor), (t) => {
-      const row = this.requireTaskRow(taskId);
-      const spaceId = this.spaceIdForTask(taskId);
-      this.assertSpaceWritable(t.actor, spaceId);
-      // Subtasks are in the snapshot, so they need their own delete deltas.
-      // Comments and attachments are lazy-loaded per task and need none.
-      const subtaskIds = this.sql
-        .exec<{ id: string }>("SELECT id FROM subtasks WHERE task_id = ?", taskId)
-        .toArray()
-        .map((r) => r.id);
-      // The attachments row is about to be the only record of these R2 keys,
-      // so park them in pending_object_deletes before dropping the row: the
-      // caller's waitUntil (or the backup job's sweep, if that never runs)
-      // deletes the objects and clears the rows afterward.
-      const r2Keys = this.sql
-        .exec<{ r2_key: string }>("SELECT r2_key FROM attachments WHERE task_id = ?", taskId)
-        .toArray()
-        .map((r) => r.r2_key);
-      for (const r2Key of r2Keys) {
-        this.sql.exec(
-          "INSERT OR IGNORE INTO pending_object_deletes (r2_key, enqueued_at) VALUES (?, ?)",
-          r2Key,
-          t.now
-        );
-      }
-
-      this.sql.exec("DELETE FROM subtasks WHERE task_id = ?", taskId);
-      this.sql.exec("DELETE FROM comments WHERE task_id = ?", taskId);
-      this.sql.exec("DELETE FROM attachments WHERE task_id = ?", taskId);
-      // The engine's due-date fired-guard would otherwise keep dead rows.
-      this.sql.exec("DELETE FROM automation_due_fires WHERE task_id = ?", taskId);
-      this.sql.exec("DELETE FROM tasks WHERE id = ?", taskId); // trigger clears FTS
-
-      // The rows are gone by now, so the space is passed explicitly: the
-      // broadcast filter still has to know which board these deletes belong to.
-      for (const sid of subtaskIds) t.emit("delete", "subtask", sid, null, { taskId, spaceId });
-      t.emit("delete", "task", taskId, null, { spaceId });
-      t.audit("task.delete", taskId, { listId: row.list_id, title: row.title });
-      return { ok: true, r2Keys } as const;
-    });
+    return deleteTask(this.host, taskId, actor);
   }
 
   /**
@@ -2464,329 +375,49 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * it has no actor, produces no delta, and belongs in no audit log.
    */
   clearPendingObjectDeletes(r2Keys: string[]): { ok: true; cleared: number } {
-    for (const r2Key of r2Keys) {
-      this.sql.exec("DELETE FROM pending_object_deletes WHERE r2_key = ?", r2Key);
-    }
-    return { ok: true, cleared: r2Keys.length };
+    return clearPendingObjectDeletes(this.sql, r2Keys);
   }
 
   // =========================================================================
   // Subtasks (Asana-style: done/not-done, no statuses)
   // =========================================================================
-
   createSubtask(input: ParsedSubtaskInput, actor: string | Actor): Subtask {
-    return this.runTurn(toActor(actor), (t) => {
-      this.assertTaskWritable(t.actor, input.taskId);
-      return this.applySubtaskCreate(t, {
-        taskId: input.taskId,
-        title: input.title,
-        assigneeId: input.assigneeId ?? null,
-        dueDate: input.dueDate ?? null,
-        note: input.note ?? null,
-      });
-    });
+    return createSubtask(this.host, input, actor);
   }
-
-  private applySubtaskCreate(
-    t: Turn,
-    input: {
-      taskId: string;
-      title: string;
-      assigneeId: string | null;
-      dueDate: number | null;
-      note?: string | null;
-    }
-  ): Subtask {
-    this.requireTaskRow(input.taskId);
-    requireAssignee(this.sql, input.assigneeId);
-    const assignedBy = this.humanAssigner(t, input.assigneeId);
-    const subtask: Subtask = {
-      id: id("sb_"),
-      taskId: input.taskId,
-      title: input.title,
-      done: false,
-      assigneeId: input.assigneeId,
-      assignedBy,
-      assignedAt: assignedBy === null ? null : t.now,
-      dueDate: input.dueDate,
-      note: input.note ?? null,
-      position: nextSubtaskPosition(this.sql, input.taskId),
-      createdAt: t.now,
-    };
-    this.sql.exec(
-      `INSERT INTO subtasks (id, task_id, title, done, assignee_id, assigned_by, assigned_at,
-                             due_date, note, position, created_at)
-       VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`,
-      subtask.id,
-      subtask.taskId,
-      subtask.title,
-      subtask.assigneeId,
-      subtask.assignedBy,
-      subtask.assignedAt,
-      subtask.dueDate,
-      subtask.note,
-      subtask.position,
-      subtask.createdAt
-    );
-    t.emit("create", "subtask", subtask.id, subtask as unknown as Record<string, unknown>, {
-      taskId: subtask.taskId,
-    });
-    t.audit("subtask.create", subtask.id, { taskId: subtask.taskId, title: subtask.title });
-    return subtask;
-  }
-
   updateSubtask(
-    input: { subtaskId: string; title?: string; assigneeId?: string | null; dueDate?: number | null; note?: string | null; position?: number },
+    input: {
+      subtaskId: string; title?: string; assigneeId?: string | null;
+      dueDate?: number | null; note?: string | null; position?: number;
+    },
     actor: string | Actor
-  ): Subtask {
-    return this.runTurn(toActor(actor), (t) => {
-      const before = this.requireSubtask(input.subtaskId);
-      this.assertTaskWritable(t.actor, before.taskId);
-      const p = sqlPatch();
-      p.setIf(input.title, before.title, "title");
-      if (input.assigneeId !== undefined && (input.assigneeId ?? null) !== before.assigneeId) {
-        requireAssignee(this.sql, input.assigneeId);
-        const assigneeId = input.assigneeId ?? null;
-        const assignedBy = this.humanAssigner(t, assigneeId);
-        p.set("assignee_id", assigneeId);
-        p.set("assigned_by", assignedBy);
-        p.set("assigned_at", assignedBy === null ? null : t.now);
-      }
-      p.setNullable(input.dueDate, before.dueDate, "due_date");
-      p.setNullable(input.note, before.note, "note");
-      p.setIf(input.position, before.position, "position");
-      if (p.sets.length === 0) return before;
-      this.sql.exec(`UPDATE subtasks SET ${p.sets.join(", ")} WHERE id = ?`, ...p.params, before.id);
-      const after = this.requireSubtask(before.id);
-      const patch = diffOf(
-        before as unknown as Record<string, unknown>,
-        after as unknown as Record<string, unknown>,
-        ["title", "assigneeId", "assignedBy", "assignedAt", "dueDate", "note", "position", "done"]
-      );
-      t.emit("update", "subtask", after.id, patch, { taskId: after.taskId });
-      t.audit("subtask.update", after.id, patch);
-      return after;
-    });
-  }
-
+  ): Subtask { return updateSubtask(this.host, input, actor); }
   toggleSubtask(input: ParsedToggleInput, actor: string | Actor): Subtask {
-    return this.runTurn(toActor(actor), (t) => {
-      const before = this.requireSubtask(input.subtaskId);
-      this.assertTaskWritable(t.actor, before.taskId);
-      if (before.done === input.done) return before;
-      this.sql.exec("UPDATE subtasks SET done = ? WHERE id = ?", input.done ? 1 : 0, before.id);
-      const after = this.requireSubtask(before.id);
-      t.emit("update", "subtask", after.id, { done: after.done }, { taskId: after.taskId });
-      t.audit("subtask.toggle", after.id, { done: after.done, taskId: after.taskId });
-      // all_subtasks_done is a trigger the engine derives from this delta.
-      return after;
-    });
+    return toggleSubtask(this.host, input, actor);
   }
-
   deleteSubtask(subtaskId: string, actor: string | Actor): { ok: true } {
-    return this.runTurn(toActor(actor), (t) => {
-      const before = this.requireSubtask(subtaskId);
-      this.assertTaskWritable(t.actor, before.taskId);
-      const spaceId = this.spaceIdForTask(before.taskId);
-      this.sql.exec("DELETE FROM subtasks WHERE id = ?", subtaskId);
-      t.emit("delete", "subtask", subtaskId, null, { taskId: before.taskId, spaceId });
-      t.audit("subtask.delete", subtaskId, { taskId: before.taskId });
-      return { ok: true } as const;
-    });
+    return deleteSubtask(this.host, subtaskId, actor);
   }
 
   // =========================================================================
   // Comments
   // =========================================================================
-
   createComment(input: ParsedCommentInput, actor: string | Actor): Comment {
-    return this.runTurn(toActor(actor), (t) => {
-      // A missing task resolves to no space, so this passes and the not-found
-      // error comes from applyCommentCreate's requireTaskRow instead.
-      this.assertTaskWritable(t.actor, input.taskId);
-      // Every reply check runs before the comment is written, since a throw
-      // does not roll back what the turn already wrote.
-      const reply = input.emailToRequester === true ? this.requireEmailReply(t.actor, input.taskId) : null;
-      const comment = this.applyCommentCreate(t, input, reply?.target.to ?? null);
-      if (reply !== null) {
-        const payload: SideEffectPayload = {
-          kind: "email-reply",
-          to: reply.target.to,
-          alias: reply.target.alias,
-          subject: replySubject(reply.title),
-          body: comment.body,
-          inReplyTo: reply.target.inReplyTo,
-          references: reply.target.references,
-          taskId: comment.taskId,
-          commentId: comment.id,
-        };
-        t.enqueue(payload);
-        t.audit("comment.email_reply", comment.id, { taskId: comment.taskId, to: reply.target.to });
-      }
-      return comment;
-    });
+    return createComment(this.host, input, actor);
   }
-
-  /**
-   * The checks for emailing a comment back: a person in the web app, or an api
-   * key an owner or admin allowed to (never MCP, and never a key nobody
-   * allowed, so no agent writes to a client on its own), replies turned on,
-   * and a requester to write to.
-   */
-  private requireEmailReply(actor: Actor, taskId: string): { target: EmailReplyTarget; title: string } {
-    if (!this.mayEmailRequesters(actor)) {
-      throw new Error(
-        "Email replies need an API key allowed to email requesters (PATCH /api/api-keys/:id), and never go over MCP."
-      );
-    }
-    if (this.env.EMAIL_INTAKE_REPLY !== "true") throw new Error("Email replies are turned off.");
-    const task = toTask(this.requireTaskRow(taskId));
-    const target = this.emailReplyTarget(task);
-    if (target === null) {
-      throw new Error(`Task ${taskId} has no email sender to reply to.`);
-    }
-    return { target, title: task.title };
-  }
-
-  private mayEmailRequesters(actor: Actor): boolean {
-    if (actor.via === "ui") return actor.apiKeyId === null;
-    if (actor.via !== "api" || actor.apiKeyId === null) return false;
-    const row = this.sql
-      .exec<{ can_email_requesters: number; revoked_at: number | null }>(
-        "SELECT can_email_requesters, revoked_at FROM api_keys WHERE id = ?",
-        actor.apiKeyId
-      )
-      .toArray()[0];
-    return row !== undefined && row.revoked_at === null && row.can_email_requesters === 1;
-  }
-
-  /**
-   * Where an emailed comment on this task would go, or null when it can't
-   * have one: replies are off, the task wasn't opened by email, or the alias it
-   * came in on no longer exists to take the requester's answer. An unverified
-   * sender is answered too: intake only files mail whose envelope sender is on
-   * the list's allowlist, and the reply goes to that address, so someone
-   * forging it never sees the reply; its real owner does.
-   */
-  private emailReplyTarget(task: Task): EmailReplyTarget | null {
-    if (this.env.EMAIL_INTAKE_REPLY !== "true") return null;
-    const rows = this.sql
-      .exec<{ message_id: string; alias: string; sender: string; comment_id: string | null }>(
-        `SELECT message_id, alias, sender, comment_id FROM email_messages
-          WHERE task_id = ? ORDER BY received_at, rowid`,
-        task.id
-      )
-      .toArray();
-    const opener = rows.find((r) => r.comment_id === null);
-    if (!opener) return null;
-    const live = this.sql
-      .exec("SELECT 1 AS ok FROM email_intakes WHERE alias = ?", opener.alias)
-      .toArray().length > 0;
-    if (!live) return null;
-    const real = rows.map((r) => r.message_id).filter((m) => !m.startsWith(SYNTHETIC_ID_PREFIX));
-    // Like the Worker's header cap: the thread's first id and its newest ones.
-    const references =
-      real.length > EMAIL_REPLY_REFERENCE_LIMIT
-        ? [real[0]!, ...real.slice(real.length - (EMAIL_REPLY_REFERENCE_LIMIT - 1))]
-        : real;
-    return {
-      to: opener.sender,
-      alias: opener.alias,
-      inReplyTo: real[real.length - 1] ?? null,
-      references,
-    };
-  }
-
   /**
    * The queue consumer's report on an emailed comment: "sent" once the mail
    * service accepted it, "failed" once delivery gave up. Only a comment still
    * "sending" moves, so a late or repeated report can't flip a settled one.
    */
   markEmailReply(commentId: string, status: "sent" | "failed"): { ok: boolean } {
-    const actor: Actor = { userId: this.systemUserId(), via: "webhook", apiKeyId: null, automationRuleId: null };
-    return this.runTurn(actor, (t) => {
-      const row = this.sql
-        .exec<CommentRow>(`SELECT ${COMMENT_COLUMNS} FROM comments WHERE id = ?`, commentId)
-        .toArray()[0];
-      if (!row || row.email_status !== "sending") return { ok: false };
-      this.sql.exec("UPDATE comments SET email_status = ? WHERE id = ?", status, commentId);
-      const comment = toComment({ ...row, email_status: status });
-      t.emit("update", "comment", comment.id, comment as unknown as Record<string, unknown>, {
-        taskId: comment.taskId,
-      });
-      t.audit("comment.email_status", comment.id, { taskId: comment.taskId, status });
-      return { ok: true };
-    });
+    return markEmailReply(this.host, commentId, status);
   }
-
-  /** The comment write itself, shared with ingestEmail. Callers check access. */
-  private applyCommentCreate(t: Turn, input: ParsedCommentInput, emailTo: string | null = null): Comment {
-    const taskRow = this.requireTaskRow(input.taskId);
-    const comment: Comment = {
-      id: id("cm_"),
-      taskId: input.taskId,
-      authorId: t.actor.userId,
-      body: input.body,
-      createdAt: t.now,
-      // How it arrived: "api"/"mcp" is the author's agent, "ui" the person,
-      // "webhook" an inbound email. Recorded on the row, not inferred later.
-      via: t.actor.via,
-      emailTo,
-      emailStatus: emailTo === null ? null : "sending",
-    };
-    this.sql.exec(
-      `INSERT INTO comments (id, task_id, author_id, body, created_at, via, email_to, email_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      comment.id,
-      comment.taskId,
-      comment.authorId,
-      comment.body,
-      comment.createdAt,
-      comment.via,
-      comment.emailTo,
-      comment.emailStatus
-    );
-    t.emit("create", "comment", comment.id, comment as unknown as Record<string, unknown>, {
-      taskId: comment.taskId,
-    });
-    t.audit("comment.create", comment.id, { taskId: comment.taskId });
-    // Activity wakes a snoozed task, in this same turn: the comment delta and
-    // the task's snoozedUntil -> null delta commit and broadcast together, so
-    // nobody ever sees the comment land on a card that is still asleep.
-    if (wakesOnComment(taskRow.snoozed_until ?? null)) {
-      this.applyTaskUpdate(t, { taskId: comment.taskId, snoozedUntil: null }, "task.wake");
-    }
-    return comment;
-  }
-
   deleteComment(commentId: string, actor: string | Actor): { ok: true } {
-    return this.runTurn(toActor(actor), (t) => {
-      const rows = this.sql
-        .exec<CommentRow>(
-          `SELECT ${COMMENT_COLUMNS} FROM comments WHERE id = ?`,
-          commentId
-        )
-        .toArray();
-      const row = rows[0];
-      if (!row) throw new Error(`Comment ${commentId} not found.`);
-      this.assertTaskWritable(t.actor, row.task_id);
-      const spaceId = this.spaceIdForTask(row.task_id);
-      this.sql.exec("DELETE FROM comments WHERE id = ?", commentId);
-      t.emit("delete", "comment", commentId, null, { spaceId });
-      t.audit("comment.delete", commentId, { taskId: row.task_id });
-      return { ok: true } as const;
-    });
+    return deleteComment(this.host, commentId, actor);
   }
 
   // =========================================================================
   // Agent handoffs (see ./handoffs.ts for the state rules)
-  //
-  // A handoff is an ordinary task — title and description carry the ask, the
-  // assignee is the recipient, the due date is when it's needed, tag
-  // "handoff" — plus the five handoff columns: who asked, what they want back,
-  // which tasks to read first, and where the exchange stands. Replies are
-  // ordinary comments. Both mutations check everything before their first
-  // write, because a throw does not roll back what the turn already wrote.
   // =========================================================================
 
   /**
@@ -2795,91 +426,17 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * the assignment email (see notifyForDelta).
    */
   requestHandoff(input: RequestHandoffInput, actor: string | Actor): Task {
-    const req = contractInput(RequestHandoffSchema.safeParse(input), "handoff request");
-    return this.runTaskTurn(toActor(actor), (t) => {
-      const list = this.requireListRow(req.listId);
-      this.assertSpaceWritable(t.actor, list.space_id);
-      this.requireHandoffRecipient(t.actor, req.toUserId, list.space_id);
-      const contextTaskIds = this.requireHandoffContext(t.actor, req.toUserId, req.contextTaskIds ?? []);
-
-      const handoff: Handoff = {
-        requestedBy: t.actor.userId,
-        state: "requested",
-        returnFormat:
-          req.returnFormat === undefined || req.returnFormat.trim() === "" ? null : req.returnFormat,
-        contextTaskIds,
-        stateChangedAt: t.now,
-      };
-      const task = this.applyTaskCreate(
-        t,
-        {
-          listId: list.id,
-          title: req.title,
-          description: req.ask,
-          assigneeId: req.toUserId,
-          dueDate: req.dueDate ?? null,
-          tags: [HANDOFF_TAG],
-        },
-        handoff
-      );
-      t.audit("handoff.request", task.id, { toUserId: req.toUserId, contextTaskIds });
-      return task;
-    });
+    return requestHandoff(this.host, input, actor);
   }
-
   /**
    * Answer, ask back, or move a handoff along, in one turn: the message (if
    * any) is a comment through applyCommentCreate, so `via` is recorded and a
    * snoozed task wakes; the state change (if any) is one task update carrying
    * the new `handoff` and, for done/declined or a reopen, the status move.
    */
-  replyHandoff(
-    input: ReplyHandoffInput,
-    actor: string | Actor
-  ): { task: Task; comment: Comment | null } {
-    const reply = contractInput(ReplyHandoffSchema.safeParse(input), "handoff reply");
-    const out = this.runTurn(toActor(actor), (t) => {
-      const before = toTask(this.requireTaskRow(reply.taskId));
-      this.assertTaskWritable(t.actor, before.id);
-      const handoff = before.handoff;
-      if (handoff === null) {
-        throw new Error(
-          `Task ${before.id} is not a handoff, so it has no handoff state. ` +
-            `Use createComment or updateTask for an ordinary task.`
-        );
-      }
-
-      const decision = decideHandoffState(handoff.state, reply.state, reply.message !== undefined, {
-        recipient: before.assigneeId !== null && before.assigneeId === t.actor.userId,
-        requester: handoff.requestedBy === t.actor.userId,
-        privileged: isSystemActor(t.actor) || isPrivilegedRole(roleOf(this.sql, t.actor.userId)),
-      });
-      if (!decision.ok) throw new Error(this.handoffRefusal(decision.reason, before, handoff));
-      const next = decision.next;
-      const changed = next !== handoff.state;
-      // Resolved before the first write: a malformed list throws here, not
-      // after the comment has already landed.
-      const status = changed ? this.handoffStatusName(before, next) : undefined;
-
-      const comment =
-        reply.message === undefined
-          ? null
-          : this.applyCommentCreate(t, { taskId: before.id, body: reply.message });
-      if (changed) {
-        this.applyTaskUpdate(
-          t,
-          { taskId: before.id, ...(status === undefined ? {} : { status }) },
-          "handoff.reply",
-          { ...handoff, state: next, stateChangedAt: t.now }
-        );
-        t.audit("handoff.state", before.id, { from: handoff.state, to: next });
-      }
-      return { taskId: before.id, comment };
-    });
-    // Re-read after the automation drain, as runTaskTurn does.
-    return { task: toTask(this.requireTaskRow(out.taskId)), comment: out.comment };
+  replyHandoff(input: ReplyHandoffInput, actor: string | Actor): { task: Task; comment: Comment | null } {
+    return replyHandoff(this.host, input, actor);
   }
-
   /**
    * Handoffs assigned to the actor (incoming) or filed by them (outgoing),
    * newest state change first, limited to spaces the actor can see. Explicit
@@ -2889,445 +446,52 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * touching its state, has still taken it off everyone's plate.
    */
   listHandoffs(input: ListHandoffsInput, actor: string | Actor): Task[] {
-    const query = contractInput(ListHandoffsSchema.safeParse(input), "handoff query");
-    const userId = toActor(actor).userId;
-    const states = [...new Set(query.states ?? OPEN_HANDOFF_STATES)];
-    const column = query.direction === "outgoing" ? "handoff_requested_by" : "assignee_id";
-
-    const where = [`${column} = ?`, `handoff_state IN (${states.map(() => "?").join(", ")})`];
-    const params: SqlStorageValue[] = [userId, ...states];
-    if (query.states === undefined) where.push("closed_at IS NULL");
-    // Same visibility filter as searchTasks: in SQL, before the LIMIT, so a
-    // page of hidden rows can never come back short or empty.
-    const visible = visibleSpaceIds(this.sql, userId);
-    if (visible !== null) {
-      if (visible.size === 0) return [];
-      where.push(
-        `list_id IN (SELECT id FROM lists WHERE space_id IN (${[...visible].map(() => "?").join(", ")}))`
-      );
-      params.push(...visible);
-    }
-    return this.sql
-      .exec<TaskRowSql>(
-        `SELECT ${TASK_COLUMNS} FROM tasks
-         WHERE handoff_state IS NOT NULL AND ${where.join(" AND ")}
-         ORDER BY handoff_state_changed_at DESC, id DESC LIMIT ?`,
-        ...params,
-        query.limit
-      )
-      .toArray()
-      .map(toTask);
-  }
-
-  /**
-   * The recipient must exist, be someone else, be active, and be able to see
-   * the space the handoff lands in — a handoff they cannot open is one nobody
-   * will ever answer.
-   */
-  private requireHandoffRecipient(actor: Actor, toUserId: string, spaceId: string): void {
-    const recipient = this.userById(toUserId);
-    if (recipient === null) {
-      const teammates = this.listUsers()
-        .filter((u) => !u.deactivated && u.id !== actor.userId)
-        .map((u) => `${u.id} ("${u.name}")`);
-      throw new Error(
-        `Unknown toUserId "${toUserId}". Active teammates: ${teammates.join(", ") || "none"}.`
-      );
-    }
-    if (recipient.id === actor.userId) {
-      throw new Error(
-        `You can't hand off to yourself (${recipient.id}). Pick a teammate, or create an ordinary task.`
-      );
-    }
-    if (recipient.deactivated) {
-      throw new Error(
-        `${recipient.name} (${recipient.id}) is deactivated and can't receive handoffs. Pick an active teammate.`
-      );
-    }
-    const space = this.requireSpace(spaceId);
-    const canSee = canSeeSpace(recipient.role, {
-      visibility: space.visibility,
-      isMember: isSpaceMember(this.sql, space.id, recipient.id),
-    });
-    if (!canSee) {
-      throw new Error(
-        `${recipient.name} (${recipient.id}) can't see space ${space.id} ("${space.name}"), ` +
-          `so they couldn't open this handoff. File it in a list they can see, ` +
-          `or ask an owner/admin to add them to the space.`
-      );
-    }
-  }
-
-  /**
-   * Every context task must exist and be visible to both ends: the requester
-   * (it's their pointer) and the recipient, whose agent would otherwise be
-   * sent to read a task it can't open. De-duplicated, order kept. Called after
-   * requireHandoffRecipient, so the recipient is known to exist.
-   */
-  private requireHandoffContext(
-    actor: Actor,
-    recipientId: string,
-    taskIds: readonly string[]
-  ): string[] {
-    const recipient = this.userById(recipientId);
-    const out: string[] = [];
-    for (const taskId of taskIds) {
-      if (out.includes(taskId)) continue;
-      if (this.taskRow(taskId) === null) {
-        throw new Error(`Context task ${taskId} not found; contextTaskIds must name existing tasks.`);
-      }
-      const spaceId = this.spaceIdForTask(taskId);
-      const refusal = this.spaceWriteRefusal(actor, spaceId);
-      if (refusal !== null) {
-        throw new Error(`Context task ${taskId} isn't visible to you. ${refusal}`);
-      }
-      if (recipient !== null && spaceId !== null) {
-        const space = this.requireSpace(spaceId);
-        const recipientSees = canSeeSpace(recipient.role, {
-          visibility: space.visibility,
-          isMember: isSpaceMember(this.sql, space.id, recipient.id),
-        });
-        if (!recipientSees) {
-          throw new Error(
-            `Context task ${taskId} is in space ${space.id} ("${space.name}"), which ${recipient.name} ` +
-              `can't see, so their agent couldn't read it. Leave it out, or ask an owner/admin to add them to that space.`
-          );
-        }
-      }
-      out.push(taskId);
-    }
-    return out;
-  }
-
-  /**
-   * The handoff a status move implies for a handoff task closed or reopened
-   * without going through replyHandoff, or undefined to leave it as it is.
-   */
-  private impliedHandoff(t: Turn, before: Task, nowClosed: boolean): Handoff | undefined {
-    if (before.handoff === null) return undefined;
-    const next = handoffStateForStatusMove(before.handoff.state, before.closedAt !== null, nowClosed);
-    return next === null ? undefined : { ...before.handoff, state: next, stateChangedAt: t.now };
-  }
-
-  /** The status name a state change moves the task to, or undefined to leave it. */
-  private handoffStatusName(task: Task, next: HandoffState): string | undefined {
-    const closed = getStatus(this.sql, task.statusId)?.type === "closed";
-    switch (handoffStatusMove(next, closed)) {
-      case "close":
-        return closedStatus(this.sql, task.listId).name;
-      case "reopen":
-        return openStatus(this.sql, task.listId).name;
-      case null:
-        return undefined;
-    }
-  }
-
-  /** The refusal sentence, naming who can do what — agents act on these. */
-  private handoffRefusal(reason: "outsider" | "requester_state", task: Task, handoff: Handoff): string {
-    const label = (userId: string | null): string => {
-      if (userId === null) return "nobody; the task is unassigned";
-      const user = this.userById(userId);
-      return user === null ? userId : `${user.name} (${user.id})`;
-    };
-    const recipient = label(task.assigneeId);
-    if (reason === "outsider") {
-      return (
-        `Only handoff ${task.id}'s recipient (${recipient}) or requester (${label(handoff.requestedBy)}) ` +
-        `can reply to it; owners and admins can too. Use createComment to add a note without replying.`
-      );
-    }
-    return (
-      `As the requester you can only withdraw handoff ${task.id} (state "declined"), and only while it's still open. ` +
-      `The recipient (${recipient}) moves it through requested, working, needs_input and done, ` +
-      `and owners and admins can set any state. To answer a needs_input handoff, send a message ` +
-      `without a state; that hands it back as "working".`
-    );
+    return listHandoffs(this.sql, input, actor);
   }
 
   // =========================================================================
   // Attachments — the api Worker does the R2 upload, the DO owns the metadata
   // =========================================================================
-
   createAttachment(input: CreateAttachmentInput, actor: string | Actor): Attachment {
-    return this.runTurn(toActor(actor), (t) => {
-      this.requireTaskRow(input.taskId);
-      this.assertTaskWritable(t.actor, input.taskId);
-      return this.applyAttachmentCreate(t, input);
-    });
+    return createAttachment(this.host, input, actor);
   }
-
-  /**
-   * The metadata write, shared with ingestEmail. Honours a caller-supplied id
-   * (the R2 key embeds it); callers check the task exists and is writable.
-   */
-  private applyAttachmentCreate(t: Turn, input: CreateAttachmentInput): Attachment {
-    const attachment: Attachment = {
-      id: input.id ?? id("at_"),
-      taskId: input.taskId,
-      filename: input.filename,
-      r2Key: input.r2Key,
-      storageProvider: "r2",
-      driveFileId: null,
-      driveWebViewLink: null,
-      driveDestination: null,
-      migrationState: "r2",
-      size: input.size,
-      mimeType: input.mimeType,
-      uploadedBy: t.actor.userId,
-      createdAt: t.now,
-    };
-    this.sql.exec(
-      `INSERT INTO attachments (id, task_id, filename, r2_key, size, mime_type, uploaded_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      attachment.id,
-      attachment.taskId,
-      attachment.filename,
-      attachment.r2Key,
-      attachment.size,
-      attachment.mimeType,
-      attachment.uploadedBy,
-      attachment.createdAt
-    );
-    t.emit("create", "attachment", attachment.id, attachment as unknown as Record<string, unknown>, {
-      taskId: attachment.taskId,
-    });
-    t.audit("attachment.create", attachment.id, {
-      taskId: attachment.taskId,
-      filename: attachment.filename,
-    });
-    return attachment;
-  }
-
   /**
    * Make a verified Drive file canonical while retaining the R2 key until a
    * separate, read-back-gated cleanup call succeeds.
    */
-  setAttachmentDriveStorage(
-    input: SetAttachmentDriveStorageInput,
-    actor: string | Actor
-  ): Attachment {
-    return this.runTurn(toActor(actor), (t) => {
-      this.requirePrivileged(t.actor, "Finalizing Drive attachment storage");
-      const before = this.getAttachment(input.attachmentId);
-      if (!before) throw new Error(`Attachment ${input.attachmentId} not found.`);
-      if (before.storageProvider === "drive") {
-        if (
-          before.driveFileId !== input.driveFileId ||
-          before.driveWebViewLink !== input.driveWebViewLink ||
-          before.driveDestination !== input.driveDestination
-        ) {
-          throw new Error(
-            `Attachment ${input.attachmentId} already points at a different Drive file.`
-          );
-        }
-        return before;
-      }
-      this.sql.exec(
-        `UPDATE attachments
-         SET storage_provider = 'drive',
-             drive_file_id = ?,
-             drive_web_view_link = ?,
-             drive_destination = ?,
-             migration_state = 'cleanup_pending'
-         WHERE id = ?`,
-        input.driveFileId,
-        input.driveWebViewLink,
-        input.driveDestination,
-        input.attachmentId
-      );
-      const after = this.getAttachment(input.attachmentId);
-      if (!after) throw new Error(`Attachment ${input.attachmentId} disappeared after update.`);
-      t.emit("update", "attachment", after.id, after as unknown as Record<string, unknown>, {
-        taskId: after.taskId,
-      });
-      t.audit("attachment.storage.drive", after.id, {
-        taskId: after.taskId,
-        driveFileId: after.driveFileId,
-        driveDestination: after.driveDestination,
-        migrationState: after.migrationState,
-      });
-      return after;
-    });
+  setAttachmentDriveStorage(input: SetAttachmentDriveStorageInput, actor: string | Actor): Attachment {
+    return setAttachmentDriveStorage(this.host, input, actor);
   }
-
   /** Mark cleanup complete only for the exact Drive file the caller read back. */
   markAttachmentDriveCleanupComplete(
-    attachmentId: string,
-    driveFileId: string,
-    actor: string | Actor
-  ): Attachment {
-    return this.runTurn(toActor(actor), (t) => {
-      this.requirePrivileged(t.actor, "Completing Drive attachment cleanup");
-      const before = this.getAttachment(attachmentId);
-      if (!before) throw new Error(`Attachment ${attachmentId} not found.`);
-      if (before.storageProvider !== "drive" || before.driveFileId !== driveFileId) {
-        throw new Error(`Attachment ${attachmentId} does not match Drive file ${driveFileId}.`);
-      }
-      if (before.migrationState === "complete") return before;
-      if (before.migrationState !== "cleanup_pending") {
-        throw new Error(`Attachment ${attachmentId} is not awaiting R2 cleanup.`);
-      }
-      this.sql.exec(
-        "UPDATE attachments SET migration_state = 'complete' WHERE id = ?",
-        attachmentId
-      );
-      const after = this.getAttachment(attachmentId);
-      if (!after) throw new Error(`Attachment ${attachmentId} disappeared after cleanup.`);
-      t.emit("update", "attachment", after.id, after as unknown as Record<string, unknown>, {
-        taskId: after.taskId,
-      });
-      t.audit("attachment.storage.r2_deleted", after.id, {
-        taskId: after.taskId,
-        driveFileId,
-        r2Key: after.r2Key,
-      });
-      return after;
-    });
-  }
-
+    attachmentId: string, driveFileId: string, actor: string | Actor
+  ): Attachment { return markAttachmentDriveCleanupComplete(this.host, attachmentId, driveFileId, actor); }
   /**
    * Returns the r2Key so the caller can delete the object from R2 (and clear
    * the pending_object_deletes row this parks in the same turn).
    */
   deleteAttachment(attachmentId: string, actor: string | Actor): { ok: true; r2Key: string } {
-    return this.runTurn(toActor(actor), (t) => {
-      const row = this.sql
-        .exec<AttachmentRow>(`SELECT ${ATTACHMENT_COLUMNS} FROM attachments WHERE id = ?`, attachmentId)
-        .toArray()[0];
-      if (!row) throw new Error(`Attachment ${attachmentId} not found.`);
-      this.assertTaskWritable(t.actor, row.task_id);
-      const spaceId = this.spaceIdForTask(row.task_id);
-      // Same parking as deleteTask: this row is the only record of the R2
-      // key, so persist it before dropping the row. The route's waitUntil
-      // deletes the object and clears the pending row; if the Worker is
-      // evicted first, the backup job's daily sweep picks it up.
-      this.sql.exec(
-        "INSERT OR IGNORE INTO pending_object_deletes (r2_key, enqueued_at) VALUES (?, ?)",
-        row.r2_key,
-        t.now
-      );
-      this.sql.exec("DELETE FROM attachments WHERE id = ?", attachmentId);
-      t.emit("delete", "attachment", attachmentId, null, { spaceId });
-      t.audit("attachment.delete", attachmentId, { taskId: row.task_id });
-      return { ok: true as const, r2Key: row.r2_key };
-    });
+    return deleteAttachment(this.host, attachmentId, actor);
   }
 
   // =========================================================================
   // Spaces & lists
   // =========================================================================
-
   createSpace(input: ParsedSpaceInput, actor: string | Actor): Space {
-    return this.runTurn(toActor(actor), (t) => {
-      const space: Space = {
-        id: id("sp_"),
-        name: input.name,
-        color: input.color ?? null,
-        position: nextPosition(this.sql, "spaces"),
-        archived: false,
-        // Spaces are born private (private is the norm for this workspace);
-        // a caller may opt into workspace-wide visibility explicitly, and
-        // flipping visibility afterwards is a separate, audited mutation
-        // (`setSpaceVisibility`).
-        visibility: input.visibility,
-        createdAt: t.now,
-      };
-      this.sql.exec(
-        `INSERT INTO spaces (id, name, color, position, archived, visibility, created_at, created_by)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
-        space.id,
-        space.name,
-        space.color,
-        space.position,
-        space.visibility,
-        space.createdAt,
-        t.actor.userId
-      );
-      // A private space needs at least one member, and the person who just
-      // built it is the honest answer — mirrors setSpaceVisibility's flip to
-      // private, including for an admin/owner creator, so membership stays
-      // consistent regardless of who made the space private.
-      if (space.visibility === "private") {
-        this.addSpaceMember(space.id, t.actor.userId, t.now);
-      }
-      t.emit("create", "space", space.id, space as unknown as Record<string, unknown>);
-      t.audit("space.create", space.id, { name: space.name, visibility: space.visibility });
-      return space;
-    });
+    return createSpace(this.host, input, actor);
   }
-
   updateSpace(
     input: { spaceId: string; name?: string; color?: string | null; archived?: boolean; position?: number },
     actor: string | Actor
-  ): Space {
-    return this.runTurn(toActor(actor), (t) => {
-      const before = this.requireSpace(input.spaceId);
-      const p = sqlPatch();
-      p.setIf(input.name, before.name, "name");
-      p.setNullable(input.color, before.color, "color");
-      p.setIf(input.archived === undefined ? undefined : input.archived ? 1 : 0, before.archived ? 1 : 0, "archived");
-      p.setIf(input.position, before.position, "position");
-      if (p.sets.length === 0) return before;
-      this.sql.exec(`UPDATE spaces SET ${p.sets.join(", ")} WHERE id = ?`, ...p.params, before.id);
-      const after = this.requireSpace(before.id);
-      const patch = diffOf(
-        before as unknown as Record<string, unknown>,
-        after as unknown as Record<string, unknown>,
-        ["name", "color", "archived", "position"]
-      );
-      t.emit("update", "space", after.id, patch);
-      t.audit("space.update", after.id, patch);
-      return after;
-    });
-  }
-
+  ): Space { return updateSpace(this.host, input, actor); }
   /**
    * Flip visibility between workspace and private; going private ensures at
    * least one member (creator, or acting admin if created_by is null) and
    * triggers client resync.
    */
-  setSpaceVisibility(
-    input: { spaceId: string; visibility: SpaceVisibility },
-    actor: string | Actor
-  ): Space {
-    const result = this.runTurn(toActor(actor), (t) => {
-      this.requirePrivileged(t.actor, "Changing a space's visibility");
-      const before = this.requireSpace(input.spaceId);
-      if (before.visibility === input.visibility) return { space: before, changed: false };
-
-      this.sql.exec(
-        "UPDATE spaces SET visibility = ? WHERE id = ?",
-        input.visibility,
-        input.spaceId
-      );
-
-      if (input.visibility === "private") {
-        const createdBy =
-          this.sql
-            .exec<{ created_by: string | null }>(
-              "SELECT created_by FROM spaces WHERE id = ?",
-              input.spaceId
-            )
-            .toArray()[0]?.created_by ?? null;
-        this.addSpaceMember(input.spaceId, createdBy ?? t.actor.userId, t.now);
-      }
-
-      const after = this.requireSpace(input.spaceId);
-      t.emit("update", "space", after.id, { visibility: after.visibility });
-      t.audit("space.set_visibility", after.id, { visibility: after.visibility });
-      return { space: after, changed: true };
-    });
-
-    if (result.changed) {
-      // The visibility delta replays, but the subtree a member gained or lost
-      // does not — so replay from any earlier seq is invalid for them.
-      bumpResyncFloor(this.sql, this.maxSeq());
-      // Everyone who is not an owner/admin may have gained or lost a subtree.
-      this.resyncFor(() => true);
-    }
-    return result.space;
+  setSpaceVisibility(input: { spaceId: string; visibility: SpaceVisibility }, actor: string | Actor): Space {
+    return setSpaceVisibility(this.host, input, actor);
   }
-
   /**
    * Replace a space's member list. `userIds` is the complete set afterwards, so
    * the caller never has to diff — the UI always knows the whole list.
@@ -3336,216 +500,30 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * would otherwise look like a granted permission that never works.
    */
   setSpaceMembers(
-    input: { spaceId: string; userIds: string[] },
-    actor: string | Actor
-  ): { spaceId: string; userIds: string[] } {
-    const result = this.runTurn(toActor(actor), (t) => {
-      this.requirePrivileged(t.actor, "Changing a space's members");
-      const space = this.requireSpace(input.spaceId);
-
-      const wanted: string[] = [];
-      const seen = new Set<string>();
-      for (const userId of input.userIds) {
-        if (seen.has(userId)) continue;
-        seen.add(userId);
-        const exists = this.sql
-          .exec<{ n: number }>("SELECT COUNT(*) AS n FROM users WHERE id = ?", userId)
-          .one().n;
-        if (exists === 0) throw new Error(`Cannot add unknown user ${userId} to space ${space.id}.`);
-        wanted.push(userId);
-      }
-
-      const before = new Set(listSpaceMemberIds(this.sql, space.id));
-      this.sql.exec("DELETE FROM space_members WHERE space_id = ?", space.id);
-      for (const userId of wanted) this.addSpaceMember(space.id, userId, t.now);
-
-      const changedUsers = new Set<string>();
-      for (const userId of before) if (!seen.has(userId)) changedUsers.add(userId);
-      for (const userId of wanted) if (!before.has(userId)) changedUsers.add(userId);
-
-      // Membership is not board content: it is audited, but there is no member
-      // delta to broadcast — the affected clients resync instead.
-      t.audit("space.set_members", space.id, { userIds: wanted });
-      return { spaceId: space.id, userIds: wanted, changedUsers, private: space.visibility === "private" };
-    });
-
-    // Only a private space's membership changes what anyone can see.
-    if (result.private && result.changedUsers.size > 0) {
-      // Membership writes no delta at all, so an affected user reconnecting
-      // later with an old sinceSeq must get a snapshot, not a replay.
-      bumpResyncFloor(this.sql, this.maxSeq());
-      this.resyncFor((userId) => result.changedUsers.has(userId));
-    }
-    return { spaceId: result.spaceId, userIds: result.userIds };
-  }
-
-  private addSpaceMember(spaceId: string, userId: string, now: number): void {
-    this.sql.exec(
-      "INSERT OR IGNORE INTO space_members (space_id, user_id, created_at) VALUES (?, ?, ?)",
-      spaceId,
-      userId,
-      now
-    );
-  }
-
+    input: { spaceId: string; userIds: string[] }, actor: string | Actor
+  ): { spaceId: string; userIds: string[] } { return setSpaceMembers(this.host, input, actor); }
   deleteSpace(spaceId: string, actor: string | Actor): { ok: true } {
-    return this.runTurn(toActor(actor), (t) => {
-      const before = this.requireSpace(spaceId);
-      const { n } = this.sql
-        .exec<{ n: number }>("SELECT COUNT(*) AS n FROM lists WHERE space_id = ?", spaceId)
-        .one();
-      if (n > 0) {
-        throw new Error(
-          `Space ${spaceId} ("${before.name}") still has ${n} list(s). ` +
-            `Delete or move them first, or archive the space instead (updateSpace with archived: true).`
-        );
-      }
-      this.sql.exec("DELETE FROM space_members WHERE space_id = ?", spaceId);
-      this.sql.exec("DELETE FROM spaces WHERE id = ?", spaceId);
-      t.emit("delete", "space", spaceId, null, { spaceId });
-      t.audit("space.delete", spaceId, { name: before.name });
-      return { ok: true } as const;
-    });
+    return deleteSpace(this.host, spaceId, actor);
   }
-
-  createList(input: ParsedListInput, actor: string | Actor): List {
-    return this.runTurn(toActor(actor), (t) => {
-      this.assertSpaceWritable(t.actor, input.spaceId);
-      return this.applyListCreate(t, input);
-    });
-  }
-
-  private applyListCreate(t: Turn, input: ParsedListInput, clickupId: string | null = null): List {
-    this.requireSpace(input.spaceId);
-    const specs = normalizeStatusSpecs(input.statuses);
-    const listId = id("ls_");
-    const row: ListRow = {
-      id: listId,
-      space_id: input.spaceId,
-      name: input.name,
-      position: nextPosition(this.sql, "lists", input.spaceId),
-      archived: 0,
-      inbound_token: null,
-      created_at: t.now,
-      clickup_id: clickupId,
-    };
-    this.sql.exec(
-      `INSERT INTO lists (id, space_id, name, position, archived, inbound_token, created_at, clickup_id)
-       VALUES (?, ?, ?, ?, 0, NULL, ?, ?)`,
-      row.id,
-      row.space_id,
-      row.name,
-      row.position,
-      row.created_at,
-      row.clickup_id
-    );
-    const statuses = insertStatuses(this.sql, listId, specs);
-    const list = toList(row, statuses);
-    t.emit("create", "list", listId, list as unknown as Record<string, unknown>);
-    t.audit("list.create", listId, { spaceId: list.spaceId, name: list.name });
-    return list;
-  }
-
+  createList(input: ParsedListInput, actor: string | Actor): List { return createList(this.host, input, actor); }
   updateList(
     input: { listId: string; name?: string; archived?: boolean; position?: number; spaceId?: string },
     actor: string | Actor
-  ): List {
-    return this.runTurn(toActor(actor), (t) => {
-      const row = this.requireListRow(input.listId);
-      this.assertSpaceWritable(t.actor, row.space_id);
-      if (input.spaceId !== undefined) this.assertSpaceWritable(t.actor, input.spaceId);
-      const before = toList(row, listStatuses(this.sql, row.id));
-      const p = sqlPatch();
-      p.setIf(input.name, before.name, "name");
-      p.setIf(input.archived === undefined ? undefined : input.archived ? 1 : 0, before.archived ? 1 : 0, "archived");
-      p.setIf(input.position, before.position, "position");
-      if (input.spaceId !== undefined && input.spaceId !== before.spaceId) {
-        this.requireSpace(input.spaceId);
-        p.set("space_id", input.spaceId);
-      }
-      if (p.sets.length === 0) return before;
-      this.sql.exec(`UPDATE lists SET ${p.sets.join(", ")} WHERE id = ?`, ...p.params, before.id);
-      const after = toList(this.requireListRow(before.id), listStatuses(this.sql, before.id));
-      const patch = diffOf(
-        before as unknown as Record<string, unknown>,
-        after as unknown as Record<string, unknown>,
-        ["name", "archived", "position", "spaceId"]
-      );
-      // `prev.spaceId` is how resyncForSpaceMoves spots a cross-space move: the
-      // list and every task under it just changed visibility for someone.
-      t.emit("update", "list", after.id, patch, {
-        prev: prevOf(before as unknown as Record<string, unknown>, patch),
-      });
-      t.audit("list.update", after.id, patch);
-      return after;
-    });
-  }
-
+  ): List { return updateList(this.host, input, actor); }
   /** Issue (or rotate) the bearer token for the list's inbound webhook. */
   setListInboundToken(
-    input: { listId: string; enabled: boolean },
-    actor: string | Actor
-  ): { listId: string; inboundToken: string | null } {
-    return this.runTurn(toActor(actor), (t) => {
-      const row = this.requireListRow(input.listId);
-      this.assertSpaceWritable(t.actor, row.space_id);
-      const inboundToken = input.enabled ? token() : null;
-      this.sql.exec("UPDATE lists SET inbound_token = ? WHERE id = ?", inboundToken, row.id);
-      // The delta goes to every connected member, so it carries `null` — the
-      // same value the snapshot carries. Only this method's return value (which
-      // the admin-only PATCH route shows once) has the plaintext.
-      t.emit("update", "list", row.id, { inboundToken: null });
-      t.audit("list.set_inbound_token", row.id, { enabled: input.enabled });
-      return { listId: row.id, inboundToken };
-    });
-  }
-
+    input: { listId: string; enabled: boolean }, actor: string | Actor
+  ): { listId: string; inboundToken: string | null } { return setListInboundToken(this.host, input, actor); }
   deleteList(listId: string, actor: string | Actor): { ok: true } {
-    return this.runTurn(toActor(actor), (t) => {
-      const row = this.requireListRow(listId);
-      this.assertSpaceWritable(t.actor, row.space_id);
-      const { n } = this.sql
-        .exec<{ n: number }>("SELECT COUNT(*) AS n FROM tasks WHERE list_id = ?", listId)
-        .one();
-      if (n > 0) {
-        throw new Error(
-          `List ${listId} ("${row.name}") still has ${n} task(s). Move or delete them first, ` +
-            `or archive the list instead (updateList with archived: true).`
-        );
-      }
-      // An alias outliving its list would keep accepting mail for nowhere, and
-      // keep the alias from being reused, so the intake goes in the same turn.
-      const intake = this.emailIntakeForList(listId);
-      this.sql.exec("DELETE FROM email_intakes WHERE list_id = ?", listId);
-      this.sql.exec("DELETE FROM statuses WHERE list_id = ?", listId);
-      this.sql.exec("DELETE FROM lists WHERE id = ?", listId);
-      t.emit("delete", "list", listId, null, { spaceId: row.space_id });
-      t.audit("list.delete", listId, {
-        name: row.name,
-        ...(intake === null ? {} : { emailIntakeAlias: intake.alias }),
-      });
-      return { ok: true } as const;
-    });
+    return deleteList(this.host, listId, actor);
   }
 
   // =========================================================================
   // Email intake (see ./email-intake.ts)
-  //
-  // The api Worker's email() handler runs checkEmailIntake before it parses or
-  // uploads anything, then hands the formatted message to ingestEmail. The
-  // pre-check is advisory: ingestEmail repeats every check inside its own turn
-  // and writes the task or comment together with the email_messages row that
-  // turns a redelivery into a no-op.
   // =========================================================================
 
   /** Every list's intake, by alias. Holds sender allowlists: the Worker admin-gates it. */
-  listEmailIntakes(): EmailIntake[] {
-    return this.sql
-      .exec<EmailIntakeRow>(`SELECT ${EMAIL_INTAKE_COLUMNS} FROM email_intakes ORDER BY alias`)
-      .toArray()
-      .map(toEmailIntake);
-  }
-
+  listEmailIntakes(): EmailIntake[] { return listEmailIntakes(this.sql); }
   /**
    * Create or replace (`input`) or remove (`null`) one list's intake.
    *
@@ -3554,85 +532,13 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * take the caller's word for it. Intakes are not in the snapshot, so this
    * writes an audit row and no delta.
    */
-  setEmailIntake(
-    listId: string,
-    input: SetEmailIntakeInput | null,
-    actor: string | Actor
-  ): EmailIntake | null {
-    return this.runTurn(toActor(actor), (t) => {
-      this.requirePrivileged(t.actor, "Configuring a list's email intake");
-      const list = this.requireListRow(listId);
-      const before = this.emailIntakeForList(list.id);
-      if (input === null) {
-        if (before === null) return null;
-        this.sql.exec("DELETE FROM email_intakes WHERE list_id = ?", list.id);
-        t.audit("list.email_intake.remove", list.id, { alias: before.alias });
-        return null;
-      }
-
-      // The route has already parsed this; parsing again here normalizes
-      // (trim, lowercase) for any other caller with the contract's own rules.
-      const parsed = SetEmailIntakeSchema.safeParse(input);
-      if (!parsed.success) {
-        throw new Error(parsed.error.issues[0]?.message ?? "Invalid email intake.");
-      }
-      const alias = parsed.data.alias;
-      const allowedSenders = [...new Set(parsed.data.allowedSenders)];
-
-      // Checked in code so the caller gets the holder's name, not a constraint
-      // code; the UNIQUE on email_intakes.alias is the backstop.
-      const holder = this.sql
-        .exec<{ list_id: string; name: string | null }>(
-          `SELECT e.list_id AS list_id, l.name AS name
-           FROM email_intakes e LEFT JOIN lists l ON l.id = e.list_id
-           WHERE e.alias = ? AND e.list_id != ?`,
-          alias,
-          list.id
-        )
-        .toArray()[0];
-      if (holder) {
-        throw new Error(
-          `Email alias "${alias}" is already used by list ${holder.list_id}` +
-            `${holder.name === null ? "" : ` ("${holder.name}")`}. ` +
-            `Remove it from that list first, or pick another alias.`
-        );
-      }
-
-      const after: EmailIntake = {
-        listId: list.id,
-        alias,
-        allowedSenders,
-        createdAt: before?.createdAt ?? t.now,
-        updatedAt: t.now,
-      };
-      this.sql.exec(
-        `INSERT INTO email_intakes (list_id, alias, allowed_senders, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT (list_id) DO UPDATE SET
-           alias = excluded.alias,
-           allowed_senders = excluded.allowed_senders,
-           updated_at = excluded.updated_at`,
-        after.listId,
-        after.alias,
-        JSON.stringify(after.allowedSenders),
-        after.createdAt,
-        after.updatedAt
-      );
-      t.audit("list.email_intake.set", list.id, { alias, allowedSenders });
-      return after;
-    });
+  setEmailIntake(listId: string, input: SetEmailIntakeInput | null, actor: string | Actor): EmailIntake | null {
+    return setEmailIntake(this.host, listId, input, actor);
   }
-
   /** Read-only and cheap: the Worker's pre-check before it parses or uploads. */
   checkEmailIntake(input: { alias: string; sender: string; messageId: string }): EmailIntakeCheck {
-    return this.emailIntakeCheck(
-      input.alias.trim().toLowerCase(),
-      input.sender.trim().toLowerCase(),
-      normalizeMessageId(input.messageId) ?? "",
-      Date.now()
-    );
+    return checkEmailIntake(this.sql, input);
   }
-
   /**
    * Route one parsed message in one turn: a comment on the ticket it replies
    * to, or a new ticket in the intake's list, plus its attachments and the
@@ -3643,209 +549,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * as the message prefix, so the Worker rejects instead of asking for a retry.
    */
   ingestEmail(input: IngestEmailInput, actor: string | Actor): IngestEmailResult {
-    const result = this.runTurn(toActor(actor), (t): IngestEmailResult => {
-      const alias = input.alias.trim().toLowerCase();
-      const sender = input.sender.trim().toLowerCase();
-      // Only an explicit true vouches for the sender; a caller that leaves the
-      // flag out gets the unverified treatment, never the trusted one.
-      const authenticated = input.authenticated === true;
-      const messageId = normalizeMessageId(input.messageId);
-      if (messageId === null) {
-        throw permanentEmailError("no Message-ID, and it is the dedupe key.");
-      }
-      const check = this.emailIntakeCheck(alias, sender, messageId, t.now);
-      if (check.status !== "ok") return check;
-      const listId = check.listId;
-      const message = { messageId, listId, alias, sender, authenticated };
-
-      // Everything that can refuse is checked before the first write: a throw
-      // after it would leave a ticket with no dedupe row, and the redelivery
-      // would open a second one.
-      this.requireFreshAttachmentIds(input.attachments);
-      const thread = this.emailThreadTask(listId, input.referenceIds);
-      if (thread !== null) {
-        // An unauthenticated reply still threads: the Worker marks the comment
-        // text itself, and the ticket was opened by someone this list admits.
-        this.requireEmailWritable(t.actor, "task", thread.id);
-        // A reply is only ever a comment: it never reopens, moves or retags
-        // the ticket, even a closed one.
-        const comment = this.applyCommentCreate(t, { taskId: thread.id, body: input.commentBody });
-        for (const a of input.attachments) this.applyAttachmentCreate(t, { ...a, taskId: thread.id });
-        this.recordEmailMessage(t, { ...message, taskId: thread.id, commentId: comment.id });
-        return { status: "commented", taskId: thread.id, commentId: comment.id, listId: thread.list_id };
-      }
-
-      this.requireEmailWritable(t.actor, "list", listId);
-      const task = this.applyTaskCreate(t, {
-        listId,
-        title: input.task.title,
-        description: input.task.description,
-        tags: authenticated ? [EMAIL_INTAKE_TAG] : [EMAIL_INTAKE_TAG, EMAIL_INTAKE_UNVERIFIED_TAG],
-      });
-      for (const a of input.attachments) this.applyAttachmentCreate(t, { ...a, taskId: task.id });
-      this.recordEmailMessage(t, { ...message, taskId: task.id, commentId: null });
-      return { status: "created", taskId: task.id, listId: task.listId };
-    });
-    // As in runTaskTurn: an automation in the same turn may have moved the
-    // task, and the caller should hear where it actually landed.
-    if (result.status === "created" || result.status === "commented") {
-      const row = this.taskRow(result.taskId);
-      if (row !== null) return { ...result, listId: row.list_id };
-    }
-    return result;
-  }
-
-  /**
-   * The contract's refusals in its fixed order, then ok. Reads only.
-   *
-   * Dedupe is per (Message-ID, intake list), so one email addressed to two
-   * intakes files once in each. It runs before the rate limits so a
-   * redelivery is always recognized as one. Then two hourly budgets: the
-   * sender's own, and the list's across every sender, since an "@domain"
-   * entry admits any number of local parts each with a fresh sender budget.
-   */
-  private emailIntakeCheck(
-    alias: string,
-    sender: string,
-    messageId: string,
-    now: number
-  ): EmailIntakeCheck {
-    const intake = this.sql
-      .exec<EmailIntakeRow & { list_archived: number | null }>(
-        `SELECT e.list_id AS list_id, e.alias AS alias, e.allowed_senders AS allowed_senders,
-                e.created_at AS created_at, e.updated_at AS updated_at, l.archived AS list_archived
-         FROM email_intakes e LEFT JOIN lists l ON l.id = e.list_id
-         WHERE e.alias = ?`,
-        alias
-      )
-      .toArray()[0];
-    // `list_archived` is null when the list row is gone. Either way the
-    // sender hears the same thing as for an alias that never existed.
-    if (!intake || intake.list_archived !== 0) return { status: "unknown_alias" };
-    if (!senderAllowed(sender, toEmailIntake(intake).allowedSenders)) {
-      return { status: "sender_not_allowed" };
-    }
-    const listId = intake.list_id;
-    const prior = this.sql
-      .exec<{ task_id: string }>(
-        "SELECT task_id FROM email_messages WHERE message_id = ? AND list_id = ?",
-        messageId,
-        listId
-      )
-      .toArray()[0];
-    if (prior) return { status: "duplicate", taskId: prior.task_id };
-    const since = now - EMAIL_RATE_WINDOW_MS;
-    const fromSender = this.sql
-      .exec<{ n: number }>(
-        "SELECT COUNT(*) AS n FROM email_messages WHERE sender = ? AND received_at > ?",
-        sender,
-        since
-      )
-      .one().n;
-    if (fromSender >= EMAIL_INTAKE_HOURLY_LIMIT) return { status: "rate_limited" };
-    const toList = this.sql
-      .exec<{ n: number }>(
-        "SELECT COUNT(*) AS n FROM email_messages WHERE list_id = ? AND received_at > ?",
-        listId,
-        since
-      )
-      .one().n;
-    if (toList >= EMAIL_INTAKE_LIST_HOURLY_LIMIT) return { status: "rate_limited" };
-    return { status: "ok", listId };
-  }
-
-  /**
-   * The ticket a reply belongs to: the first of its first
-   * EMAIL_THREAD_REFERENCE_LIMIT referenced messages that this same list filed
-   * and whose task still exists. Matching on the list rather than the alias
-   * means one intake can't append to another's tickets, and an alias that is
-   * removed and later given to another list can't carry that list's mail onto
-   * the tickets the alias opened before.
-   */
-  private emailThreadTask(listId: string, referenceIds: readonly string[]): TaskRowSql | null {
-    for (const raw of referenceIds.slice(0, EMAIL_THREAD_REFERENCE_LIMIT)) {
-      const ref = normalizeMessageId(raw);
-      if (ref === null) continue;
-      const prior = this.sql
-        .exec<{ task_id: string }>(
-          "SELECT task_id FROM email_messages WHERE message_id = ? AND list_id = ?",
-          ref,
-          listId
-        )
-        .toArray()[0];
-      const row = prior ? this.taskRow(prior.task_id) : null;
-      if (row !== null) return row;
-    }
-    return null;
-  }
-
-  /** The space write guard for ingestEmail: a refusal there is permanent, so it says so. */
-  private requireEmailWritable(actor: Actor, kind: "list" | "task", targetId: string): void {
-    const spaceId = kind === "task" ? this.spaceIdForTask(targetId) : this.spaceIdForList(targetId);
-    const refusal = this.spaceWriteRefusal(actor, spaceId);
-    if (refusal !== null) {
-      throw permanentEmailError(`the inbound actor may not write to ${kind} ${targetId}. ${refusal}`);
-    }
-  }
-
-  /** The Worker mints attachment ids; a reused one would fail mid-turn, so refuse it up front. */
-  private requireFreshAttachmentIds(attachments: readonly EmailIngestAttachment[]): void {
-    const seen = new Set<string>();
-    for (const a of attachments) {
-      const taken =
-        seen.has(a.id) ||
-        this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM attachments WHERE id = ?", a.id).one()
-          .n > 0;
-      if (taken) throw permanentEmailError(`attachment id ${a.id} is already in use.`);
-      seen.add(a.id);
-    }
-  }
-
-  /** The dedupe row, written last in the turn that filed the message. */
-  private recordEmailMessage(
-    t: Turn,
-    m: {
-      messageId: string;
-      listId: string;
-      alias: string;
-      sender: string;
-      authenticated: boolean;
-      taskId: string;
-      commentId: string | null;
-    }
-  ): void {
-    this.sql.exec(
-      `INSERT INTO email_messages (message_id, list_id, alias, task_id, comment_id, sender, received_at, authenticated)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      m.messageId,
-      m.listId,
-      m.alias,
-      m.taskId,
-      m.commentId,
-      m.sender,
-      t.now,
-      m.authenticated ? 1 : 0
-    );
-    // The task/comment audit rows name the actor the Worker passed; this one
-    // records who actually wrote in, and whether Cloudflare vouched for them.
-    t.audit("email.ingest", m.taskId, {
-      listId: m.listId,
-      alias: m.alias,
-      sender: m.sender,
-      authenticated: m.authenticated,
-      messageId: m.messageId,
-      commentId: m.commentId,
-    });
-  }
-
-  private emailIntakeForList(listId: string): EmailIntake | null {
-    const row = this.sql
-      .exec<EmailIntakeRow>(
-        `SELECT ${EMAIL_INTAKE_COLUMNS} FROM email_intakes WHERE list_id = ?`,
-        listId
-      )
-      .toArray()[0];
-    return row ? toEmailIntake(row) : null;
+    return ingestEmail(this.host, input, actor);
   }
 
   // =========================================================================
@@ -3853,445 +557,41 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
   // =========================================================================
 
   /** Upsert by id when given, otherwise by email (case-insensitive). */
-  upsertUser(input: UpsertUserInput, actor: string | Actor): User {
-    const { before, after } = this.runTurn(toActor(actor), (t) => this.applyUserUpsert(t, input));
-    if (before === null) return after;
-    // Crossing member <-> owner/admin changes everything this user may see,
-    // automation rules included. The user delta cannot express that, so replay
-    // from any earlier seq is invalid and their open sockets resync.
-    if (isPrivilegedRole(before.role) !== isPrivilegedRole(after.role)) {
-      bumpResyncFloor(this.sql, this.maxSeq());
-      if (!after.deactivated) {
-        for (const ws of this.socketsFor(after.id)) this.send(ws, { type: "resync" });
-      }
-    }
-    // The Worker refuses a deactivated user at upgrade, but a socket that is
-    // already open would otherwise keep streaming deltas indefinitely.
-    if (after.deactivated) {
-      for (const ws of this.socketsFor(after.id)) this.closeSocket(ws, 1008, "user deactivated");
-    }
-    return after;
-  }
-
-  /** `before` is null for a newly created user, and equals `after` on a no-op. */
-  private applyUserUpsert(t: Turn, input: UpsertUserInput): { before: User | null; after: User } {
-    const email = input.email.trim();
-    const existingRows = this.sql
-      .exec<UserRow>(
-        `SELECT ${USER_COLUMNS}
-         FROM users WHERE ${input.id !== undefined ? "id = ?" : "lower(email) = lower(?)"}`,
-        input.id ?? email
-      )
-      .toArray();
-    const existing = existingRows[0];
-
-    if (!existing) {
-      const user: User = {
-        id: input.id ?? id("us_"),
-        email,
-        name: input.name ?? email,
-        role: input.role ?? "member",
-        deactivated: input.deactivated ?? false,
-        createdAt: t.now,
-      };
-      const placeholder = email.endsWith("@placeholder.flow") ? 1 : 0;
-      this.sql.exec(
-        `INSERT INTO users (id, email, name, role, deactivated, created_at, needs_email_update, clickup_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        user.id,
-        user.email,
-        user.name,
-        user.role,
-        user.deactivated ? 1 : 0,
-        user.createdAt,
-        placeholder,
-        input.clickupId ?? null
-      );
-      t.emit("create", "user", user.id, user as unknown as Record<string, unknown>);
-      t.audit("user.create", user.id, { email: user.email, role: user.role });
-      return { before: null, after: user };
-    }
-
-    const before = toUser(existing);
-    const p = sqlPatch();
-    if (email !== "" && email.toLowerCase() !== before.email.toLowerCase()) {
-      p.set("email", email);
-      p.set("needs_email_update", email.endsWith("@placeholder.flow") ? 1 : 0);
-    }
-    p.setIf(input.name, before.name, "name");
-    p.setIf(input.role, before.role, "role");
-    p.setIf(
-      input.deactivated === undefined ? undefined : input.deactivated ? 1 : 0,
-      before.deactivated ? 1 : 0,
-      "deactivated"
-    );
-    p.setIf(input.clickupId, existing.clickup_id, "clickup_id");
-    if (p.sets.length === 0) return { before, after: before };
-    this.sql.exec(`UPDATE users SET ${p.sets.join(", ")} WHERE id = ?`, ...p.params, before.id);
-    const after = toUser(
-      this.sql.exec<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`, before.id).one()
-    );
-    const patch = diffOf(
-      before as unknown as Record<string, unknown>,
-      after as unknown as Record<string, unknown>,
-      ["email", "name", "role", "deactivated"]
-    );
-    t.emit("update", "user", after.id, patch);
-    t.audit("user.update", after.id, patch);
-    return { before, after };
-  }
-
+  upsertUser(input: UpsertUserInput, actor: string | Actor): User { return upsertUser(this.host, input, actor); }
   createApiKey(input: CreateApiKeyInput, actor: string | Actor): ApiKey {
-    return this.runTurn(toActor(actor), (t) => {
-      const users = this.sql
-        .exec<{ id: string }>("SELECT id FROM users WHERE id = ?", input.userId)
-        .toArray();
-      if (users.length === 0) {
-        throw new Error(`Cannot create an API key for unknown user ${input.userId}.`);
-      }
-      const key: ApiKey = {
-        id: id("ak_"),
-        userId: input.userId,
-        name: input.name,
-        tokenHash: input.tokenHash,
-        createdAt: t.now,
-        lastUsedAt: null,
-        revokedAt: null,
-        canEmailRequesters: false,
-      };
-      this.sql.exec(
-        `INSERT INTO api_keys (id, user_id, name, token_hash, created_at, last_used_at, revoked_at)
-         VALUES (?, ?, ?, ?, ?, NULL, NULL)`,
-        key.id,
-        key.userId,
-        key.name,
-        key.tokenHash,
-        key.createdAt
-      );
-      // API keys are not board state: audited, but no delta / broadcast.
-      t.audit("api_key.create", key.id, { userId: key.userId, name: key.name });
-      return key;
-    });
+    return createApiKey(this.host, input, actor);
   }
-
   revokeApiKey(keyId: string, actor: string | Actor): { ok: true } {
-    return this.runTurn(toActor(actor), (t) => {
-      const rows = this.sql
-        .exec<{ id: string }>("SELECT id FROM api_keys WHERE id = ?", keyId)
-        .toArray();
-      if (rows.length === 0) throw new Error(`API key ${keyId} not found.`);
-      this.sql.exec("UPDATE api_keys SET revoked_at = ? WHERE id = ?", t.now, keyId);
-      t.audit("api_key.revoke", keyId, null);
-      return { ok: true } as const;
-    });
+    return revokeApiKey(this.host, keyId, actor);
   }
-
   /**
    * Allow or stop one key emailing a ticket's requester (see requireEmailReply).
    * Owner or admin, from the app or an api key (there is no switch in the web
    * app); never over MCP. Audited either way.
    */
   setApiKeyEmailRequesters(keyId: string, allowed: boolean, actor: string | Actor): ApiKey {
-    return this.runTurn(toActor(actor), (t) => {
-      if (t.actor.via !== "ui" && t.actor.via !== "api") {
-        throw new Error("Whether a key may email requesters can't be changed over MCP.");
-      }
-      if (!isPrivilegedRole(roleOf(this.sql, t.actor.userId))) {
-        throw new Error("Only a workspace owner or admin can change whether a key may email requesters.");
-      }
-      const row = this.sql
-        .exec<ApiKeyRow>(`SELECT ${API_KEY_COLUMNS} FROM api_keys WHERE id = ?`, keyId)
-        .toArray()[0];
-      if (!row) throw new Error(`API key ${keyId} not found.`);
-      if (row.revoked_at !== null) throw new Error(`API key ${keyId} is revoked.`);
-      this.sql.exec("UPDATE api_keys SET can_email_requesters = ? WHERE id = ?", allowed ? 1 : 0, keyId);
-      // Like create and revoke: audited, not board state, so no delta.
-      t.audit("api_key.email_requesters", keyId, { allowed });
-      return toApiKey({ ...row, can_email_requesters: allowed ? 1 : 0 });
-    });
+    return setApiKeyEmailRequesters(this.host, keyId, allowed, actor);
   }
-
   upsertAutomation(input: UpsertAutomationInput, actor: string | Actor): AutomationRule {
-    return this.runTurn(toActor(actor), (t) => {
-      const scope = input.scope;
-      if (scope.kind === "list") this.requireListRow(scope.listId);
-      else this.requireSpace(scope.spaceId);
-
-      const existingId = input.id;
-      const isUpdate =
-        existingId !== undefined &&
-        this.sql
-          .exec<{ n: number }>("SELECT COUNT(*) AS n FROM automation_rules WHERE id = ?", existingId)
-          .one().n > 0;
-
-      const ruleId = isUpdate && existingId !== undefined ? existingId : id("ar_");
-      const scopeId = scope.kind === "list" ? scope.listId : scope.spaceId;
-
-      if (isUpdate) {
-        this.sql.exec(
-          `UPDATE automation_rules SET name = ?, enabled = ?, scope = ?, scope_kind = ?, scope_id = ?,
-             trigger = ?, trigger_kind = ?, conditions = ?, actions = ?, updated_at = ?
-           WHERE id = ?`,
-          input.name,
-          input.enabled ? 1 : 0,
-          JSON.stringify(scope),
-          scope.kind,
-          scopeId,
-          JSON.stringify(input.trigger),
-          input.trigger.kind,
-          JSON.stringify(input.conditions),
-          JSON.stringify(input.actions),
-          t.now,
-          ruleId
-        );
-      } else {
-        this.sql.exec(
-          `INSERT INTO automation_rules
-             (id, name, enabled, scope, scope_kind, scope_id, trigger, trigger_kind,
-              conditions, actions, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          ruleId,
-          input.name,
-          input.enabled ? 1 : 0,
-          JSON.stringify(scope),
-          scope.kind,
-          scopeId,
-          JSON.stringify(input.trigger),
-          input.trigger.kind,
-          JSON.stringify(input.conditions),
-          JSON.stringify(input.actions),
-          t.now,
-          t.now
-        );
-      }
-
-      const rule = toRule(
-        this.sql
-          .exec<RuleRow>(
-            `SELECT id, name, enabled, scope, trigger, conditions, actions, created_at, updated_at
-             FROM automation_rules WHERE id = ?`,
-            ruleId
-          )
-          .one()
-      );
-      t.emit(
-        isUpdate ? "update" : "create",
-        "automation_rule",
-        rule.id,
-        rule as unknown as Record<string, unknown>
-      );
-      t.audit(isUpdate ? "automation.update" : "automation.create", rule.id, { name: rule.name });
-      return rule;
-    });
+    return upsertAutomation(this.host, input, actor);
   }
-
   deleteAutomation(ruleId: string, actor: string | Actor): { ok: true } {
-    return this.runTurn(toActor(actor), (t) => {
-      const rows = this.sql
-        .exec<{ name: string }>("SELECT name FROM automation_rules WHERE id = ?", ruleId)
-        .toArray();
-      const row = rows[0];
-      if (!row) throw new Error(`Automation rule ${ruleId} not found.`);
-      this.sql.exec("DELETE FROM automation_rules WHERE id = ?", ruleId);
-      t.emit("delete", "automation_rule", ruleId, null);
-      t.audit("automation.delete", ruleId, { name: row.name });
-      return { ok: true } as const;
-    });
+    return deleteAutomation(this.host, ruleId, actor);
   }
 
   // =========================================================================
   // Alarm: one alarm multiplexes every scheduled job
   // =========================================================================
-
-  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    const alarmStartedAt = Date.now();
-    const now = Date.now();
-    // Oldest first, except the backup always goes last: it is the one job
-    // heavy enough to kill the isolate (it holds every table in memory), so
-    // everything else due in this alarm has already run if it does.
-    const jobs = this.sql
-      .exec<JobRow>(
-        `SELECT id, run_at, kind, payload, every_ms FROM scheduled_jobs
-         WHERE run_at <= ? ORDER BY kind = 'backup', run_at LIMIT 100`,
-        now
-      )
-      .toArray();
-    console.log(
-      alarmLog({
-        event: "flow.alarm.start",
-        due_jobs: jobs.length,
-        is_retry: alarmInfo?.isRetry ?? false,
-        retry_count: alarmInfo?.retryCount ?? 0,
-        scheduled_time: alarmInfo?.scheduledTime ?? now,
-      })
-    );
-
-    let completed = 0;
-    let failed = 0;
-    for (const job of jobs) {
-      // Claim the job BEFORE running it, and wait for that write to be
-      // durable. A job that kills the isolate outright (OOM, CPU limit) never
-      // reaches the catch below, so if the reschedule came after the await,
-      // every alarm retry would pick the same job again and starve the rest.
-      // Claimed first, a crash costs only that one run.
-      this.claimJob(job, now);
-      await this.ctx.storage.sync();
-
-      const jobStartedAt = Date.now();
-      let result: Record<string, number> = { processed: 0 };
-      let status = "ok";
-      try {
-        result = await this.runJob(job, now);
-        completed += 1;
-      } catch (err) {
-        // Alarms retry; a poisoned job must not wedge the whole schedule.
-        status = "error";
-        failed += 1;
-        console.error("scheduled job failed", job.kind, err);
-      } finally {
-        console.log(
-          alarmLog({
-            event: "flow.alarm.job",
-            job_id: job.id,
-            job_kind: job.kind,
-            status,
-            duration_ms: Math.max(0, Date.now() - jobStartedAt),
-            ...result,
-          })
-        );
-      }
-    }
-
-    this.armedAlarm = null;
-    await this.armAlarm();
-    console.log(
-      alarmLog({
-        event: "flow.alarm.finish",
-        due_jobs: jobs.length,
-        completed,
-        failed,
-        duration_ms: Math.max(0, Date.now() - alarmStartedAt),
-      })
-    );
-  }
-
-  /**
-   * Take a due job off the schedule: a one-off is deleted, a recurring one is
-   * advanced to its next slot. At-most-once per slot, whatever the outcome.
-   */
-  private claimJob(job: JobRow, now: number): void {
-    if (job.every_ms !== null && job.every_ms > 0) {
-      // Skip missed intervals rather than firing a backlog.
-      let nextRun = job.run_at + job.every_ms;
-      while (nextRun <= now) nextRun += job.every_ms;
-      this.sql.exec("UPDATE scheduled_jobs SET run_at = ? WHERE id = ?", nextRun, job.id);
-    } else {
-      this.sql.exec("DELETE FROM scheduled_jobs WHERE id = ?", job.id);
-    }
-  }
-
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> { return handleAlarm(this.host, alarmInfo); }
+  private runJob(job: JobRow, now: number): Promise<Record<string, number>> { return runJob(this.host, job, now); }
   /** Queue a one-off job; automations can use this via ctx.sql too. */
   scheduleJob(input: { runAt: number; kind: string; payload?: unknown; everyMs?: number }): void {
-    this.sql.exec(
-      "INSERT INTO scheduled_jobs (run_at, kind, payload, every_ms, created_at) VALUES (?, ?, ?, ?, ?)",
-      input.runAt,
-      input.kind,
-      input.payload === undefined ? null : JSON.stringify(input.payload),
-      input.everyMs ?? null,
-      Date.now()
-    );
-    this.ctx.waitUntil(this.armAlarm());
+    scheduleJob(this.host, input);
   }
-
-  private async runJob(job: JobRow, now: number): Promise<Record<string, number>> {
-    switch (job.kind) {
-      case "prune_changes": {
-        const changes = this.pruneChanges();
-        const runs = this.pruneAutomationRuns();
-        const audit = this.pruneAudit(now);
-        return {
-          changes_pruned: changes,
-          automation_runs_pruned: runs,
-          audit_pruned: audit,
-          processed: changes + runs + audit,
-        };
-      }
-      case "backup":
-        return this.runBackup(now);
-      // The hourly maintenance tick. It carries the snooze wake pass too —
-      // piggybacking on the existing hourly job is simpler than a second
-      // recurring job with its own schedule.
-      case "due_date_check":
-        {
-          const due = this.runDueDateCheck(now);
-          const woken = this.runSnoozeWake(now);
-          return {
-            processed: due.firings.length + woken,
-            rules_considered: due.rulesConsidered,
-            candidates_inspected: due.candidatesInspected,
-            firings: due.firings.length,
-            woken,
-          };
-        }
-      // Explicitly schedulable too, for a targeted catch-up.
-      case "snooze_wake":
-        {
-          const woken = this.runSnoozeWake(now);
-          return { processed: woken, woken };
-        }
-      default:
-        console.error("unknown scheduled job kind", job.kind);
-        return { processed: 0 };
-    }
-  }
-
-  private pruneChanges(): number {
-    const max = this.maxSeq();
-    const floor = max - CHANGES_RETENTION;
-    if (floor <= 0) return 0;
-    return this.sql.exec("DELETE FROM changes WHERE seq <= ?", floor).rowsWritten;
-  }
-
-  private pruneAutomationRuns(): number {
-    const row = this.sql.exec("SELECT MAX(id) AS maxId FROM automation_runs").one() as { maxId: number | null } | undefined;
-    const maxId = row?.maxId ?? 0;
-    const floor = maxId - AUTOMATION_RUNS_RETENTION;
-    if (floor <= 0) return 0;
-    return this.sql.exec("DELETE FROM automation_runs WHERE id <= ?", floor).rowsWritten;
-  }
-
-  /**
-   * Deletes audit rows older than AUDIT_RETENTION_DAYS, oldest first, in
-   * batches of AUDIT_PRUNE_BATCH and at most AUDIT_PRUNE_MAX_BATCHES per run.
-   * The inner SELECT walks `idx_audit_at` and the outer DELETE is by rowid.
-   * RETURNING gives an exact count; rowsWritten would include index writes.
-   */
-  private pruneAudit(now: number): number {
-    const cutoff = now - AUDIT_RETENTION_DAYS * DAY_MS;
-    let deleted = 0;
-    for (let batch = 0; batch < AUDIT_PRUNE_MAX_BATCHES; batch++) {
-      const n = this.sql
-        .exec(
-          `DELETE FROM audit WHERE id IN (
-             SELECT id FROM audit WHERE at < ? ORDER BY at LIMIT ?
-           ) RETURNING id`,
-          cutoff,
-          AUDIT_PRUNE_BATCH
-        )
-        .toArray().length;
-      deleted += n;
-      if (n < AUDIT_PRUNE_BATCH) break;
-    }
-    return deleted;
-  }
-
   /** Manual trigger for the daily backup (admin route); same code path as the
    *  scheduled job, including the prune, the orphan sweep and the outcome
    *  recorded in `job_status`. */
-  runBackupNow(): Promise<Record<string, number>> {
-    return this.runBackup(Date.now());
-  }
-
+  runBackupNow(): Promise<Record<string, number>> { return runBackupNow(this.host); }
   /**
    * The backup's last recorded outcome. `stale` compares against `now`, so it
    * also catches a backup that stopped running without ever reporting a
@@ -4299,508 +599,5 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
    * text and object key are for admins; /api/health exposes only the times
    * and the flag.
    */
-  getBackupStatus(now: number = Date.now()): BackupStatus {
-    const row = this.sql
-      .exec<{
-        last_success_at: number | null;
-        last_success_detail: string | null;
-        last_failure_at: number | null;
-        last_failure_error: string | null;
-      }>(
-        `SELECT last_success_at, last_success_detail, last_failure_at, last_failure_error
-         FROM job_status WHERE kind = 'backup'`
-      )
-      .toArray()[0];
-    const lastSuccessAt = row?.last_success_at ?? null;
-    const detail =
-      row?.last_success_detail != null
-        ? (safeJson(row.last_success_detail) as BackupStatus["lastSuccess"])
-        : null;
-    return {
-      lastSuccessAt,
-      lastSuccess: detail,
-      lastFailureAt: row?.last_failure_at ?? null,
-      lastFailureError: row?.last_failure_error ?? null,
-      stale: lastSuccessAt === null || now - lastSuccessAt > BACKUP_STALE_MS,
-    };
-  }
-
-  /**
-   * Dumps every user table to gzipped NDJSON in R2 (`backups/YYYY-MM-DD.ndjson.gz`,
-   * one `{"table":...,"row":...}` line per row) and prunes to the newest 30
-   * objects under `backups/`. The outcome lands in `job_status` either way: a
-   * success once the object is in R2, a failure (then rethrown to alarm()'s
-   * per-job catch) if the dump, the put, or the post-backup cleanup throws.
-   * alarm() has already advanced the job to tomorrow before this runs.
-   */
-  private async runBackup(now: number): Promise<Record<string, number>> {
-    let written: string | null = null;
-    try {
-      const tables = backupTableNames(this.sql);
-      let rows = 0;
-      const lines: string[] = [];
-      for (const table of tables) {
-        const tableRows = this.sql.exec<Record<string, SqlStorageValue>>(`SELECT * FROM ${table}`).toArray();
-        for (const row of tableRows) {
-          lines.push(JSON.stringify({ table, row }));
-          rows += 1;
-        }
-      }
-      const ndjson = lines.length > 0 ? lines.join("\n") + "\n" : "";
-      const gz = await gzipText(ndjson);
-      const key = `backups/${backupDateKey(now)}.ndjson.gz`;
-      await this.env.ATTACHMENTS.put(key, gz);
-      written = key;
-      this.recordJobOutcome("backup", now, { success: { key, rows, bytes: gz.byteLength } });
-      const pruned = await pruneOldBackups(this.env.ATTACHMENTS, BACKUP_RETENTION);
-      const sweptDeletes = await this.sweepPendingObjectDeletes();
-      return { processed: rows, tables: tables.length, bytes: gz.byteLength, pruned, sweptDeletes };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.recordJobOutcome("backup", now, {
-        failure:
-          written === null ? message : `${written} was written, but post-backup cleanup failed: ${message}`,
-      });
-      throw err;
-    }
-  }
-
-  /**
-   * Upsert one job kind's row in `job_status`. Never throws: failing to
-   * record an outcome must not turn a good backup into a failed job.
-   */
-  private recordJobOutcome(
-    kind: string,
-    at: number,
-    outcome: { success: Record<string, unknown> } | { failure: string }
-  ): void {
-    try {
-      if ("success" in outcome) {
-        this.sql.exec(
-          `INSERT INTO job_status (kind, last_success_at, last_success_detail) VALUES (?, ?, ?)
-           ON CONFLICT (kind) DO UPDATE SET
-             last_success_at = excluded.last_success_at,
-             last_success_detail = excluded.last_success_detail`,
-          kind,
-          at,
-          JSON.stringify(outcome.success)
-        );
-      } else {
-        this.sql.exec(
-          `INSERT INTO job_status (kind, last_failure_at, last_failure_error) VALUES (?, ?, ?)
-           ON CONFLICT (kind) DO UPDATE SET
-             last_failure_at = excluded.last_failure_at,
-             last_failure_error = excluded.last_failure_error`,
-          kind,
-          at,
-          outcome.failure.slice(0, 2_000)
-        );
-      }
-    } catch (err) {
-      console.error("cannot record job outcome", kind, err);
-    }
-  }
-
-  /**
-   * Fallback for R2 objects whose delete route never got to its waitUntil
-   * (Worker evicted, request aborted) or whose clear-RPC never landed:
-   * anything still in pending_object_deletes gets swept here. Piggybacked on
-   * the daily backup job rather than its own alarm kind, because backup is
-   * already the DO's one recurring job that touches the ATTACHMENTS binding
-   * and a bounded cleanup pass doesn't need its own schedule. Capped per run
-   * so a large backlog can't turn a daily job into an unbounded one; any
-   * remainder just waits for tomorrow's run.
-   */
-  private async sweepPendingObjectDeletes(): Promise<number> {
-    const rows = this.sql
-      .exec<{ r2_key: string }>(
-        "SELECT r2_key FROM pending_object_deletes ORDER BY enqueued_at LIMIT 200"
-      )
-      .toArray();
-    if (rows.length === 0) return 0;
-    const keys = rows.map((r) => r.r2_key);
-    await this.env.ATTACHMENTS.delete(keys);
-    for (const key of keys) {
-      this.sql.exec("DELETE FROM pending_object_deletes WHERE r2_key = ?", key);
-    }
-    return keys.length;
-  }
-
-  /**
-   * due_date_approaching has no delta to hang off — nothing mutates when a
-   * deadline gets closer — so the engine's sweep drives it. Any actions it
-   * takes run inside this turn, which means their deltas broadcast normally.
-   */
-  private runDueDateCheck(now: number): ReturnType<typeof sweepDueDateAutomations> {
-    const actor: Actor = {
-      userId: this.systemUserId(),
-      via: "automation",
-      apiKeyId: null,
-      automationRuleId: null,
-    };
-    return this.runTurn(actor, (t) => {
-      const ctx: AutomationScheduleContext = {
-        ...this.automationContext(t, 0),
-        listTaskIdsDueBetween: (scope, fromMs, toMs) =>
-          this.listTaskIdsDueBetween(scope, fromMs, toMs),
-      };
-      const result = sweepDueDateAutomations(ctx, now);
-      if (result.firings.length > 0) {
-        t.audit("automation.due_sweep", "workspace", {
-          rulesConsidered: result.rulesConsidered,
-          candidatesInspected: result.candidatesInspected,
-          firings: result.firings.length,
-        });
-      }
-      pruneDueFires(ctx, now);
-      return result;
-    });
-  }
-
-  /**
-   * Time-based wake. Every task whose snooze has run out gets `snoozedUntil`
-   * cleared through the ordinary update path, so each one produces a real
-   * changed-fields delta and an audit row — clients un-hide the card from the
-   * socket patch, exactly as if a person had pressed "Wake now".
-   *
-   * The actor follows the due-date sweep: the owner's user id with
-   * `via: "automation"`, which is what the audit trail reads as "the system did
-   * this, nobody asked for it".
-   */
-  private runSnoozeWake(now: number): number {
-    const rows = this.sql
-      .exec<SnoozedRow>(
-        `SELECT id, snoozed_until FROM tasks
-         WHERE snoozed_until IS NOT NULL ORDER BY snoozed_until LIMIT ?`,
-        WAKE_SWEEP_LIMIT
-      )
-      .toArray();
-    const woken = wakeCandidates(rows, now);
-    if (woken.length === 0) return 0;
-
-    const actor: Actor = {
-      userId: this.systemUserId(),
-      via: "automation",
-      apiKeyId: null,
-      automationRuleId: null,
-    };
-    this.runTurn(actor, (t) => {
-      for (const taskId of woken) {
-        // One bad row must not strand the rest of the sweep asleep.
-        try {
-          this.applyTaskUpdate(t, { taskId, snoozedUntil: null }, "task.wake");
-        } catch (err) {
-          console.error("snooze wake failed", taskId, err);
-        }
-      }
-      t.audit("task.wake_sweep", "workspace", { woken: woken.length });
-    });
-    return woken.length;
-  }
-
-  private listTaskIdsDueBetween(
-    scope: AutomationRule["scope"],
-    fromMs: number,
-    toMs: number
-  ): string[] {
-    const sql =
-      scope.kind === "list"
-        ? `SELECT id FROM tasks
-             WHERE list_id = ? AND closed_at IS NULL
-               AND due_date IS NOT NULL AND due_date >= ? AND due_date <= ?`
-        : `SELECT t.id AS id FROM tasks t JOIN lists l ON l.id = t.list_id
-             WHERE l.space_id = ? AND t.closed_at IS NULL
-               AND t.due_date IS NOT NULL AND t.due_date >= ? AND t.due_date <= ?`;
-    return this.sql
-      .exec<{ id: string }>(
-        sql,
-        scope.kind === "list" ? scope.listId : scope.spaceId,
-        fromMs,
-        toMs
-      )
-      .toArray()
-      .map((r) => r.id);
-  }
-
-  private async armAlarm(): Promise<void> {
-    const { next } = this.sql
-      .exec<{ next: number | null }>("SELECT MIN(run_at) AS next FROM scheduled_jobs")
-      .one();
-    if (next === null) {
-      this.armedAlarm = null;
-      return;
-    }
-    if (this.armedAlarm === next) return;
-    const current = await this.ctx.storage.getAlarm();
-    if (current === null || current > next) await this.ctx.storage.setAlarm(next);
-    this.armedAlarm = next;
-  }
-
-  private systemUserId(): string {
-    const row = this.sql
-      .exec<{ id: string }>("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1")
-      .toArray()[0];
-    return row?.id ?? "us_system";
-  }
-
-  /** Attribute only deliberate human/API assignment choices. A rule, import,
-   * or webhook can route work, but it must not appear as personal delegation. */
-  private humanAssigner(t: Turn, assigneeId: string | null): string | null {
-    if (assigneeId === null || t.automationRuleId !== null) return null;
-    if (t.actor.via === "automation" || t.actor.via === "import" || t.actor.via === "webhook") {
-      return null;
-    }
-    return t.actor.userId;
-  }
-
-  // =========================================================================
-  // Row helpers
-  // =========================================================================
-
-  private insertTaskRow(task: Task): void {
-    this.sql.exec(
-      `INSERT INTO tasks (id, list_id, title, description, status_id, assignee_id, assigned_by, assigned_at, waiting_on, priority,
-         due_date, start_date, snoozed_until, blocked_note, tags, tags_text, position,
-         created_by, created_at, updated_at, closed_at, clickup_id, ${HANDOFF_COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      task.id,
-      task.listId,
-      task.title,
-      task.description,
-      task.statusId,
-      task.assigneeId,
-      task.assignedBy,
-      task.assignedAt,
-      task.waitingOn,
-      task.priority,
-      task.dueDate,
-      task.startDate,
-      task.snoozedUntil,
-      task.blockedNote,
-      JSON.stringify(task.tags),
-      tagsText(task.tags),
-      task.position,
-      task.createdBy,
-      task.createdAt,
-      task.updatedAt,
-      task.closedAt,
-      task.clickupId,
-      ...handoffValues(task.handoff)
-    );
-  }
-
-  private taskRow(taskId: string): TaskRowSql | null {
-    const rows = this.sql
-      .exec<TaskRowSql>(`SELECT ${TASK_COLUMNS} FROM tasks WHERE id = ?`, taskId)
-      .toArray();
-    return rows[0] ?? null;
-  }
-
-  private requireTaskRow(taskId: string): TaskRowSql {
-    const row = this.taskRow(taskId);
-    if (!row) throw new Error(`Task ${taskId} not found.`);
-    return row;
-  }
-
-  private requireSubtask(subtaskId: string): Subtask {
-    const rows = this.sql
-      .exec<SubtaskRow>(`SELECT ${SUBTASK_COLUMNS} FROM subtasks WHERE id = ?`, subtaskId)
-      .toArray();
-    const row = rows[0];
-    if (!row) throw new Error(`Subtask ${subtaskId} not found.`);
-    return toSubtask(row);
-  }
-
-  private requireListRow(listId: string): ListRow {
-    const rows = this.sql
-      .exec<ListRow>(
-        `SELECT ${LIST_COLUMNS}
-         FROM lists WHERE id = ?`,
-        listId
-      )
-      .toArray();
-    const row = rows[0];
-    if (!row) {
-      // No list names here: this runs before any visibility check, so naming
-      // "known lists" handed members the names of lists in private spaces.
-      throw new Error(
-        `List ${listId} not found. Use flow_get_workspace_map (or GET /api/lists) for the lists you can use.`
-      );
-    }
-    return row;
-  }
-
-  private requireSpace(spaceId: string): Space {
-    const rows = this.sql
-      .exec<SpaceRow>(
-        `SELECT ${SPACE_COLUMNS} FROM spaces WHERE id = ?`,
-        spaceId
-      )
-      .toArray();
-    const row = rows[0];
-    if (!row) {
-      const known = this.sql
-        .exec<{ id: string; name: string }>("SELECT id, name FROM spaces ORDER BY name LIMIT 25")
-        .toArray();
-      throw new Error(
-        `Space ${spaceId} not found. Known spaces: ${
-          known.map((s) => `${s.id} ("${s.name}")`).join(", ") || "none yet"
-        }.`
-      );
-    }
-    return toSpace(row);
-  }
+  getBackupStatus(now: number = Date.now()): BackupStatus { return getBackupStatus(this.sql, now); }
 }
-
-// --- module-local helpers ---------------------------------------------------
-
-function sqlPatch() {
-  const sets: string[] = [];
-  const params: SqlStorageValue[] = [];
-  const set = (col: string, val: SqlStorageValue): void => {
-    sets.push(`${col} = ?`);
-    params.push(val);
-  };
-  const setIf = <T extends SqlStorageValue>(next: T | undefined, current: T, col: string): void => {
-    if (next !== undefined && next !== current) set(col, next);
-  };
-  const setNullable = <T extends SqlStorageValue>(
-    next: T | null | undefined,
-    current: T | null,
-    col: string
-  ): void => {
-    if (next !== undefined && (next ?? null) !== current) set(col, next ?? null);
-  };
-  return { sets, params, set, setIf, setNullable };
-}
-
-function safeJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-/** The pre-mutation values for exactly the keys a patch touched. */
-function prevOf(
-  before: Record<string, unknown>,
-  patch: Record<string, unknown>
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const key of Object.keys(patch)) out[key] = before[key];
-  return out;
-}
-
-/**
- * A user is emailable only with a real address: non-empty and not one of the
- * `@placeholder.flow` seed addresses, since sending to those would bounce.
- */
-function hasRealEmail(email: string): boolean {
-  const e = email.trim().toLowerCase();
-  return e.length > 0 && !e.endsWith(`@${PLACEHOLDER_EMAIL_DOMAIN}`);
-}
-
-/** A handoff as the five HANDOFF_COLUMNS values, in that order; all null for none. */
-function handoffValues(
-  handoff: Handoff | null
-): [string | null, string | null, string | null, string | null, number | null] {
-  if (handoff === null) return [null, null, null, null, null];
-  return [
-    handoff.requestedBy,
-    handoff.state,
-    handoff.returnFormat,
-    JSON.stringify(handoff.contextTaskIds),
-    handoff.stateChangedAt,
-  ];
-}
-
-/**
- * The DO re-validates handoff inputs with the contract's own schemas, as
- * setEmailIntake does: the routes have already parsed them, but this is the
- * only writer and the error should name the field for any other caller.
- */
-function contractInput<T>(
-  result: { success: true; data: T } | { success: false; error: { issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> } },
-  what: string
-): T {
-  if (result.success) return result.data;
-  const issue = result.error.issues[0];
-  const field = issue === undefined || issue.path.length === 0 ? "" : `${issue.path.map(String).join(".")}: `;
-  throw new Error(`Invalid ${what}: ${field}${issue?.message ?? "rejected by the schema"}`);
-}
-
-/** Trim, drop empties, de-duplicate case-insensitively, keep first casing. */
-function normalizeTags(tags: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of tags) {
-    const tag = raw.trim();
-    if (tag === "") continue;
-    const key = tag.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(tag);
-  }
-  return out;
-}
-
-// --- daily backup ------------------------------------------------------
-
-/** Every user table backed up, discovered from sqlite_master so a future
- *  migration's new table is picked up without touching this file. Excludes
- *  the internal `_migrations` bookkeeping table and the tasks_fts virtual
- *  table + its shadow tables — full-text search is derived from `tasks` and
- *  rebuilds itself via triggers, so backing it up would only bloat the file. */
-function backupTableNames(sql: SqlStorage): string[] {
-  const rows = sql
-    .exec<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-    )
-    .toArray();
-  // Leading-underscore names cover our _migrations bookkeeping AND the
-  // runtime's internal _cf_KV table, which sqlite_master exposes in prod but
-  // SELECTing from is prohibited (this used to kill every backup).
-  return rows.map((r) => r.name).filter((name) => !name.startsWith("_") && !name.startsWith("tasks_fts"));
-}
-
-async function gzipText(text: string): Promise<ArrayBuffer> {
-  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
-  return new Response(stream).arrayBuffer();
-}
-
-/** UTC calendar date, e.g. "2026-08-13" — sortable, and stable regardless of
- *  what wall-clock hour the job happens to run in. */
-function backupDateKey(now: number): string {
-  return new Date(now).toISOString().slice(0, 10);
-}
-
-/** Keys are `backups/YYYY-MM-DD.ndjson.gz`, so lexicographic order is
- *  chronological order — no need to read object metadata to find the
- *  newest ones. Returns how many objects were deleted. */
-async function pruneOldBackups(bucket: R2Bucket, keep: number): Promise<number> {
-  const keys: string[] = [];
-  let cursor: string | undefined;
-  do {
-    const listing = await bucket.list({ prefix: "backups/", cursor });
-    for (const obj of listing.objects) keys.push(obj.key);
-    cursor = listing.truncated ? listing.cursor : undefined;
-  } while (cursor !== undefined);
-  keys.sort();
-  const toDelete = keys.slice(0, Math.max(0, keys.length - keep));
-  if (toDelete.length > 0) await bucket.delete(toDelete);
-  return toDelete.length;
-}
-
-/** Re-exported so callers can reuse the fractional-ordering maths. */
-export { between as positionBetween, POSITION_STEP } from "./position.js";
-export { REPLAY_GAP_LIMIT } from "./sync-floor.js";
-export {
-  QUERY_DEFAULT_ROWS,
-  QUERY_MAX_ROWS,
-  QUERY_MEMBER_MAX_ROWS,
-  QUERY_MEMBER_PER_MINUTE,
-  QUERY_VIEWS,
-  QueryRejected,
-  type QueryResult,
-} from "./query.js";

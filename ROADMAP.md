@@ -13,11 +13,11 @@ No dates on purpose: Flow is maintained alongside other work, and a date would b
 - **Member management in the UI.** Inviting, deactivating and changing roles from Settings would remove manual DO setup for additional team members.
 - **MCP directory listings.** An official MCP Registry entry first, since other directories ingest from it. The open question is how to list a server that every team hosts at its own URL.
 - **Handoff state notifications.** Today a requester hears about a `needs_input` question through the ordinary comment email. A notification for the state change itself would make the hand-back explicit.
-- **Streamed backups.** The daily backup builds the whole NDJSON dump in memory before gzipping it (`runBackup` in `packages/core/src/index.ts`). Streaming it would raise the workspace size at which backups stop fitting.
+- **Streamed backups.** The daily backup builds the whole NDJSON dump in memory before gzipping it (`runBackup` in `packages/core/src/alarm.ts`). Streaming it would raise the workspace size at which backups stop fitting.
 
 ## Later (open an issue to discuss first)
 
-- **OAuth for the MCP server.** Clients and directories increasingly expect OAuth; Flow only supports static bearer keys, minted per user. Any OAuth design has to keep the current property that a key acts as one real user with an audit trail.
+- **Native OAuth without Cloudflare Access.** Flow supports static per-user bearer keys on `/mcp` and opt-in Cloudflare Access Managed OAuth on `/mcp/oauth`. Any built-in OAuth server for non-Access setups still has to keep the property that a credential acts as one real user with an audit trail.
 - **A guest or read-only role.** The permission model is members plus private spaces. Some teams need to show a client a board without making them a member.
 - **Better mobile.** The app is responsive web only. An installable PWA with notifications is the likely step before anything native.
 - **A per-user resync floor.** The workspace-wide floor in `packages/core/src/sync-floor.ts` sends a spurious snapshot to clients whose view didn't change. That's cheap today; it matters only if workspaces get much larger.

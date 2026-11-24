@@ -441,3 +441,31 @@ describe("getTaskDetails", () => {
     expect(JSON.stringify(member.details)).not.toContain(b.task.id);
   });
 });
+
+describe("setSpaceVisibility and setSpaceMembers", () => {
+  it("audits space.set_visibility with { visibility }, resyncs all members, and keeps 'Changing a space\\'s members' error text", async () => {
+    const sockA = fakeSocket(MEMBER_A);
+    const sockB = fakeSocket(MEMBER_B);
+    const h = await freshWorkspace();
+    h.ws.upsertUser({ id: OWNER, email: "owner@example.com", name: "Owner", role: "owner" }, OWNER);
+    h.ws.upsertUser({ id: MEMBER_A, email: "a@example.com", name: "Member A", role: "member" }, OWNER);
+    h.ws.upsertUser({ id: MEMBER_B, email: "b@example.com", name: "Member B", role: "member" }, OWNER);
+    const sp = h.ws.createSpace(CreateSpaceInput.parse({ name: "S", visibility: "private" }), MEMBER_A);
+    h.ctx.acceptWebSocket(sockA.ws);
+    h.ctx.acceptWebSocket(sockB.ws);
+
+    h.ws.setSpaceVisibility({ spaceId: sp.id, visibility: "workspace" }, OWNER);
+
+    const visAudit = h.ws.getAuditLog({ entity: sp.id, action: "space.set_visibility" }).entries;
+    expect(visAudit).toHaveLength(1);
+    expect(visAudit[0]!.diff).toEqual({ visibility: "workspace" });
+
+    // Existing member sockA and non-member sockB must both receive resync.
+    expect(sockA.frames.some((f) => f.type === "resync")).toBe(true);
+    expect(sockB.frames.some((f) => f.type === "resync")).toBe(true);
+
+    expect(() => h.ws.setSpaceMembers({ spaceId: sp.id, userIds: [MEMBER_A] }, MEMBER_A)).toThrow(
+      /Changing a space's members/
+    );
+  });
+});
