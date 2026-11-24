@@ -37,7 +37,7 @@ All deployment configuration lives in `apps/api/wrangler.jsonc` — start by cop
 ```jsonc
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "flow",
+  "name": "my-flow",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -113,16 +113,18 @@ On **macOS** (guarded production deploy with clean `origin/main` check, test sui
 
 ```bash
 cd ../..           # repo root
-pnpm run deploy    # deploys gitignored apps/api/wrangler.jsonc only (pass -- --config wrangler.jsonc to deploy the root template)
+pnpm run deploy    # deploys gitignored apps/api/wrangler.jsonc only
 ```
 
-For **self-hosters off macOS** (Linux / Windows deploying into **their own** Cloudflare account — never run raw Wrangler commands against this checkout's production Worker), `pnpm run deploy` refuses because native macOS `/usr/bin/osascript` human-presence confirmation is required. Self-hosters off macOS build and deploy into their own account with Wrangler directly:
+Note on guard limits: `scripts/deploy-guarded.mjs` refuses any `.env*` or `.dev.vars*` file that sets `CLOUDFLARE_API_TOKEN` (or any `CLOUDFLARE_*`, `WRANGLER_*`, or `CF_*` variable) so ambient files cannot redirect auth or targets — authenticate via `wrangler login` or shell environment variables outside `.env` files instead. In addition, the guard checks only the local `wrangler.jsonc` `vars` block and cannot see `DEV_NO_AUTH` if set remotely as a Worker secret or Cloudflare dashboard variable (for example when `keep_vars` is true).
+
+For **self-hosters off macOS** (Linux / Windows deploying into **your own Cloudflare account using your own config** — never run raw Wrangler commands against an existing production checkout), `pnpm run deploy` refuses because native macOS `/usr/bin/osascript` human-presence confirmation is required. Self-hosters off macOS build and deploy into their own account with an explicit `--config`:
 
 ```bash
 cd ../..
-# Using your own gitignored apps/api/wrangler.jsonc:
-pnpm --filter @flow/web build && pnpm --filter @flow/api exec wrangler deploy
-# Or for the committed root template (named "flow-selfhost-example"):
+# In your own Cloudflare account using your own gitignored apps/api/wrangler.jsonc:
+pnpm --filter @flow/web build && pnpm --filter @flow/api exec wrangler deploy --config wrangler.jsonc
+# Or in your own account for the committed root template (Worker "flow-selfhost-example"):
 pnpm run build && pnpm --filter @flow/api exec wrangler deploy --config ../../wrangler.jsonc
 ```
 
@@ -166,7 +168,7 @@ Policy: action **Allow**, include your team — an email domain rule (`Emails en
 **Copy the AUD.** Open the allow app's **Overview** tab and copy the *Application Audience (AUD) Tag* — a 64-char hex string. Put it in `wrangler.jsonc` as `ACCESS_AUD`, set `ACCESS_TEAM_DOMAIN` to your team domain (visible under Zero Trust → Settings → Custom Pages, it looks like `your-team.cloudflareaccess.com`), and redeploy:
 
 ```bash
-pnpm run deploy    # macOS guarded deploy; off macOS self-hosters in their own account: pnpm --filter @flow/web build && pnpm --filter @flow/api exec wrangler deploy
+pnpm run deploy    # macOS guarded deploy; off macOS in your own Cloudflare account with your own apps/api/wrangler.jsonc: pnpm --filter @flow/web build && pnpm --filter @flow/api exec wrangler deploy --config wrangler.jsonc
 ```
 
 Now visit `https://flow.example.com` in a browser: Access should challenge you, and after login you should land on your board as the seeded owner. Remember: Access authenticating you is necessary but not sufficient — your email must also exist as a workspace user (step 1), or you'll get `403 you@example.com is not a member of this workspace`.

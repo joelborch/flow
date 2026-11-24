@@ -102,7 +102,7 @@ export default {
    * has a consumer entry for each), dispatched on batch.queue.
    */
   async queue(batch: MessageBatch, env: Env): Promise<void> {
-    if (batch.queue === "flow-dlq") {
+    if (batch.queue === "flow-dlq" || batch.queue.endsWith("-dlq")) {
       await handleDeadLetterBatch(batch, env);
       return;
     }

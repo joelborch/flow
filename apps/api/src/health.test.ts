@@ -125,4 +125,45 @@ describe("GET /api/health", () => {
     expect(setup.status).toBe(200);
     await expect(setup.json()).resolves.toEqual({ signIn: "access" });
   });
+
+  it("dispatches renamed template DLQ batches (ending in -dlq) to handleDeadLetterBatch", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const recordDeliveryFailure = vi.fn().mockResolvedValue({ ok: true });
+    try {
+      const { default: worker } = await import("./index.js");
+      const ack = vi.fn();
+      const env = {
+        WORKSPACE: {
+          idFromName: vi.fn().mockReturnValue({}),
+          get: vi.fn().mockReturnValue({ recordDeliveryFailure }),
+        },
+      } as unknown as Env;
+      const batch = {
+        queue: "flow-selfhost-example-dlq",
+        messages: [
+          {
+            id: "msg_dlq",
+            attempts: 5,
+            body: {
+              kind: "webhook",
+              url: "https://example.com/hook",
+              body: { event: "task.updated" },
+              ruleId: "ar_1",
+              taskId: "tk_1",
+            },
+            ack,
+            retry: vi.fn(),
+          },
+        ],
+      } as unknown as MessageBatch;
+
+      await worker.queue(batch, env);
+      expect(recordDeliveryFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ ruleId: "ar_1", taskId: "tk_1", kind: "webhook" })
+      );
+      expect(ack).toHaveBeenCalledOnce();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 });
