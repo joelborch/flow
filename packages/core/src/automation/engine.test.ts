@@ -16,19 +16,6 @@ describe("loadEnabledRules", () => {
     expect(loadEnabledRules(ctx.sql).map((r) => r.id)).toEqual(["ar_on"]);
   });
 
-  it("falls back to a single `json` column when the columnar read fails", () => {
-    const rules = [makeRule({ id: "ar_json" }), makeRule({ id: "ar_json_off", enabled: false })];
-    const sql = {
-      exec(query: string) {
-        if (query.includes("SELECT json")) {
-          return { toArray: () => rules.map((r) => ({ json: JSON.stringify(r) })) };
-        }
-        throw new Error("no such column: scope");
-      },
-    } as unknown as SqlStorage;
-    expect(loadEnabledRules(sql).map((r) => r.id)).toEqual(["ar_json"]);
-  });
-
   it("returns nothing rather than throwing when the table is unreadable", () => {
     const sql = {
       exec() {

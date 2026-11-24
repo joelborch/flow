@@ -21,7 +21,8 @@ const BASE_STATEMENTS: string[] = [
   // --- users -------------------------------------------------------------
   // `needs_email_update` and `clickup_id` are storage-only columns (not part
   // of the shared User contract): the first flags placeholder emails from the
-  // ClickUp import, the second keeps importBatch idempotent.
+  // ClickUp import, the second is preserved for legacy ClickUp migration
+  // schema compatibility.
   `CREATE TABLE users (
      id TEXT PRIMARY KEY,
      email TEXT NOT NULL,
@@ -324,10 +325,10 @@ const ATTACHMENT_DRIVE_STORAGE: string[] = [
 ];
 
 // Tiny key/value table for sync bookkeeping. Its one current row is the
-// resync floor (see ./sync-floor.ts): delta-less mutations (importBatch,
-// setSpaceMembers, setSpaceVisibility) invalidate delta replay, and the floor
-// is what tells the hello handler to fall back to a full snapshot. IF NOT
-// EXISTS so it is a no-op on an instance that already has the table.
+// resync floor (see ./sync-floor.ts): delta-less mutations (setSpaceMembers,
+// setSpaceVisibility) invalidate delta replay, and the floor is what tells
+// the hello handler to fall back to a full snapshot. IF NOT EXISTS so it is a
+// no-op on an instance that already has the table.
 // The space a delta belongs to, stamped at emit time. Replay filtering used
 // to re-resolve each delta's space with live task/list/comment lookups, which
 // return null once the row is deleted — and null was treated as "visible to

@@ -5,14 +5,12 @@ No dates on purpose: Flow is maintained alongside other work, and a date would b
 ## Now
 
 - **Docs catch-up.** A few docs fell behind recent changes: the MCP tool count, the runtime dependency list, the core package README, and the automation template fields. Open as good first issues.
-- **Importer catch-up sync.** A `load --resend` flag so a cutover can re-send rows that changed in ClickUp after the first load without duplicating attachments. A good first issue.
-- **Tests for small pure helpers.** Fractional ordering, the importer's rate limiter, and the web app's date formatters. Open as good first issues.
+- **Tests for small pure helpers.** Fractional ordering and the web app's date formatters. Open as good first issues.
 
 ## Next
 
 - **@-mentions.** The `mention` notification preference already exists and defaults on, but nothing parses mentions or emits the event yet (`packages/shared/src/notifications.ts`). This needs a parser, a delta or side-effect carrying the mention, and the email template.
-- **Member management in the UI.** Today, users beyond the first owner go in through the admin import endpoint (`POST /api/import/batch` with a `users` array, per `docs/SELF_HOSTING.md`). Inviting, deactivating and changing roles from Settings would remove the last routine curl from setup.
-- **Asana and Trello importers.** The importer's extract/transform/load seams are already documented in `docs/IMPORTING.md`; a new source needs its own extractor and transform mapping and reuses id derivation, validation and load unchanged.
+- **Member management in the UI.** Inviting, deactivating and changing roles from Settings would remove manual DO setup for additional team members.
 - **MCP directory listings.** An official MCP Registry entry first, since other directories ingest from it. The open question is how to list a server that every team hosts at its own URL.
 - **Handoff state notifications.** Today a requester hears about a `needs_input` question through the ordinary comment email. A notification for the state change itself would make the hand-back explicit.
 - **Streamed backups.** The daily backup builds the whole NDJSON dump in memory before gzipping it (`runBackup` in `packages/core/src/index.ts`). Streaming it would raise the workspace size at which backups stop fitting.

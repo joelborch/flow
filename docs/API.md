@@ -345,16 +345,6 @@ A list can take tickets by email at `<alias>@EMAIL_INTAKE_DOMAIN`. Mail from sen
 | `GET /api/admin/backup` | admin | Full backup status, including the last error and object key that `/api/health` leaves out |
 | `POST /api/admin/backup` | admin | Run a backup now (gzipped NDJSON to R2 `backups/YYYY-MM-DD.ndjson.gz`) |
 
-## Import
-
-Admin-only; used by `apps/importer`. Import upserts by id (then `clickupId`), fires no automations, emits no deltas, and truncates over-long titles instead of rejecting them — see [IMPORTING.md](IMPORTING.md).
-
-| Method + path | Auth | What |
-|---|---|---|
-| `GET /api/import/status` | admin | Pre-flight |
-| `POST /api/import/batch` | admin | `{users?, spaces?, lists?, tasks?, subtasks?, comments?}` — fully-formed entities with ids, upserted |
-| `POST /api/import/attachments` | admin | `{taskId, filename, mimeType, size, sourceUrl, ...}` — the Worker fetches `sourceUrl` (https, ClickUp hosts only) and streams it into R2 |
-
 ## Inbound
 
 | Method + path | Auth | What |

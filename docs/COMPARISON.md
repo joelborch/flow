@@ -12,7 +12,6 @@ An honest comparison. Flow wins on cost, speed, data ownership, and agent access
 | **Speed** | Single-digit-ms DO reads, snapshot+delta sync, optimistic UI, boot cache — no spinners after first load | Noticeably heavy | Moderate | Fast (the bar Flow aims at) | Varies; usually fine |
 | **Realtime sync** | WebSocket deltas, replay on reconnect | Yes | Yes | Yes | Sometimes polling |
 | **Automations** | Trigger/condition/action rules, inline, HMAC webhooks, run log | Extensive | Extensive | Good | Limited |
-| **Import path** | ClickUp importer included; Asana/Trello are contributor-shaped work | — | — | Importers from others | Varies |
 | **Gantt / timeline / workload** | **No, by design** | Yes | Yes | Some | Some |
 | **Time tracking** | **No** | Yes | Via add-ons | No (native philosophy match) | Some |
 | **Custom fields** | **No** | Yes | Yes | Limited/opinionated | Some |
@@ -27,7 +26,7 @@ Prices are ballpark list prices for paid tiers and drift; the point is the shape
 
 ClickUp's pitch is "everything app": docs, whiteboards, goals, chat, time tracking, dashboards, fifteen views over the same tasks. The cost of that breadth is weight — deeply nested settings, slow loads, and a data model (spaces → folders → lists → tasks → subtasks with statuses → checklists, plus custom fields on everything) where the same concept exists at three levels and every team uses a different subset. Flow is the extraction of the subset a small team actually used, measured from a real export: boards, statuses per list, assignee, due dates, tags, comments, attachments, automations. Folders got collapsed into list names; multi-assignee turned out to be a handful of tasks out of thousands; subtask status pipelines collapsed to checkboxes without loss.
 
-Choose ClickUp if you genuinely use its breadth — docs-in-tasks, dashboards, forms, time estimates rolled up a hierarchy. Choose Flow if you mostly moved cards between columns and paid per seat for the rest, and want your agent working the board through MCP instead of scraping a rate-limited REST API. The importer ([IMPORTING.md](IMPORTING.md)) makes the exit concrete rather than aspirational.
+Choose ClickUp if you genuinely use its breadth — docs-in-tasks, dashboards, forms, time estimates rolled up a hierarchy. Choose Flow if you mostly moved cards between columns and paid per seat for the rest, and want your agent working the board through MCP instead of scraping a rate-limited REST API.
 
 ## Against Asana
 

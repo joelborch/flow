@@ -124,10 +124,6 @@ export type AutomationRule = z.infer<typeof AutomationRule>;
 // Hard cap on automation-triggering-automation depth.
 export const AUTOMATION_MAX_DEPTH = 5;
 
-// Global email dry-run: when true (default), send_email actions log to the
-// audit trail instead of sending. Flipped by the operator when ready.
-export const EMAIL_DRY_RUN_DEFAULT = true;
-
 export const AutomationRunLog = z.object({
   id: z.number().int(),
   ruleId: Id,

@@ -28,15 +28,6 @@ pnpm typecheck && pnpm test   # everything should pass before you touch config
 
 Flow has no signup flow — Cloudflare Access authenticates an email, and that email must map to an existing workspace user or the request gets a 403. You don't have to touch code for this: a fresh workspace seeds one placeholder owner, and the first time the email you set as `OWNER_EMAIL` in `wrangler.jsonc` authenticates (through Access, or `DEV_NO_AUTH` locally), it automatically claims that seeded owner — same user, your address. So bootstrap is just: set `OWNER_EMAIL`, deploy, sign in.
 
-Additional users go in through the import endpoint once you're in (`POST /api/import/batch` with a `users` array, admin-only; see [API.md](API.md#import)):
-
-```bash
-curl -X POST https://flow.example.com/api/import/batch \
-  -H "Authorization: Bearer flow_EXAMPLEKEY" \
-  -H "Content-Type: application/json" \
-  -d '{"users":[{"email":"teammate@example.com","name":"Teammate","role":"member"}]}'
-```
-
 Roles: `owner` and `admin` can change the workspace shape (spaces, lists, automations), manage other users' API keys, and read inbound tokens; `member` can do all task-level work. Access must also allow the same emails through its own policy (step 4) — Flow's user table and the Access allow-list are two separate doors.
 
 ## 2. Configure the Worker
@@ -216,10 +207,6 @@ claude mcp add --transport http flow https://flow.example.com/mcp \
 ```
 
 See [AGENTS_AND_MCP.md](AGENTS_AND_MCP.md) for other clients and the full tool reference.
-
-## 8. Import from ClickUp (optional)
-
-If you're migrating, run the importer now, before the team starts creating tasks — see [IMPORTING.md](IMPORTING.md). The import is idempotent, fires no automations, and streams attachments server-side into R2.
 
 ## Email intake (optional)
 

@@ -61,7 +61,6 @@ Task managers are slow, expensive per seat, and hostile to agents. Flow inverts 
 - **Inbound webhooks** — per-list `inb_` tokens so a bug tracker or form tool can create tasks in exactly one list, with idempotent delivery
 - **Per-space visibility** — spaces are workspace-visible or private to a member list; snapshots, deltas, search results, and writes all enforce it
 - **Audit log** — every mutation records who, via what (`ui`/`api`/`mcp`/`webhook`/`automation`/`import`), which API key, which automation rule, and the diff
-- **ClickUp import** — a three-pass extract/transform/load pipeline with deterministic ids, so re-running is an upsert, not a duplicate workspace
 - **Dark mode, keyboard layer, instant loads** — Preact + Signals SPA, ~no dependencies, boot cache, early WebSocket open from an inline script in `index.html`
 
 <table>
@@ -82,7 +81,7 @@ Flow replaces the slice of ClickUp a small team actually uses. The rest is left 
 - **No Gantt charts, timelines, or workload views.** Boards and a due-date-bucketed "My Work" view.
 - **No time tracking.** Use a dedicated tool.
 - **No custom fields.** Tags, priority, and dates cover the real cases; a custom-field engine would infect every query, form, and API shape.
-- **No folders.** Spaces contain lists, full stop. The ClickUp importer collapses folders into list names (`"Folder / List"`).
+- **No folders.** Spaces contain lists, full stop.
 - **No multi-assignee.** One assignee per task (in the reference migration only a couple of tasks had more than one).
 - **No docs, whiteboards, chat, or goals.** It's a task manager.
 - **One workspace per deployment.** The single-DO design trades multi-tenancy for speed and simplicity — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the honest limits.
@@ -171,7 +170,6 @@ That's the whole integration. The agent gets workspace orientation, search, task
 | [docs/AGENTS_AND_MCP.md](docs/AGENTS_AND_MCP.md) | MCP server, the 19 tools, read-only SQL, agent handoffs, API keys and impersonation, webhooks in and out |
 | [docs/API.md](docs/API.md) | REST reference, every route with method, auth, and a curl example |
 | [docs/AUTOMATIONS.md](docs/AUTOMATIONS.md) | The rule vocabulary: triggers, conditions, actions, templates, the run log |
-| [docs/IMPORTING.md](docs/IMPORTING.md) | Migrating from ClickUp; where Asana/Trello extractors would go |
 | [docs/COMPARISON.md](docs/COMPARISON.md) | Honest comparison vs ClickUp, Asana, Linear, and self-hosted options |
 
 ## Repository layout
@@ -179,7 +177,6 @@ That's the whole integration. The agent gets workspace orientation, search, task
 ```
 apps/api        The Worker: Hono routes, MCP server, WebSocket handoff, queue consumer
 apps/web        Preact + Signals SPA (Vite, Tailwind v4)
-apps/importer   ClickUp → Flow migration CLI (extract / transform / load)
 packages/shared The Zod contract: entities, mutation inputs, delta events, MCP tool names
 packages/core   The Workspace Durable Object: SQLite schema, mutation turns, automations engine
 ```
@@ -188,7 +185,7 @@ packages/core   The Workspace Durable Object: SQLite schema, mutation turns, aut
 
 ## Contributing
 
-PRs welcome. Ground rules: TypeScript strict everywhere, `pnpm typecheck` and `pnpm test` must pass, no new runtime dependencies without a strong reason (the whole app currently runs on hono, zod, preact, and @preact/signals), and contract changes go through `packages/shared`. Good first contributions: an Asana or Trello extractor for the importer ([docs/IMPORTING.md](docs/IMPORTING.md#future-work-asana-and-trello) shows exactly where it plugs in), and @-mention parsing (the notification preference already exists and is waiting for an emitter). [ROADMAP.md](ROADMAP.md) lists what's planned and what's deliberately out of scope.
+PRs welcome. Ground rules: TypeScript strict everywhere, `pnpm typecheck` and `pnpm test` must pass, no new runtime dependencies without a strong reason (the whole app currently runs on hono, zod, preact, and @preact/signals), and contract changes go through `packages/shared`. Good first contributions: @-mention parsing (the notification preference already exists and is waiting for an emitter) and UI member management. [ROADMAP.md](ROADMAP.md) lists what's planned and what's deliberately out of scope.
 
 ## License
 

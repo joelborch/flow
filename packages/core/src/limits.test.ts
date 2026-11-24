@@ -10,7 +10,6 @@ import {
   UpdateSubtaskInput,
   UpdateTaskInput,
 } from "@flow/shared";
-import { truncateImportTitle } from "./import.js";
 
 // The contract caps live in packages/shared; @flow/core is the nearest package
 // with a test runner, so they are exercised from here.
@@ -178,23 +177,5 @@ describe("input caps", () => {
   it("keeps a title trimmed to the cap by UTF-16 length within the cap", () => {
     const trimmed = "😀".repeat(LIMITS.titleMax).slice(0, LIMITS.titleMax);
     expect(CreateTaskInput.safeParse({ listId: "ls_1", title: trimmed }).success).toBe(true);
-  });
-});
-
-describe("truncateImportTitle", () => {
-  it("leaves anything within the import cap untouched", () => {
-    expect(truncateImportTitle("short")).toBe("short");
-    const exact = "x".repeat(LIMITS.importTitleMax);
-    expect(truncateImportTitle(exact)).toBe(exact);
-  });
-
-  it("truncates rather than rejecting, marking the cut", () => {
-    const out = truncateImportTitle("y".repeat(LIMITS.importTitleMax + 500));
-    expect(out).toHaveLength(LIMITS.importTitleMax);
-    expect(out.endsWith("…")).toBe(true);
-  });
-
-  it("is looser than the interactive title cap", () => {
-    expect(LIMITS.importTitleMax).toBeGreaterThan(LIMITS.titleMax);
   });
 });

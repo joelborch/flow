@@ -46,13 +46,12 @@ Queues for outbound side effects. Full agent contract: `AGENTS.md`.
 - `packages/core` — Workspace Durable Object + automation engine; most tests
 - `apps/api` — Hono Worker: auth, routes, MCP, WS, queue consumer, email intake, wrangler.example.jsonc
 - `apps/web` — Preact + @preact/signals + Tailwind v4 SPA; store in `src/store`
-- `apps/importer` — local-only ClickUp ETL (tsx, never deployed)
 
 ## Commands
 
 - `pnpm install` at repo root
 - `pnpm typecheck` — all packages must pass before you report done
-- `pnpm -r test` — vitest across core, api, importer
+- `pnpm -r test` — vitest across core, api, web
 - `pnpm --filter @flow/web build` — SPA must build
 - `pnpm dev` — local Worker on :8787; `pnpm dev:web` — Vite on :5173
   (proxies /api and /ws)

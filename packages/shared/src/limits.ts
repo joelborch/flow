@@ -4,9 +4,7 @@
 
 // ---------------------------------------------------------------------------
 // Input size caps. One place, so REST, MCP and the DO all reject the same
-// oversized input with the same message. `importBatch` is deliberately exempt
-// (see packages/core/src/import.ts): historical ClickUp rows are truncated
-// rather than rejected, because a migration must not lose a task.
+// oversized input with the same message.
 // ---------------------------------------------------------------------------
 export const LIMITS = {
   titleMax: 500,
@@ -19,8 +17,6 @@ export const LIMITS = {
   blockedNoteMax: 200,
   /** Plain-text context on a checklist step — a paragraph, not a document. */
   subtaskNoteMax: 2_000,
-  /** importBatch only: titles longer than this are truncated, never rejected. */
-  importTitleMax: 2_000,
   /** What a handoff wants back ("a table of page, sessions, change date"). */
   handoffReturnMax: 1_000,
   /** Tasks a handoff points the recipient's agent at for context. */

@@ -16,7 +16,7 @@ import {
 // replyHandoff's comment `via`, its state rules per role, the close/reopen
 // status moves and the audit row; the `handoff` field riding task deltas only
 // when it changes; listHandoffs' direction, state filter, ordering, limit and
-// per-space visibility; and importBatch still landing tasks with no handoff.
+// per-space visibility.
 //
 // Same real-Workspace-over-node:sqlite harness as email-intake-storage.test.ts.
 // ---------------------------------------------------------------------------
@@ -611,24 +611,5 @@ describe("listHandoffs", () => {
     const h = await seeded();
     h.ws.createTask(CreateTaskInput.parse({ listId: h.requests.id, title: "Plain", assigneeId: BOB }), ALICE);
     expect(h.list(BOB)).toEqual([]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-
-describe("importBatch with handoffs in the schema", () => {
-  it("imports tasks with no handoff and comments marked via import", async () => {
-    const h = await seeded();
-    const result = h.ws.importBatch(
-      {
-        tasks: [{ id: "tk_imported", clickupId: "cu_1", listId: h.requests.id, title: "From ClickUp" }],
-        comments: [{ id: "cm_imported", clickupId: "cu_c1", taskId: "tk_imported", authorId: ALICE, body: "old note" }],
-      },
-      "import"
-    );
-    expect(result.errors).toEqual([]);
-    expect(h.ws.getTaskDetail("tk_imported").task.handoff).toBeNull();
-    expect(h.ws.getSnapshot().tasks.find((t) => t.id === "tk_imported")?.handoff).toBeNull();
-    expect(h.ws.listComments("tk_imported")).toMatchObject([{ id: "cm_imported", via: "import" }]);
   });
 });

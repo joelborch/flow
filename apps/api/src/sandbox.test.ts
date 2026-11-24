@@ -23,7 +23,7 @@ function stubWorkspace() {
   return {
     resolveApiKey: vi.fn(async () => (hasKey ? { key: {}, user: {} } : null)),
     listUsers: vi.fn(async () => [{ id: "us_owner", role: "owner" }]),
-    importBatch: vi.fn(async (_batch: unknown, _actor: string) => ({ errors: [] })),
+    seedSandbox: vi.fn(async (_now?: number) => ({ ok: true })),
     createApiKey: vi.fn(async () => {
       hasKey = true;
       return {};
@@ -75,7 +75,7 @@ describe("sandbox fetch", () => {
     const { env, stubFor } = setup({ SANDBOX: undefined });
     const res = await call(env, "/api/me");
     expect(res.status).toBe(500);
-    expect(stubFor("main").importBatch).not.toHaveBeenCalled();
+    expect(stubFor("main").seedSandbox).not.toHaveBeenCalled();
   });
 
   it("serves the front page with the published key and connect instructions", async () => {
@@ -144,7 +144,7 @@ describe("sandbox fetch", () => {
     const res = await call(env, "/api/tasks/tk_sb_cls/attachments", { method: "POST", body: "x" });
     expect(res.status).toBe(403);
     expect(((await res.json()) as { error: string }).error).toContain("uploads are off");
-    expect(stubFor(`sandbox-${Math.floor(Date.now() / SANDBOX_PERIOD_MS)}`).importBatch).not.toHaveBeenCalled();
+    expect(stubFor(`sandbox-${Math.floor(Date.now() / SANDBOX_PERIOD_MS)}`).seedSandbox).not.toHaveBeenCalled();
   });
 });
 
@@ -154,8 +154,8 @@ describe("ensureSeeded", () => {
     const at = NOW + 10 * SANDBOX_PERIOD_MS;
     await Promise.all([ensureSeeded(env, at), ensureSeeded(env, at)]);
     const ws = stubFor(workspaceName(env, at));
-    expect(ws.importBatch).toHaveBeenCalledTimes(1);
-    expect(ws.importBatch.mock.calls[0]![1]).toBe("us_owner");
+    expect(ws.seedSandbox).toHaveBeenCalledTimes(1);
+    expect(ws.seedSandbox).toHaveBeenCalledWith(at);
     expect(ws.createApiKey).toHaveBeenCalledWith(
       expect.objectContaining({ userId: SANDBOX_MEMBER_ID, tokenHash: expect.stringMatching(/^[0-9a-f]{64}$/) }),
       "us_owner"
@@ -167,7 +167,7 @@ describe("ensureSeeded", () => {
     const at = NOW + 20 * SANDBOX_PERIOD_MS;
     stubFor(workspaceName(env, at)).setHasKey(true);
     await ensureSeeded(env, at);
-    expect(stubFor(workspaceName(env, at)).importBatch).not.toHaveBeenCalled();
+    expect(stubFor(workspaceName(env, at)).seedSandbox).not.toHaveBeenCalled();
   });
 
   it("accepts losing the race for the key insert", async () => {

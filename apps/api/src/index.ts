@@ -13,7 +13,7 @@ import { auditRoutes } from "./routes/audit.js";
 import { automationRoutes } from "./routes/automations.js";
 import { emailIntakeRoutes } from "./routes/email-intake.js";
 import { handoffRoutes } from "./routes/handoffs.js";
-import { importRoutes } from "./routes/import.js";
+import { adminRoutes } from "./routes/admin.js";
 import { queryRoutes } from "./routes/query.js";
 import { inboundRoutes } from "./routes/inbound.js";
 import { listRoutes } from "./routes/lists.js";
@@ -81,7 +81,7 @@ app.route("/api", auditRoutes);
 app.route("/api", apiKeyRoutes);
 app.route("/api", inboundRoutes);
 app.route("/api", emailIntakeRoutes);
-app.route("/api", importRoutes);
+app.route("/api", adminRoutes);
 app.route("/api", queryRoutes);
 
 // --- MCP -------------------------------------------------------------------

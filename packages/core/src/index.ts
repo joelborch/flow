@@ -89,13 +89,6 @@ import {
 } from "./handoffs.js";
 import { id, token } from "./id.js";
 import {
-  type ImportBatch,
-  type ImportCounts,
-  type ImportResult,
-  emptyCounts,
-  truncateImportTitle,
-} from "./import.js";
-import {
   between,
   columnHasCollapsed,
   needsRebalance,
@@ -154,7 +147,6 @@ import {
   seedJobs,
 } from "./schema.js";
 import { QueryRateLimiter, type QueryResult, runReadOnlyQuery } from "./query.js";
-import { SandboxWriteBudget } from "./sandbox-seed.js";
 import { searchTasks as runSearch } from "./search.js";
 import { type SnoozedRow, WAKE_SWEEP_LIMIT, wakeCandidates, wakesOnComment } from "./snooze.js";
 import {
@@ -189,15 +181,21 @@ import {
   visibleSpaceIds,
 } from "./visibility.js";
 
-export type { ImportBatch, ImportResult, ImportCounts } from "./import.js";
+import {
+  SANDBOX_KEY_NAME,
+  SANDBOX_MEMBER_ID,
+  SANDBOX_WRITES_PER_MINUTE,
+  SandboxBusy,
+  SandboxWriteBudget,
+  seedSandboxWorkspace,
+} from "./sandbox-seed.js";
 export {
   SANDBOX_KEY_NAME,
   SANDBOX_MEMBER_ID,
   SANDBOX_WRITES_PER_MINUTE,
   SandboxBusy,
   SandboxWriteBudget,
-  sandboxSeed,
-} from "./sandbox-seed.js";
+};
 export type {
   EmailIngestAttachment, EmailIntakeCheck, IngestEmailInput, IngestEmailResult,
 } from "./email-intake.js";
@@ -1780,17 +1778,6 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       .map(toUser);
   }
 
-  /** Users whose email is a placeholder from the import and needs a real one. */
-  listUsersNeedingEmail(): User[] {
-    return this.sql
-      .exec<UserRow>(
-        `SELECT id, email, name, role, deactivated, created_at, needs_email_update, clickup_id
-         FROM users WHERE needs_email_update = 1 ORDER BY created_at`
-      )
-      .toArray()
-      .map(toUser);
-  }
-
   getUserByEmail(email: string): User | null {
     const row = this.sql
       .exec<UserRow>(
@@ -2035,6 +2022,20 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     }
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
+    return { ok: true };
+  }
+
+  seedSandbox(now: number = Date.now()): { ok: true } {
+    if (this.env.SANDBOX !== "true") {
+      throw new Error('seedSandbox only runs on the sandbox Worker (SANDBOX="true").');
+    }
+    const owner = this.sql
+      .exec<{ id: string }>("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1")
+      .toArray()[0];
+    if (!owner) throw new Error("sandbox workspace has no owner to seed as");
+    seedSandboxWorkspace(this.sql, owner.id, now);
+    bumpResyncFloor(this.sql, this.maxSeq());
+    this.broadcast({ type: "resync" });
     return { ok: true };
   }
 
@@ -3584,92 +3585,6 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     });
   }
 
-  /**
-   * Replace a list's status set. Statuses matched by name keep their id (so
-   * tasks stay put); removing a status that still holds tasks is refused with
-   * the counts, because silently re-bucketing tasks loses information.
-   */
-  setListStatuses(
-    input: { listId: string; statuses: Array<{ name: string; color?: string; type: Status["type"] }> },
-    actor: string | Actor
-  ): List {
-    return this.runTurn(toActor(actor), (t) => {
-      const row = this.requireListRow(input.listId);
-      this.assertSpaceWritable(t.actor, row.space_id);
-      const existing = listStatuses(this.sql, row.id);
-      const specs = normalizeStatusSpecs(input.statuses);
-      const wanted = new Set(specs.map((s) => s.name.toLowerCase()));
-
-      const doomed = existing.filter((s) => !wanted.has(s.name.toLowerCase()));
-      const blocking = doomed
-        .map((s) => ({
-          status: s,
-          n: this.sql
-            .exec<{ n: number }>("SELECT COUNT(*) AS n FROM tasks WHERE status_id = ?", s.id)
-            .one().n,
-        }))
-        .filter((x) => x.n > 0);
-      if (blocking.length > 0) {
-        throw new Error(
-          `Cannot remove status(es) that still hold tasks: ${blocking
-            .map((b) => `"${b.status.name}" (${b.n} task(s))`)
-            .join(", ")}. Move those tasks first, or keep the status in the new set.`
-        );
-      }
-
-      const byName = new Map(existing.map((s) => [s.name.toLowerCase(), s]));
-      for (const s of doomed) this.sql.exec("DELETE FROM statuses WHERE id = ?", s.id);
-
-      const statuses: Status[] = specs.map((spec, i) => {
-        const prior = byName.get(spec.name.toLowerCase());
-        if (prior) {
-          this.sql.exec(
-            "UPDATE statuses SET name = ?, color = ?, type = ?, position = ? WHERE id = ?",
-            spec.name,
-            spec.color,
-            spec.type,
-            i,
-            prior.id
-          );
-          return { id: prior.id, name: spec.name, color: spec.color, type: spec.type, position: i };
-        }
-        const statusId = id("st_");
-        this.sql.exec(
-          "INSERT INTO statuses (id, list_id, name, color, type, position) VALUES (?, ?, ?, ?, ?, ?)",
-          statusId,
-          row.id,
-          spec.name,
-          spec.color,
-          spec.type,
-          i
-        );
-        return { id: statusId, name: spec.name, color: spec.color, type: spec.type, position: i };
-      });
-
-      // A status may have flipped to/from closed: reconcile closedAt.
-      for (const s of statuses) {
-        if (s.type === "closed") {
-          this.sql.exec(
-            "UPDATE tasks SET closed_at = ? WHERE status_id = ? AND closed_at IS NULL",
-            t.now,
-            s.id
-          );
-          this.sql.exec("UPDATE tasks SET waiting_on = NULL WHERE status_id = ? AND waiting_on IS NOT NULL", s.id);
-        } else {
-          this.sql.exec(
-            "UPDATE tasks SET closed_at = NULL WHERE status_id = ? AND closed_at IS NOT NULL",
-            s.id
-          );
-        }
-      }
-
-      const after = toList(this.requireListRow(row.id), statuses);
-      t.emit("update", "list", after.id, { statuses });
-      t.audit("list.set_statuses", after.id, { statuses: statuses.map((s) => s.name) });
-      return after;
-    });
-  }
-
   /** Issue (or rotate) the bearer token for the list's inbound webhook. */
   setListInboundToken(
     input: { listId: string; enabled: boolean },
@@ -4301,499 +4216,6 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       t.audit("automation.delete", ruleId, { name: row.name });
       return { ok: true } as const;
     });
-  }
-
-  // =========================================================================
-  // Import
-  // =========================================================================
-
-  /**
-   * Bulk upsert. Identity is `id` first (the ClickUp importer mints Flow ids
-   * during transform and POSTs fully-formed entities), then `clickupId`.
-   *
-   * Import mode is deliberately unlike every other mutation path: automations
-   * never run, nothing is appended to the changes log, and nothing is broadcast
-   * per row — a 5k-row load would otherwise flood both. One `resync` frame goes
-   * out at the end so connected clients pull a fresh snapshot.
-   */
-  importBatch(batch: ImportBatch, actor: string | Actor): ImportResult {
-    const result: ImportResult = {
-      created: emptyCounts(),
-      updated: emptyCounts(),
-      errors: [],
-      ids: {},
-    };
-    const importActor = toActor(actor, "import");
-    const now = Date.now();
-
-    const bump = (bucket: "created" | "updated", key: keyof ImportCounts): void => {
-      result[bucket][key] += 1;
-    };
-    const fail = (entity: keyof ImportBatch, ref: string, err: unknown): void => {
-      result.errors.push({
-        entity,
-        ref,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    };
-    const remember = (row: { id?: string; clickupId?: string | null }, flowId: string): void => {
-      if (row.clickupId) result.ids[row.clickupId] = flowId;
-      if (row.id) result.ids[row.id] = flowId;
-    };
-
-    // --- users -------------------------------------------------------------
-    // A user reference from the batch may be a transform-minted id that the
-    // users pass deduplicated onto an existing row (matched by email). Resolve
-    // through the id map first; fall back to the raw id.
-    const mapUser = (uid: string | null | undefined): string | null =>
-      uid == null ? null : (result.ids[uid] ?? uid);
-
-    for (const u of batch.users ?? []) {
-      const ref = u.id ?? u.clickupId ?? u.email;
-      try {
-        const existing = this.findExisting("users", u.id, u.clickupId, () =>
-          this.userIdByEmail(u.email)
-        );
-        const email = u.email.trim();
-        const placeholder = email.toLowerCase().endsWith("@placeholder.flow") ? 1 : 0;
-        if (existing) {
-          this.sql.exec(
-            `UPDATE users SET email = ?, name = ?, role = COALESCE(?, role),
-               deactivated = COALESCE(?, deactivated),
-               needs_email_update = ?, clickup_id = COALESCE(?, clickup_id) WHERE id = ?`,
-            email,
-            u.name ?? email,
-            u.role ?? null,
-            u.deactivated === undefined ? null : u.deactivated ? 1 : 0,
-            placeholder,
-            u.clickupId ?? null,
-            existing
-          );
-          remember(u, existing);
-          bump("updated", "users");
-        } else {
-          const userId = u.id ?? id("us_");
-          this.sql.exec(
-            `INSERT INTO users (id, email, name, role, deactivated, created_at, needs_email_update, clickup_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            userId,
-            email,
-            u.name ?? email,
-            u.role ?? "member",
-            u.deactivated ? 1 : 0,
-            u.createdAt ?? now,
-            placeholder,
-            u.clickupId ?? null
-          );
-          remember(u, userId);
-          bump("created", "users");
-        }
-      } catch (err) {
-        fail("users", ref, err);
-      }
-    }
-
-    // --- spaces ------------------------------------------------------------
-    for (const s of batch.spaces ?? []) {
-      const ref = s.id ?? s.clickupId ?? s.name;
-      try {
-        const existing = this.findExisting("spaces", s.id, s.clickupId);
-        if (existing) {
-          this.sql.exec(
-            `UPDATE spaces SET name = ?, color = ?, archived = ?,
-               visibility = COALESCE(?, visibility),
-               clickup_id = COALESCE(?, clickup_id) WHERE id = ?`,
-            s.name,
-            s.color ?? null,
-            s.archived ? 1 : 0,
-            s.visibility ?? null,
-            s.clickupId ?? null,
-            existing
-          );
-          this.applyImportSpaceMembers(existing, s.memberUserIds, now);
-          remember(s, existing);
-          bump("updated", "spaces");
-        } else {
-          const spaceId = s.id ?? id("sp_");
-          this.sql.exec(
-            `INSERT INTO spaces (id, name, color, position, archived, visibility, created_at, clickup_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            spaceId,
-            s.name,
-            s.color ?? null,
-            s.position ?? nextPosition(this.sql, "spaces"),
-            s.archived ? 1 : 0,
-            s.visibility ?? "workspace",
-            s.createdAt ?? now,
-            s.clickupId ?? null
-          );
-          this.applyImportSpaceMembers(spaceId, s.memberUserIds, now);
-          remember(s, spaceId);
-          bump("created", "spaces");
-        }
-      } catch (err) {
-        fail("spaces", ref, err);
-      }
-    }
-
-    // --- lists -------------------------------------------------------------
-    for (const l of batch.lists ?? []) {
-      const ref = l.id ?? l.clickupId ?? l.name;
-      try {
-        const spaceId = this.resolveParentId("spaces", l.spaceId, l.spaceClickupId, result.ids);
-        const existing = this.findExisting("lists", l.id, l.clickupId);
-        if (existing) {
-          this.sql.exec(
-            `UPDATE lists SET space_id = ?, name = ?, archived = ?,
-               clickup_id = COALESCE(?, clickup_id) WHERE id = ?`,
-            spaceId,
-            l.name,
-            l.archived ? 1 : 0,
-            l.clickupId ?? null,
-            existing
-          );
-          // Statuses are additive on re-import: add what's missing by name,
-          // never delete one that tasks may still point at.
-          if (l.statuses !== undefined) this.mergeImportStatuses(existing, l.statuses);
-          remember(l, existing);
-          bump("updated", "lists");
-        } else {
-          const listId = l.id ?? id("ls_");
-          this.sql.exec(
-            `INSERT INTO lists (id, space_id, name, position, archived, inbound_token, created_at, clickup_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            listId,
-            spaceId,
-            l.name,
-            l.position ?? nextPosition(this.sql, "lists", spaceId),
-            l.archived ? 1 : 0,
-            l.inboundToken ?? null,
-            l.createdAt ?? now,
-            l.clickupId ?? null
-          );
-          insertStatuses(this.sql, listId, normalizeStatusSpecs(l.statuses));
-          remember(l, listId);
-          bump("created", "lists");
-        }
-      } catch (err) {
-        fail("lists", ref, err);
-      }
-    }
-
-    // --- tasks -------------------------------------------------------------
-    for (const task of batch.tasks ?? []) {
-      const ref = task.id ?? task.clickupId ?? task.title;
-      try {
-        const listId = this.resolveParentId("lists", task.listId, task.listClickupId, result.ids);
-        const status = this.resolveImportStatus(listId, task.statusId, task.status);
-        const assigneeId =
-          mapUser(task.assigneeId) ??
-          (task.assigneeEmail ? this.userIdByEmail(task.assigneeEmail) : null) ??
-          null;
-        const tags = normalizeTags(task.tags ?? []);
-        const closedAt =
-          task.closedAt !== undefined
-            ? task.closedAt
-            : status.type === "closed"
-              ? (task.updatedAt ?? now)
-              : null;
-        const existing = this.findExisting("tasks", task.id, task.clickupId);
-
-        if (existing) {
-          this.sql.exec(
-            `UPDATE tasks SET list_id = ?, title = ?, description = ?, status_id = ?, assignee_id = ?,
-               assigned_by = NULL, assigned_at = NULL, priority = ?, due_date = ?, start_date = ?,
-               tags = ?, tags_text = ?, updated_at = ?,
-               closed_at = ?, clickup_id = COALESCE(?, clickup_id) WHERE id = ?`,
-            listId,
-            truncateImportTitle(task.title),
-            task.description ?? "",
-            status.id,
-            assigneeId,
-            task.priority ?? null,
-            task.dueDate ?? null,
-            task.startDate ?? null,
-            JSON.stringify(tags),
-            tagsText(tags),
-            task.updatedAt ?? now,
-            closedAt,
-            task.clickupId ?? null,
-            existing
-          );
-          remember(task, existing);
-          bump("updated", "tasks");
-        } else {
-          const taskId = task.id ?? id("tk_");
-          this.insertTaskRow({
-            id: taskId,
-            listId,
-            title: truncateImportTitle(task.title),
-            description: task.description ?? "",
-            statusId: status.id,
-            assigneeId,
-            assignedBy: null,
-            assignedAt: null,
-            waitingOn: null,
-            priority: task.priority ?? null,
-            dueDate: task.dueDate ?? null,
-            startDate: task.startDate ?? null,
-            // ClickUp has no snooze, so an imported task always lands awake.
-            snoozedUntil: null,
-            blockedNote: null,
-            tags,
-            position: task.position ?? nextTaskPosition(this.sql, listId, status.id),
-            createdBy: mapUser(task.createdBy) ?? importActor.userId,
-            createdAt: task.createdAt ?? now,
-            updatedAt: task.updatedAt ?? task.createdAt ?? now,
-            closedAt,
-            clickupId: task.clickupId ?? null,
-            // ClickUp has no handoffs; a re-import's UPDATE above leaves the
-            // handoff columns alone for the same reason.
-            handoff: null,
-          });
-          remember(task, taskId);
-          bump("created", "tasks");
-        }
-      } catch (err) {
-        fail("tasks", ref, err);
-      }
-    }
-
-    // --- subtasks ----------------------------------------------------------
-    for (const sub of batch.subtasks ?? []) {
-      const ref = sub.id ?? sub.clickupId ?? sub.title;
-      try {
-        const taskId = this.resolveParentId("tasks", sub.taskId, sub.taskClickupId, result.ids);
-        const existing = this.findExisting("subtasks", sub.id, sub.clickupId);
-        if (existing) {
-          this.sql.exec(
-            `UPDATE subtasks SET task_id = ?, title = ?, done = ?, assignee_id = ?,
-               assigned_by = NULL, assigned_at = NULL, due_date = ?,
-               clickup_id = COALESCE(?, clickup_id) WHERE id = ?`,
-            taskId,
-            truncateImportTitle(sub.title),
-            sub.done ? 1 : 0,
-            mapUser(sub.assigneeId),
-            sub.dueDate ?? null,
-            sub.clickupId ?? null,
-            existing
-          );
-          remember(sub, existing);
-          bump("updated", "subtasks");
-        } else {
-          const subtaskId = sub.id ?? id("sb_");
-          this.sql.exec(
-            `INSERT INTO subtasks (id, task_id, title, done, assignee_id, assigned_by, assigned_at,
-                                   due_date, position, created_at, clickup_id)
-             VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
-            subtaskId,
-            taskId,
-            truncateImportTitle(sub.title),
-            sub.done ? 1 : 0,
-            mapUser(sub.assigneeId),
-            sub.dueDate ?? null,
-            sub.position ?? nextSubtaskPosition(this.sql, taskId),
-            sub.createdAt ?? now,
-            sub.clickupId ?? null
-          );
-          remember(sub, subtaskId);
-          bump("created", "subtasks");
-        }
-      } catch (err) {
-        fail("subtasks", ref, err);
-      }
-    }
-
-    // --- comments ----------------------------------------------------------
-    for (const c of batch.comments ?? []) {
-      const ref = c.id ?? c.clickupId ?? c.body.slice(0, 40);
-      try {
-        const taskId = this.resolveParentId("tasks", c.taskId, c.taskClickupId, result.ids);
-        const authorId =
-          mapUser(c.authorId) ??
-          (c.authorEmail ? this.userIdByEmail(c.authorEmail) : null) ??
-          importActor.userId;
-        const existing = this.findExisting("comments", c.id, c.clickupId);
-        if (existing) {
-          this.sql.exec(
-            `UPDATE comments SET task_id = ?, author_id = ?, body = ?,
-               clickup_id = COALESCE(?, clickup_id) WHERE id = ?`,
-            taskId,
-            authorId,
-            c.body,
-            c.clickupId ?? null,
-            existing
-          );
-          remember(c, existing);
-          bump("updated", "comments");
-        } else {
-          const commentId = c.id ?? id("cm_");
-          this.sql.exec(
-            `INSERT INTO comments (id, task_id, author_id, body, created_at, clickup_id, via)
-             VALUES (?, ?, ?, ?, ?, ?, 'import')`,
-            commentId,
-            taskId,
-            authorId,
-            c.body,
-            c.createdAt ?? now,
-            c.clickupId ?? null
-          );
-          remember(c, commentId);
-          bump("created", "comments");
-        }
-      } catch (err) {
-        fail("comments", ref, err);
-      }
-    }
-
-    // One audit row for the whole batch, one resync frame, zero deltas.
-    this.sql.exec(
-      "INSERT INTO audit (actor, action, entity, diff, at) VALUES (?, ?, ?, ?, ?)",
-      JSON.stringify(importActor),
-      "import.batch",
-      "workspace",
-      JSON.stringify({
-        created: result.created,
-        updated: result.updated,
-        errors: result.errors.length,
-      }),
-      now
-    );
-    // The import wrote no deltas, so a client that was offline for it must not
-    // be allowed to replay across it — floor the log at the current seq.
-    bumpResyncFloor(this.sql, this.maxSeq());
-    this.broadcast({ type: "resync" });
-    return result;
-  }
-
-  /**
-   * Import-mode membership: replaces the set when the row supplies one, leaves
-   * it alone when it does not. Unknown user ids are skipped rather than thrown —
-   * an import is lenient by design, and a missing member must not lose a space.
-   */
-  private applyImportSpaceMembers(
-    spaceId: string,
-    userIds: string[] | undefined,
-    now: number
-  ): void {
-    if (userIds === undefined) return;
-    this.sql.exec("DELETE FROM space_members WHERE space_id = ?", spaceId);
-    for (const userId of userIds) {
-      const known = this.sql
-        .exec<{ n: number }>("SELECT COUNT(*) AS n FROM users WHERE id = ?", userId)
-        .one().n;
-      if (known > 0) this.addSpaceMember(spaceId, userId, now);
-    }
-  }
-
-  /** id first, then clickup_id, then an optional caller-supplied fallback. */
-  private findExisting(
-    table: "users" | "spaces" | "lists" | "tasks" | "subtasks" | "comments",
-    flowId: string | undefined,
-    clickupId: string | null | undefined,
-    fallback?: () => string | null
-  ): string | null {
-    if (flowId !== undefined) {
-      const row = this.sql
-        .exec<{ id: string }>(`SELECT id FROM ${table} WHERE id = ?`, flowId)
-        .toArray()[0];
-      if (row) return row.id;
-    }
-    if (clickupId !== undefined && clickupId !== null) {
-      const row = this.sql
-        .exec<{ id: string }>(`SELECT id FROM ${table} WHERE clickup_id = ?`, clickupId)
-        .toArray()[0];
-      if (row) return row.id;
-    }
-    return fallback?.() ?? null;
-  }
-
-  /**
-   * Resolve a parent reference given as a Flow id or a ClickUp id. `ids` is the
-   * running map from earlier rows in the same batch, so a space and its lists
-   * can arrive together.
-   */
-  private resolveParentId(
-    table: "spaces" | "lists" | "tasks",
-    flowId: string | undefined,
-    clickupId: string | undefined,
-    ids: Record<string, string>
-  ): string {
-    const noun = table === "spaces" ? "space" : table === "lists" ? "list" : "task";
-    if (flowId !== undefined) {
-      const row = this.sql
-        .exec<{ id: string }>(`SELECT id FROM ${table} WHERE id = ?`, flowId)
-        .toArray()[0];
-      if (row) return row.id;
-      const mapped = ids[flowId];
-      if (mapped !== undefined) return mapped;
-      throw new Error(`No ${noun} with id ${flowId} — import ${table} first.`);
-    }
-    if (clickupId === undefined) {
-      throw new Error(`Row needs either a Flow ${noun} id or a ${noun} clickupId.`);
-    }
-    const mapped = ids[clickupId];
-    if (mapped !== undefined) return mapped;
-    const row = this.sql
-      .exec<{ id: string }>(`SELECT id FROM ${table} WHERE clickup_id = ?`, clickupId)
-      .toArray()[0];
-    if (!row) throw new Error(`No ${noun} with clickupId ${clickupId} — import ${table} first.`);
-    return row.id;
-  }
-
-  /** Accept a resolved statusId, a status name, or neither (list's open). */
-  private resolveImportStatus(
-    listId: string,
-    statusId: string | undefined,
-    statusName: string | undefined
-  ): Status {
-    if (statusId !== undefined) {
-      const status = getStatus(this.sql, statusId);
-      if (status) return status;
-      if (statusName === undefined) {
-        throw new Error(
-          `Unknown statusId ${statusId} for list ${listId}. Valid statuses: ${listStatuses(
-            this.sql,
-            listId
-          )
-            .map((s) => `${s.id} "${s.name}"`)
-            .join(", ")}.`
-        );
-      }
-    }
-    if (statusName !== undefined) return resolveStatusName(this.sql, listId, statusName);
-    return openStatus(this.sql, listId);
-  }
-
-  /** Add statuses missing from a re-imported list; never remove one. */
-  private mergeImportStatuses(
-    listId: string,
-    specs: ReadonlyArray<{ id?: string; name: string; color?: string; type: Status["type"] }>
-  ): void {
-    const existing = listStatuses(this.sql, listId);
-    const byName = new Set(existing.map((s) => s.name.toLowerCase()));
-    const byId = new Set(existing.map((s) => s.id));
-    let position = existing.length;
-    for (const spec of normalizeStatusSpecs(specs)) {
-      if (byName.has(spec.name.toLowerCase())) continue;
-      if (spec.id !== undefined && byId.has(spec.id)) continue;
-      this.sql.exec(
-        "INSERT INTO statuses (id, list_id, name, color, type, position) VALUES (?, ?, ?, ?, ?, ?)",
-        spec.id ?? id("st_"),
-        listId,
-        spec.name,
-        spec.color,
-        spec.type,
-        position++
-      );
-    }
-  }
-
-  private userIdByEmail(email: string): string | null {
-    const row = this.sql
-      .exec<{ id: string }>("SELECT id FROM users WHERE lower(email) = lower(?)", email.trim())
-      .toArray()[0];
-    return row?.id ?? null;
   }
 
   // =========================================================================

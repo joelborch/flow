@@ -1,4 +1,4 @@
-import type { ImportBatch } from "./import.js";
+import { tagsText } from "./rows.js";
 
 // The workspace the public sandbox (sandbox/wrangler.jsonc) starts every hour
 // with. Everything is made up. Ids are fixed so a second seeding of the same
@@ -223,65 +223,124 @@ const STATUS_SETS = {
   ],
 };
 
+const LIST_SPECS = [
+  { id: "ls_sb_website", spaceId: "sp_sb_marketing", name: "Website", position: 1, statuses: STATUS_SETS.board },
+  { id: "ls_sb_content", spaceId: "sp_sb_marketing", name: "Content", position: 2, statuses: STATUS_SETS.simple },
+  { id: "ls_sb_ops", spaceId: "sp_sb_operations", name: "Office", position: 1, statuses: STATUS_SETS.simple },
+  { id: "ls_sb_leadership", spaceId: "sp_sb_leadership", name: "Planning", position: 1, statuses: STATUS_SETS.simple },
+] as const;
+
 /**
- * The sandbox's starting workspace. `ownerId` is the placeholder owner every
- * fresh workspace is born with (seedIfEmpty); it's renamed rather than joined
- * by a second owner.
+ * Populate the public sandbox directly via SQL. `ownerId` is the placeholder
+ * owner every fresh workspace is born with (seedIfEmpty); it is renamed
+ * in place rather than joined by a second owner, and every row upserts on fixed
+ * ids so concurrent cold starts are idempotent.
  */
-export function sandboxSeed(ownerId: string, now: number = Date.now()): ImportBatch {
+export function seedSandboxWorkspace(
+  sql: SqlStorage,
+  ownerId: string,
+  now: number = Date.now()
+): { ok: true } {
   const at = (days: number) => now + days * DAY;
-  return {
-    users: [
-      { id: ownerId, email: "avery@example.com", name: "Avery Chen", role: "owner", createdAt: at(-90) },
-      { id: "us_sb_blake", email: "blake@example.com", name: "Blake Rivera", role: "member", createdAt: at(-60) },
-      { id: "us_sb_casey", email: "casey@example.com", name: "Casey Morgan", role: "member", createdAt: at(-45) },
-      { id: SANDBOX_MEMBER_ID, email: "agent@example.com", name: "Sandbox Agent", role: "member", createdAt: at(-1) },
-    ],
-    spaces: [
-      { id: "sp_sb_marketing", name: "Marketing", visibility: "workspace", position: 1, createdAt: at(-90) },
-      { id: "sp_sb_operations", name: "Operations", visibility: "workspace", position: 2, createdAt: at(-90) },
-      { id: "sp_sb_leadership", name: "Leadership", visibility: "private", memberUserIds: [ownerId], position: 3, createdAt: at(-90) },
-    ],
-    lists: [
-      { id: "ls_sb_website", spaceId: "sp_sb_marketing", name: "Website", position: 1, statuses: STATUS_SETS.board },
-      { id: "ls_sb_content", spaceId: "sp_sb_marketing", name: "Content", position: 2, statuses: STATUS_SETS.simple },
-      { id: "ls_sb_ops", spaceId: "sp_sb_operations", name: "Office", position: 1, statuses: STATUS_SETS.simple },
-      { id: "ls_sb_leadership", spaceId: "sp_sb_leadership", name: "Planning", position: 1, statuses: STATUS_SETS.simple },
-    ],
-    tasks: TASKS.map((t, i) => ({
-      id: `tk_sb_${t.key}`,
-      listId: t.list,
-      title: t.title,
-      status: t.status,
-      assigneeId: t.assignee ?? null,
-      dueDate: t.due === undefined ? null : at(t.due),
-      priority: t.priority ?? null,
-      tags: t.tags ?? [],
-      description: t.description ?? "",
-      position: i + 1,
-      createdBy: ownerId,
-      createdAt: at(-20 + i),
-      updatedAt: at(-1),
-      closedAt: t.status === "Done" ? at(-1) : null,
-    })),
-    subtasks: TASKS.flatMap((t) =>
-      (t.subtasks ?? []).map(([title, done], i) => ({
-        id: `sb_sb_${t.key}_${i + 1}`,
-        taskId: `tk_sb_${t.key}`,
-        title,
-        done,
-        position: i + 1,
-        createdAt: at(-10),
-      }))
-    ),
-    comments: TASKS.flatMap((t) =>
-      (t.comments ?? []).map(([authorId, body], i) => ({
-        id: `cm_sb_${t.key}_${i + 1}`,
-        taskId: `tk_sb_${t.key}`,
-        authorId,
-        body,
-        createdAt: at(-2),
-      }))
-    ),
-  };
+  const users = [
+    [ownerId, "avery@example.com", "Avery Chen", "owner", at(-90)],
+    ["us_sb_blake", "blake@example.com", "Blake Rivera", "member", at(-60)],
+    ["us_sb_casey", "casey@example.com", "Casey Morgan", "member", at(-45)],
+    [SANDBOX_MEMBER_ID, "agent@example.com", "Sandbox Agent", "member", at(-1)],
+  ] as const;
+  for (const [id, email, name, role, createdAt] of users) {
+    sql.exec(
+      `INSERT INTO users (id, email, name, role, deactivated, created_at, needs_email_update)
+       VALUES (?, ?, ?, ?, 0, ?, 0)
+       ON CONFLICT(id) DO UPDATE SET
+         email = excluded.email, name = excluded.name, role = excluded.role,
+         deactivated = 0, needs_email_update = 0`,
+      id, email, name, role, createdAt
+    );
+  }
+
+  const spaces = [
+    ["sp_sb_marketing", "Marketing", "workspace", 1, at(-90)],
+    ["sp_sb_operations", "Operations", "workspace", 2, at(-90)],
+    ["sp_sb_leadership", "Leadership", "private", 3, at(-90)],
+  ] as const;
+  for (const [id, name, visibility, position, createdAt] of spaces) {
+    sql.exec(
+      `INSERT INTO spaces (id, name, position, archived, visibility, created_at)
+       VALUES (?, ?, ?, 0, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET name = excluded.name, visibility = excluded.visibility`,
+      id, name, position, visibility, createdAt
+    );
+  }
+  sql.exec(
+    "INSERT OR IGNORE INTO space_members (space_id, user_id, created_at) VALUES (?, ?, ?)",
+    "sp_sb_leadership",
+    ownerId,
+    now
+  );
+
+  const statusIdByListAndName = new Map<string, string>();
+  for (const list of LIST_SPECS) {
+    sql.exec(
+      `INSERT INTO lists (id, space_id, name, position, archived, created_at)
+       VALUES (?, ?, ?, ?, 0, ?)
+       ON CONFLICT(id) DO UPDATE SET space_id = excluded.space_id, name = excluded.name`,
+      list.id, list.spaceId, list.name, list.position, at(-90)
+    );
+    list.statuses.forEach((st, idx) => {
+      const statusId = `st_${list.id}_${idx}`;
+      sql.exec(
+        `INSERT INTO statuses (id, list_id, name, color, type, position)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name, color = excluded.color, type = excluded.type, position = excluded.position`,
+        statusId, list.id, st.name, st.color, st.type, idx
+      );
+      statusIdByListAndName.set(`${list.id}:${st.name}`, statusId);
+    });
+  }
+
+  TASKS.forEach((t, i) => {
+    const taskId = `tk_sb_${t.key}`;
+    const statusId = statusIdByListAndName.get(`${t.list}:${t.status}`)!;
+    const tags = t.tags ?? [];
+    const dueDate = t.due === undefined ? null : at(t.due);
+    const createdAt = at(-20 + i);
+    const updatedAt = at(-1);
+    const closedAt = t.status === "Done" ? at(-1) : null;
+    sql.exec(
+      `INSERT INTO tasks (
+         id, list_id, title, description, status_id, assignee_id, assigned_by, assigned_at,
+         waiting_on, priority, due_date, tags, tags_text, position, created_by, created_at, updated_at, closed_at
+       ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         list_id = excluded.list_id, title = excluded.title, description = excluded.description,
+         status_id = excluded.status_id, assignee_id = excluded.assignee_id,
+         priority = excluded.priority, due_date = excluded.due_date, tags = excluded.tags,
+         tags_text = excluded.tags_text, updated_at = excluded.updated_at, closed_at = excluded.closed_at`,
+      taskId, t.list, t.title, t.description ?? "", statusId, t.assignee ?? null,
+      t.priority ?? null, dueDate, JSON.stringify(tags), tagsText(tags),
+      i + 1, ownerId, createdAt, updatedAt, closedAt
+    );
+
+    (t.subtasks ?? []).forEach(([title, done], j) => {
+      sql.exec(
+        `INSERT INTO subtasks (id, task_id, title, done, position, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET title = excluded.title, done = excluded.done`,
+        `sb_sb_${t.key}_${j + 1}`, taskId, title, done ? 1 : 0, j + 1, at(-10)
+      );
+    });
+
+    (t.comments ?? []).forEach(([authorId, body], j) => {
+      sql.exec(
+        `INSERT INTO comments (id, task_id, author_id, body, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET body = excluded.body`,
+        `cm_sb_${t.key}_${j + 1}`, taskId, authorId, body, at(-2)
+      );
+    });
+  });
+
+  return { ok: true };
 }

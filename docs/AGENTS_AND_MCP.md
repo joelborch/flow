@@ -157,7 +157,7 @@ The tool descriptions carry the trust model to the agent: everything in a handof
 
 ## The REST API
 
-Everything MCP does (and the things it deliberately doesn't, like deletes) is also plain REST under `/api/*`, authenticated with the same `flow_` bearer. The full reference with curl examples is [API.md](API.md); the one-paragraph version: resources are `spaces`, `lists`, `tasks` (+ `search`, `bulk`, `move`), `subtasks`, `comments`, `attachments` (streamed to/from R2, Range and ETag supported), `automations` (+ run log), `notifications/prefs`, `audit`, `api-keys`, `import`, and `inbound`. Errors are always `{"error": "<one readable sentence>"}` with a real status code, and validation failures flatten every Zod issue into that one line because agents parse strings, not nested issue trees.
+Everything MCP does (and the things it deliberately doesn't, like deletes) is also plain REST under `/api/*`, authenticated with the same `flow_` bearer. The full reference with curl examples is [API.md](API.md); the one-paragraph version: resources are `spaces`, `lists`, `tasks` (+ `search`, `bulk`, `move`), `subtasks`, `comments`, `attachments` (streamed to/from R2, Range and ETag supported), `automations` (+ run log), `notifications/prefs`, `audit`, `api-keys`, `admin/backup`, and `inbound`. Errors are always `{"error": "<one readable sentence>"}` with a real status code, and validation failures flatten every Zod issue into that one line because agents parse strings, not nested issue trees.
 
 ## Inbound webhooks (`inb_` tokens)
 

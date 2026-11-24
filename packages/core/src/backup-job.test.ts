@@ -22,7 +22,7 @@ vi.mock("cloudflare:workers", () => ({
 
 function sqliteStorage(db: DatabaseSync): SqlStorage {
   const exec = (query: string, ...params: unknown[]): unknown => {
-    const isRead = /^\s*SELECT/i.test(query);
+    const isRead = /^\s*SELECT/i.test(query) || /RETURNING/i.test(query);
     if (!isRead) {
       db.prepare(query).run(...(params as never[]));
       return { toArray: () => [], one: () => undefined };
@@ -133,15 +133,10 @@ describe("backup job", () => {
     objects = r2.objects;
     ({ ws, db } = await freshWorkspace(r2.bucket));
 
-    ws.importBatch(
-      {
-        users: [{ id: "us_a", email: "a@example.com", name: "A", role: "owner" }],
-        spaces: [{ id: "sp_a", name: "Space A" }],
-        lists: [{ id: "li_a", spaceId: "sp_a", name: "List A" }],
-        tasks: [{ id: "ta_a", listId: "li_a", title: "Task A", status: "To Do" }],
-      },
-      "import"
-    );
+    ws.upsertUser({ id: "us_a", email: "a@example.com", name: "A", role: "owner" }, "us_a");
+    const space = ws.createSpace({ name: "Space A", visibility: "workspace" }, "us_a");
+    const list = ws.createList({ spaceId: space.id, name: "List A" }, "us_a");
+    ws.createTask({ listId: list.id, title: "Task A", description: "" }, "us_a");
   });
 
   it("produces gzipped NDJSON with rows from tasks, spaces and users, keyed by date", async () => {
@@ -169,9 +164,9 @@ describe("backup job", () => {
 
     const userRow = lines.find((l) => l.table === "users" && l.row.id === "us_a");
     expect(userRow?.row.email).toBe("a@example.com");
-    const taskRow = lines.find((l) => l.table === "tasks" && l.row.id === "ta_a");
+    const taskRow = lines.find((l) => l.table === "tasks" && l.row.title === "Task A");
     expect(taskRow?.row.title).toBe("Task A");
-    const spaceRow = lines.find((l) => l.table === "spaces" && l.row.id === "sp_a");
+    const spaceRow = lines.find((l) => l.table === "spaces" && l.row.name === "Space A");
     expect(spaceRow?.row.name).toBe("Space A");
   });
 

@@ -105,7 +105,7 @@ Implements `WorkspaceRpc` from `@flow/shared`, widened to typed returns and a
 `string | Actor` actor.
 
 **Reads** — `getSnapshot`, `getWorkspaceMap`, `getTaskDetail`, `searchTasks`,
-`listUsers`, `listUsersNeedingEmail`, `getUserByEmail`, `listSubtasks`,
+`listUsers`, `getUserByEmail`, `listSubtasks`,
 `listComments`, `listAttachments`, `getAttachment`, `listAutomations`,
 `listAutomationRuns`, `getAuditLog`.
 
@@ -127,7 +127,7 @@ the DO stores metadata only. `createAttachment` honours a caller-supplied `id`
 `deleteAttachment` returns the `r2Key` so the caller can delete the object.
 
 **Spaces / lists** — `createSpace`, `updateSpace`, `deleteSpace`, `createList`,
-`updateList`, `deleteList`, `setListStatuses`, `setListInboundToken`.
+`updateList`, `deleteList`, `setListInboundToken`.
 
 **Per-space permissions** — `setSpaceVisibility`, `setSpaceMembers`,
 `listSpaceMembers`, `visibleSpaceIds`. See below.
@@ -137,7 +137,7 @@ below.
 
 **Automations** — `upsertAutomation`, `deleteAutomation`.
 
-**Import** — `importBatch`. **Jobs** — `scheduleJob`.
+**Sandbox / Jobs** — `seedSandbox`, `wipeSandbox`, `scheduleJob`.
 
 ### Notable behaviours
 
@@ -269,28 +269,6 @@ report: it moves a `sending` comment to `sent` or `failed` once, and later
 reports are ignored. **`setApiKeyEmailRequesters`** (owner/admin, never over
 MCP) turns the permission on or off for one key.
 
-## importBatch
-
-```ts
-import type { ImportBatch, ImportResult } from "@flow/core";
-```
-
-These shapes are **not** in `@flow/shared` — `importBatch` isn't part of
-`WorkspaceRpc`, so rather than widen the shared contract from inside
-`packages/core` they live in `src/import.ts` and are re-exported.
-
-Identity per row is `id` first (the ClickUp importer mints Flow ids during
-transform and POSTs fully-formed entities), then `clickupId`. Supplying both
-keeps a replay idempotent whichever key the caller reasons about. Parents may be
-referenced by Flow id or ClickUp id; `spaces` and their `lists` can arrive in the
-same batch because the running id map is consulted first.
-
-Import mode is deliberately unlike every other path: **automations never run,
-nothing is appended to `changes`, and nothing is broadcast per row.** One `audit`
-row summarises the batch and one `{ type: "resync" }` frame goes out at the end
-so connected clients pull a fresh snapshot. Per-row failures are collected in
-`result.errors` and the rest of the batch still commits.
-
 ## WebSocket protocol
 
 Upgrade at `/ws` on the DO's `fetch`, via the Hibernation API. The api Worker
@@ -324,7 +302,7 @@ oldest surviving row after a prune. Malformed frames are ignored. After the
 catch-up a client lives on broadcasts alone.
 
 `{ type: "resync" }` means "your delta stream is intentionally incomplete, pull
-a snapshot". It is sent after `importBatch` (to everyone), and after
+a snapshot". It is sent after `seedSandbox` (to everyone), and after
 `setSpaceVisibility` or a private space's `setSpaceMembers` (to the affected
 non-admin connections only — a client that just lost access holds a subtree it
 must forget, and one that just gained access has never seen the rows, and
@@ -438,10 +416,9 @@ triggers on `tasks` (insert / delete / update of those two columns). It is keyed
 by `task_id` rather than using external content, which costs a little storage and
 removes a coupling to the tasks rowid.
 
-Two storage-only columns are not part of the shared contract: `clickup_id` on
-spaces/lists/tasks/subtasks/comments/users (import idempotency and resolving old
-ClickUp links) and `users.needs_email_update`, which flags placeholder emails —
-read it with `listUsersNeedingEmail()`.
+Two storage-only columns remain in SQLite for live DO backwards compatibility:
+`clickup_id` on spaces/lists/tasks/subtasks/comments/users and
+`users.needs_email_update`, which flags placeholder emails.
 
 `audit` also carries denormalized `actor_user_id` and `api_key_id` columns so
 `getAuditLog` can filter by user, key, action or entity as one indexed query.
