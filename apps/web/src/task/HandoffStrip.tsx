@@ -7,7 +7,7 @@ import { me, setHandoffState, type StoreTask } from "../store/index.js";
 import { isClosed, taskById, userById } from "../shell/data.js";
 import { cn, formatDateTime, formatDue, isOverdue } from "../shell/format.js";
 import { openTask } from "../shell/nav.js";
-import { ChevronDown, Menu, MenuItem } from "../shell/ui.js";
+import { ChevronDown, Menu, MenuItem, PILL, PILL_TONE, type PillTone } from "../shell/ui.js";
 
 export const HANDOFF_STATES: HandoffState[] = ["requested", "working", "needs_input", "done", "declined"];
 
@@ -19,12 +19,12 @@ export const HANDOFF_STATE_LABEL: Record<HandoffState, string> = {
   declined: "Declined",
 };
 
-const PILL: Record<HandoffState, string> = {
-  requested: "bg-surface text-muted ring-1 ring-inset ring-line",
-  working: "bg-accent/10 text-accent",
-  needs_input: "bg-warn/15 text-warn",
-  done: "bg-ok/12 text-ok",
-  declined: "bg-danger-soft text-danger",
+const STATE_TONE: Record<HandoffState, PillTone> = {
+  requested: "outline",
+  working: "accent",
+  needs_input: "warn",
+  done: "ok",
+  declined: "danger",
 };
 
 const DOT: Record<HandoffState, string> = {
@@ -70,7 +70,7 @@ export function HandoffStrip({ task }: { task: StoreTask }) {
   const overdue = task.dueDate !== null && isOverdue(task.dueDate) && !isClosed(task);
 
   return (
-    <div class="mt-3 rounded-lg border border-line bg-raised px-3 py-2 text-[12.5px]">
+    <div class="mt-3 rounded-lg border border-line bg-raised px-3 py-2 text-[13px]">
       <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span class="min-w-0 text-muted">
           From <span class="font-medium text-text">{requester?.name ?? "Unknown"}</span>{" "}
@@ -113,12 +113,12 @@ export function HandoffStrip({ task }: { task: StoreTask }) {
 function StatePill({ task, state, since }: { task: StoreTask; state: HandoffState; since: number }) {
   const options = handoffStatesFor(task, me.value);
   const label = HANDOFF_STATE_LABEL[state];
-  const pill = "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] font-medium";
+  const pill = PILL;
   const title = `Since ${formatDateTime(since)}`;
 
   if (options.length === 0) {
     return (
-      <span class={cn(pill, PILL[state])} title={title}>
+      <span class={cn(pill, PILL_TONE[STATE_TONE[state]])} title={title}>
         <span class="sr-only">Handoff state: </span>
         {label}
       </span>
@@ -134,7 +134,7 @@ function StatePill({ task, state, since }: { task: StoreTask; state: HandoffStat
       width="w-44"
       align="right"
       trigger={() => (
-        <span class={cn(pill, PILL[state], "cursor-pointer")} title={title}>
+        <span class={cn(pill, PILL_TONE[STATE_TONE[state]], "cursor-pointer")} title={title}>
           {label}
           <ChevronDown class="h-3 w-3 opacity-70" />
         </span>
@@ -184,7 +184,7 @@ function ContextLink({ taskId }: { taskId: string }) {
       title={target ? target.title : taskId}
       class={cn(
         "max-w-[18rem] truncate rounded text-left text-accent underline-offset-2 hover:underline",
-        !target && "font-mono text-[11.5px]"
+        !target && "font-mono text-[12px]"
       )}
     >
       {target ? target.title : taskId}

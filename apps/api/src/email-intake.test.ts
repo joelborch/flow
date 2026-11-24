@@ -775,6 +775,7 @@ function makeEnv(dryRun: string | undefined = "true"): Env {
     ASSETS: {} as Env["ASSETS"],
     SEND_EMAIL: { send } as unknown as SendEmail,
     EMAIL_DRY_RUN: dryRun as string,
+    EMAIL_FROM: "flow@mail.acme-ops.com",
     EMAIL_INTAKE_ACK: "true",
     APP_HOSTNAME: "flow.example.com",
     ACCESS_TEAM_DOMAIN: "example.cloudflareaccess.com",
@@ -1029,7 +1030,7 @@ describe("handleEmail — new ticket", () => {
     expect(send).toHaveBeenCalledOnce();
     const sent = send.mock.calls[0]![0];
     expect(sent).toMatchObject({
-      from: DEFAULT_EMAIL_FROM,
+      from: { email: "flow@mail.acme-ops.com", name: DEFAULT_EMAIL_FROM.name },
       to: "jane@example.com",
       replyTo: INTAKE_ADDRESS,
       subject: ACK_SUBJECT,
@@ -1205,6 +1206,20 @@ describe("handleEmail — acknowledgement failures", () => {
     const env = { ...makeEnv("false"), SEND_EMAIL: undefined };
     await expect(run(fakeMessage(PLAIN), env)).resolves.toBeUndefined();
     expect(errors.join("\n")).toContain("SEND_EMAIL binding is missing");
+  });
+
+  it("refuses a live ack when EMAIL_FROM is unset or a placeholder and still completes ticket ingest", async () => {
+    for (const badFrom of [undefined, "flow@mail.example.com"]) {
+      send.mockClear();
+      errors.length = 0;
+      const fake = fakeMessage(PLAIN);
+      const env = { ...makeEnv("false"), EMAIL_FROM: badFrom };
+      await expect(run(fake, env)).resolves.toBeUndefined();
+      expect(ingestEmail).toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+      expect(fake.setReject).not.toHaveBeenCalled();
+      expect(errors.join("\n")).toContain("email intake ack failed");
+    }
   });
 });
 

@@ -84,6 +84,7 @@ import {
   OPEN_HANDOFF_STATES,
   decideHandoffState,
   handoffStateForStatusMove,
+  handoffTurnHolder,
   handoffStatusMove,
 } from "./handoffs.js";
 import { id, token } from "./id.js";
@@ -347,7 +348,7 @@ const HANDOFF_COLUMNS = `handoff_requested_by, handoff_state, handoff_return, ha
   handoff_state_changed_at`;
 
 const TASK_COLUMNS = `id, list_id, title, description, status_id, assignee_id, assigned_by, assigned_at,
-  priority, due_date, start_date, snoozed_until, blocked_note, tags, position,
+  waiting_on, priority, due_date, start_date, snoozed_until, blocked_note, tags, position,
   created_by, created_at, updated_at, closed_at, clickup_id,
   ${HANDOFF_COLUMNS}`;
 
@@ -356,7 +357,7 @@ const TASK_COLUMNS = `id, list_id, title, description, status_id, assignee_id, a
  * collapsed to a boolean in SQL. Keep it in step with `SnapshotTask` in
  * packages/shared/src/events.ts and `toSnapshotTask` in ./rows.ts.
  */
-const SNAPSHOT_TASK_COLUMNS = `id, list_id, title, status_id, assignee_id, assigned_by, assigned_at, priority,
+const SNAPSHOT_TASK_COLUMNS = `id, list_id, title, status_id, assignee_id, assigned_by, assigned_at, waiting_on, priority,
   due_date, tags, position, created_at, updated_at, snoozed_until, blocked_note,
   ${HANDOFF_COLUMNS}, (description != '') AS has_description`;
 
@@ -403,6 +404,7 @@ const TASK_DIFF_KEYS = [
   "assigneeId",
   "assignedBy",
   "assignedAt",
+  "waitingOn",
   "priority",
   "dueDate",
   "startDate",
@@ -926,6 +928,18 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
           this.sendNotification(t, "assigned", facts, rid, actorId, {});
         }
       }
+      // The ball landing on someone tells them, unless the same change also
+      // assigned them (one email, not two) or the task is closed.
+      if ("waitingOn" in data && facts.task.closedAt === null) {
+        const newWaitingOn = (data["waitingOn"] as string | null) ?? null;
+        const alreadyTold = "assigneeId" in data && data["assigneeId"] === newWaitingOn;
+        if (!alreadyTold) {
+          const commentBody = this.turnCommentBody(t, delta.id, actorId);
+          for (const rid of recipientsFor("turn", { assigneeId: null, creatorId: facts.task.createdBy, newWaitingOn }, actorId)) {
+            this.sendNotification(t, "turn", facts, rid, actorId, commentBody === null ? {} : { commentBody });
+          }
+        }
+      }
       if ("statusId" in data) {
         const statusName = getStatus(this.sql, String(data["statusId"]))?.name ?? facts.statusName;
         // Status ids are per-list: a cross-list move from "Done" to "Done" swaps
@@ -948,10 +962,46 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       const facts = this.loadTaskFacts(taskId);
       if (facts === null) return;
       const commentBody = String(data["body"] ?? "");
+      // Whoever this same change passed the turn to reads the comment in their
+      // "Your turn" email, so they aren't sent it twice.
+      const toldByTurn = this.turnEmailRecipient(t, taskId, actorId, facts);
       for (const rid of recipientsFor("comment", { assigneeId: facts.task.assigneeId, creatorId: facts.task.createdBy }, actorId)) {
+        if (rid === toldByTurn) continue;
         this.sendNotification(t, "comment", facts, rid, actorId, { commentBody });
       }
     }
+  }
+
+  /** The actor's latest comment on the task in this turn: the note that came with a pass. */
+  private turnCommentBody(t: Turn, taskId: string, actorId: string): string | null {
+    let body: string | null = null;
+    for (const { delta } of t.entries) {
+      if (delta.entity !== "comment" || delta.op !== "create" || delta.actorUserId !== actorId) continue;
+      const owner = (delta as AutomationDelta).taskId ?? (delta.data?.["taskId"] as string | undefined);
+      if (owner === taskId) body = String(delta.data?.["body"] ?? "");
+    }
+    return body;
+  }
+
+  /**
+   * Who this turn's changes send a "Your turn" email to for the task, or null.
+   * Mirrors the turn branch of notifyForDelta, including the preference gate,
+   * so a comment is only held back from someone who really gets that email.
+   */
+  private turnEmailRecipient(t: Turn, taskId: string, actorId: string, facts: TaskFacts): string | null {
+    if (facts.task.closedAt !== null) return null;
+    let recipient: string | null = null;
+    for (const { delta } of t.entries) {
+      if (delta.entity !== "task" || delta.op !== "update" || delta.id !== taskId) continue;
+      if (delta.actorUserId !== actorId) continue;
+      const data = delta.data ?? {};
+      if (!("waitingOn" in data)) continue;
+      const newWaitingOn = (data["waitingOn"] as string | null) ?? null;
+      if ("assigneeId" in data && data["assigneeId"] === newWaitingOn) continue;
+      recipient = newWaitingOn === actorId ? null : newWaitingOn;
+    }
+    if (recipient === null) return null;
+    return readNotificationPrefs(this.sql, recipient)[PREF_KEY.turn] ? recipient : null;
   }
 
   /**
@@ -2092,6 +2142,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     // Unknown ids used to land in the row unchecked (assignee_id has no FK), so
     // the task silently pointed at nobody. Validate before anything is written.
     requireAssignee(this.sql, input.assigneeId);
+    requireAssignee(this.sql, input.waitingOn, "waitingOn");
     for (const sub of input.subtasks ?? []) requireAssignee(this.sql, sub.assigneeId);
 
     const tags = normalizeTags(input.tags ?? []);
@@ -2107,6 +2158,12 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       assigneeId,
       assignedBy,
       assignedAt: assignedBy === null ? null : t.now,
+      // A closed task is nobody's turn; a new handoff starts on its recipient.
+      waitingOn:
+        status.type === "closed"
+          ? null
+          : (input.waitingOn ??
+            (handoff === null ? null : handoffTurnHolder(handoff.state, assigneeId, handoff.requestedBy))),
       priority: input.priority ?? null,
       dueDate: input.dueDate ?? null,
       startDate: input.startDate ?? null,
@@ -2177,6 +2234,9 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       set("assigned_by", assignedBy);
       set("assigned_at", assignedBy === null ? null : t.now);
     }
+    if (input.waitingOn !== undefined) requireAssignee(this.sql, input.waitingOn, "waitingOn");
+    // Whether the task ends this update closed; the status block below updates it.
+    let endsClosed = before.closedAt !== null;
     if (input.priority !== undefined && (input.priority ?? null) !== before.priority) {
       set("priority", input.priority ?? null);
     }
@@ -2209,10 +2269,43 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
         // Closed-type membership is what drives closedAt, both directions.
         if (status.type === "closed" && before.closedAt === null) set("closed_at", t.now);
         else if (status.type !== "closed" && before.closedAt !== null) set("closed_at", null);
+        endsClosed = status.type === "closed";
         // The task joins the end of its new column.
         set("position", nextTaskPosition(this.sql, before.listId, status.id));
         if (handoff === undefined) handoff = this.impliedHandoff(t, before, status.type === "closed");
       }
+    }
+    // A closed task is nobody's turn: closing clears it, and a turn can't be
+    // set on a closed task, so a reopened task never comes back pointing at
+    // whoever held it last.
+    //
+    // Otherwise an explicit waitingOn wins. Without one, a handoff whose state
+    // or recipient just changed puts the turn where that state says, and
+    // reassigning an ordinary task clears a turn left on someone else, so the
+    // new owner starts with it.
+    const finalAssigneeId = input.assigneeId !== undefined ? (input.assigneeId ?? null) : before.assigneeId;
+    const finalHandoff = handoff ?? before.handoff;
+    const assigneeChanged = finalAssigneeId !== before.assigneeId;
+    const handoffMoved = finalHandoff !== null && finalHandoff.state !== before.handoff?.state;
+    let wantedWaitingOn = before.waitingOn;
+    if (input.waitingOn !== undefined) {
+      wantedWaitingOn = input.waitingOn ?? null;
+    } else if (finalHandoff !== null && (handoffMoved || assigneeChanged)) {
+      wantedWaitingOn = handoffTurnHolder(finalHandoff.state, finalAssigneeId, finalHandoff.requestedBy);
+    } else if (assigneeChanged) {
+      wantedWaitingOn = null;
+    }
+    const nextWaitingOn = endsClosed ? null : wantedWaitingOn;
+    if (nextWaitingOn !== before.waitingOn) set("waiting_on", nextWaitingOn);
+    // A turn note says what the next person needs to do, so it only makes
+    // sense on a change that hands the turn to someone. Checked before any
+    // write, because a throw does not roll back what the turn already wrote.
+    if (input.turnNote !== undefined && (nextWaitingOn === null || nextWaitingOn === before.waitingOn)) {
+      throw new Error(
+        nextWaitingOn === null
+          ? "turnNote needs waitingOn set to a person in the same update (and the task left open)."
+          : `The turn is already on ${nextWaitingOn}, so there is nothing to pass. Use a comment to add a note.`
+      );
     }
     if (handoff !== undefined && JSON.stringify(handoff) !== JSON.stringify(before.handoff)) {
       const [requestedBy, state, returnFormat, context, stateChangedAt] = handoffValues(handoff);
@@ -2239,6 +2332,9 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     // the value used to be; a Delta's data holds changed fields only.
     t.emit("update", "task", after.id, patch, { prev: prevOf(before as unknown as Record<string, unknown>, patch) });
     t.audit(action, after.id, patch);
+    // The note is an ordinary comment, so it shows in the thread for everyone;
+    // notifyForDelta quotes it in the turn email instead of sending a second one.
+    if (input.turnNote !== undefined) this.applyCommentCreate(t, { taskId: after.id, body: input.turnNote });
     return after;
   }
 
@@ -2291,21 +2387,24 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
     if (impliedHandoff !== undefined) {
       const [, state, , , stateChangedAt] = handoffValues(impliedHandoff);
       this.sql.exec(
-        "UPDATE tasks SET handoff_state = ?, handoff_state_changed_at = ? WHERE id = ?",
+        "UPDATE tasks SET handoff_state = ?, handoff_state_changed_at = ?, waiting_on = ? WHERE id = ?",
         state,
         stateChangedAt,
+        handoffTurnHolder(impliedHandoff.state, before.assigneeId, impliedHandoff.requestedBy),
         before.id
       );
     }
 
     this.sql.exec(
-      `UPDATE tasks SET list_id = ?, status_id = ?, position = ?, closed_at = ?, updated_at = ?
+      `UPDATE tasks SET list_id = ?, status_id = ?, position = ?, closed_at = ?, updated_at = ?,
+         waiting_on = CASE WHEN ? = 1 THEN NULL ELSE waiting_on END
        WHERE id = ?`,
       targetListId,
       status.id,
       position,
       closedAt,
       t.now,
+      status.type === "closed" ? 1 : 0,
       before.id
     );
 
@@ -3555,6 +3654,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
             t.now,
             s.id
           );
+          this.sql.exec("UPDATE tasks SET waiting_on = NULL WHERE status_id = ? AND waiting_on IS NOT NULL", s.id);
         } else {
           this.sql.exec(
             "UPDATE tasks SET closed_at = NULL WHERE status_id = ? AND closed_at IS NOT NULL",
@@ -4433,6 +4533,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
             assigneeId,
             assignedBy: null,
             assignedAt: null,
+            waitingOn: null,
             priority: task.priority ?? null,
             dueDate: task.dueDate ?? null,
             startDate: task.startDate ?? null,
@@ -5155,10 +5256,10 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
 
   private insertTaskRow(task: Task): void {
     this.sql.exec(
-      `INSERT INTO tasks (id, list_id, title, description, status_id, assignee_id, assigned_by, assigned_at, priority,
+      `INSERT INTO tasks (id, list_id, title, description, status_id, assignee_id, assigned_by, assigned_at, waiting_on, priority,
          due_date, start_date, snoozed_until, blocked_note, tags, tags_text, position,
          created_by, created_at, updated_at, closed_at, clickup_id, ${HANDOFF_COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       task.id,
       task.listId,
       task.title,
@@ -5167,6 +5268,7 @@ export class Workspace extends DurableObject<Env> implements WorkspaceRpc {
       task.assigneeId,
       task.assignedBy,
       task.assignedAt,
+      task.waitingOn,
       task.priority,
       task.dueDate,
       task.startDate,

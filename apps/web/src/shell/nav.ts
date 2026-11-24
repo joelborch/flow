@@ -5,7 +5,7 @@
 // link, Back, Forward and a card click all end up in the same place. Separate
 // from index.tsx so the sidebar and top bar can import it without a cycle.
 import { computed, signal, type ReadonlySignal, type Signal } from "@preact/signals";
-import { listPath, navigate, route, routeTaskId, withTask } from "../lib/router.js";
+import { MY_WORK_PATH, listPath, navigate, route, routeTaskId, withTask } from "../lib/router.js";
 
 /** The task whose panel is open, straight from the URL. */
 export const openTaskId: ReadonlySignal<string | null> = routeTaskId;
@@ -13,10 +13,11 @@ export const openTaskId: ReadonlySignal<string | null> = routeTaskId;
 export type View = { kind: "my-work" } | { kind: "list"; listId: string | null };
 
 /**
- * My Work is a pinned overlay rather than a route: main.tsx redirects any
- * list-less URL to the first list, so a /my-work path would be bounced.
+ * My Work is a route (/my-work), and main.tsx sends the bare root there, so it
+ * is where Flow opens and where a reload or a reopened tab stays. It used to be
+ * an overlay on top of a list URL, which meant any reload landed on that list.
  */
-const myWorkOpen: Signal<boolean> = signal(false);
+const myWorkOpen: ReadonlySignal<boolean> = computed(() => route.value.myWork);
 
 export const activeView: ReadonlySignal<View> = computed(() =>
   myWorkOpen.value ? { kind: "my-work" } : { kind: "list", listId: route.value.listId }
@@ -28,14 +29,15 @@ export const activeListId: ReadonlySignal<string | null> = computed(() =>
 );
 
 export function openList(spaceId: string, listId: string): void {
-  myWorkOpen.value = false;
   closeDrawer();
-  navigate(listPath(spaceId, listId, route.value.taskId));
+  // Leaving My Work closes whatever task was open on it; within the board the
+  // open task follows along, as before.
+  navigate(listPath(spaceId, listId, route.value.myWork ? null : route.value.taskId));
 }
 
 export function showMyWork(): void {
-  myWorkOpen.value = true;
   closeDrawer();
+  navigate(MY_WORK_PATH);
 }
 
 /**

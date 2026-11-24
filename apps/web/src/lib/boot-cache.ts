@@ -23,7 +23,7 @@ import type { BoardSnapshot, User } from "@flow/shared";
  *     for an unknown id could insert a partial row (no title, listId or
  *     statuses) that then survived every reload.
  */
-export const SCHEMA_STAMP = 3;
+export const SCHEMA_STAMP = 4;
 
 /** Mirrored in index.html. */
 export const BOOT_KEY = "flow.boot";

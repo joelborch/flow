@@ -86,7 +86,7 @@ function TargetNote() {
   const n = targetIds().length;
   if (n < 2) return null;
   return (
-    <p class="px-2 pb-1 pt-1 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-faint">
+    <p class="px-2 pb-1 pt-1 text-[11px] font-semibold uppercase tracking-[0.07em] text-faint">
       {n} tasks
     </p>
   );
@@ -205,7 +205,7 @@ function OptionList({
             </button>
           );
         })}
-        {shown.length === 0 && <p class="px-2 py-2 text-[12.5px] text-faint">Nothing matches.</p>}
+        {shown.length === 0 && <p class="px-2 py-2 text-[13px] text-faint">Nothing matches.</p>}
       </div>
     </div>
   );
@@ -371,6 +371,24 @@ function SelectionBar() {
     <div class="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center pb-3">
       <div class="pointer-events-auto flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1.5 text-[12px] text-muted shadow-lg shadow-black/[0.08]">
         <span class="font-medium text-text tabular-nums">{n} selected</span>
+        {/* The actions are single keys; naming them here saves opening the sheet. */}
+        <span class="hidden items-center gap-2 text-muted sm:flex">
+          <span class="text-faint">·</span>
+          {(
+            [
+              ["S", "status"],
+              ["A", "assignee"],
+              ["P", "priority"],
+              ["D", "due"],
+              ["T", "tags"],
+            ] as const
+          ).map(([key, what]) => (
+            <span key={key} class="inline-flex items-center gap-1">
+              <kbd class="rounded border border-line bg-raised px-1 font-sans text-[11px] font-medium text-text">{key}</kbd>
+              {what}
+            </span>
+          ))}
+        </span>
         <span class="text-faint">·</span>
         <button type="button" onClick={clearSelection} class="text-muted transition-colors hover:text-text">
           Esc to clear
@@ -447,15 +465,15 @@ function CheatSheet() {
         <div class="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
           {KEYMAP.map((g) => (
             <section key={g.group}>
-              <h3 class="mb-1 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-faint">
+              <h3 class="mb-1 text-[11px] font-semibold uppercase tracking-[0.07em] text-faint">
                 {g.group}
               </h3>
               <ul class="space-y-1">
                 {g.rows
                   .filter(([keys]) => keys !== "Q" || canUseQuickAdd(me.value))
                   .map(([keys, what]) => (
-                  <li key={keys} class="flex items-baseline gap-2 text-[12.5px]">
-                    <kbd class="shrink-0 rounded border border-line bg-raised px-1.5 py-px font-sans text-[10.5px] font-medium text-muted">
+                  <li key={keys} class="flex items-baseline gap-2 text-[13px]">
+                    <kbd class="shrink-0 rounded border border-line bg-raised px-1.5 py-px font-sans text-[11px] font-medium text-muted">
                       {keys}
                     </kbd>
                     <span class="min-w-0 flex-1 leading-[1.4] text-muted">{what}</span>

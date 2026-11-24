@@ -38,6 +38,7 @@ function liveEnv(send = vi.fn().mockResolvedValue(undefined), over: Record<strin
     send,
     env: {
       EMAIL_DRY_RUN: "false",
+      EMAIL_FROM: "flow@mail.acme-ops.com",
       APP_HOSTNAME: "flow.example.com",
       EMAIL_INTAKE_DOMAIN: "help.example.com",
       SEND_EMAIL: { send },
@@ -89,7 +90,7 @@ describe("deliverEmailReply", () => {
     expect(send).toHaveBeenCalledTimes(1);
     const message = send.mock.calls[0]![0];
     expect(message).toMatchObject({
-      from: DEFAULT_EMAIL_FROM,
+      from: { email: "flow@mail.acme-ops.com", name: DEFAULT_EMAIL_FROM.name },
       to: "pat@clinic.example",
       replyTo: "support@help.example.com",
       subject: "Re: Printer jammed",
@@ -102,6 +103,18 @@ describe("deliverEmailReply", () => {
     expect(message.html).toContain("https://example.com/page");
     // External shell: nothing links back into Flow.
     expect(message.html).not.toContain("flow.example.com");
+  });
+
+  it("uses EMAIL_REQUESTER_FROM_NAME when configured while keeping EMAIL_FROM", async () => {
+    const { env, send } = liveEnv(undefined, {
+      EMAIL_FROM: "flow@mail.acme-ops.com",
+      EMAIL_FROM_NAME: "Flow",
+      EMAIL_REQUESTER_FROM_NAME: "Acme Support",
+    });
+    await deliverEmailReply(reply(), env);
+    expect(send.mock.calls[0]![0]).toMatchObject({
+      from: { email: "flow@mail.acme-ops.com", name: "Acme Support" },
+    });
   });
 
   it("resends without the threading headers when the binding refuses them", async () => {
@@ -168,6 +181,22 @@ describe("handleSideEffectBatch: email-reply", () => {
     expect(msg.retry).toHaveBeenCalledWith({ delaySeconds: 60 });
     expect(msg.ack).not.toHaveBeenCalled();
     expect(markEmailReply).not.toHaveBeenCalled();
+  });
+
+  it("refuses a live email-reply with a placeholder EMAIL_FROM, logs, marks failed, and acks", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { env, send, markEmailReply } = queueEnv();
+    (env as unknown as { EMAIL_FROM: string }).EMAIL_FROM = "flow@mail.example.com";
+    const msg = fakeMessage(reply());
+    await handleSideEffectBatch(fakeBatch([msg]), env);
+    expect(send).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("side-effects: email-reply failed"),
+      expect.stringContaining("placeholder domain")
+    );
+    expect(markEmailReply).toHaveBeenCalledWith("cm_1", "failed");
+    expect(msg.ack).toHaveBeenCalledOnce();
+    expect(msg.retry).not.toHaveBeenCalled();
   });
 });
 

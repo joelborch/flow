@@ -6,6 +6,7 @@ import type { List, Space, User } from "@flow/shared";
  *  resolveQuickAddDestination below. */
 export const PERSONAL_SPACE_NAME = "Personal";
 export const WORK_INBOX_LIST_NAME = "Inbox";
+export const WORK_INBOX_LIST_NAMES = ["Inbox", "Work Inbox"] as const;
 
 export const quickAddOpen = signal(false);
 
@@ -55,7 +56,10 @@ export function resolveQuickAddDestination(
   if (!space) return null;
 
   const list = lists.find(
-    (l) => l.name === WORK_INBOX_LIST_NAME && l.spaceId === space.id && !l.archived
+    (l) =>
+      WORK_INBOX_LIST_NAMES.includes(l.name as (typeof WORK_INBOX_LIST_NAMES)[number]) &&
+      l.spaceId === space.id &&
+      !l.archived
   );
   if (!list) return null;
 

@@ -4,6 +4,7 @@
 // register as dependencies.
 import { computed, type ReadonlySignal } from "@preact/signals";
 import type { List, Space, Status, Subtask, User } from "@flow/shared";
+import { isSnoozed } from "../lib/fmt.js";
 import {
   listById as listMap, lists, listsBySpace, spaceById as spaceMap, spaces,
   statusById as statusMap, subtasks, tasks, userById as userMap, type StoreTask,
@@ -44,13 +45,18 @@ export function isClosed(task: StoreTask): boolean {
   return statusOfTask(task)?.type === "closed";
 }
 
-/** Assigned to me and still open, ordered by due date then priority. */
+/** Whose turn a task is: `waitingOn` if set, otherwise the assignee. */
+export function ballHolderId(task: Pick<StoreTask, "waitingOn" | "assigneeId">): string | null {
+  return task.waitingOn ?? task.assigneeId;
+}
+
+/** Open tasks where it is my turn (`waitingOn ?? assigneeId === meId`), ordered by due date then priority. */
 export function myOpenTasks(meId: string | null | undefined): StoreTask[] {
   if (!meId) return [];
   const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
   const out: StoreTask[] = [];
   for (const t of tasks.value.values()) {
-    if (t.assigneeId === meId && !isClosed(t)) out.push(t);
+    if (ballHolderId(t) === meId && !isClosed(t)) out.push(t);
   }
   return out.sort((a, b) => {
     const ad = a.dueDate ?? Number.MAX_SAFE_INTEGER;
@@ -100,6 +106,7 @@ export function assignedOutBy(meId: string | null | undefined): AssignedOutItem[
       task.assignedBy === meId &&
       task.assigneeId !== null &&
       task.assigneeId !== meId &&
+      task.waitingOn !== meId &&
       !isClosed(task)
     ) {
       out.push({ kind: "task", task });
@@ -131,6 +138,28 @@ export function assignedOutBy(meId: string | null | undefined): AssignedOutItem[
     const at = a.kind === "task" ? a.task.title : a.subtask.title;
     const bt = b.kind === "task" ? b.task.title : b.subtask.title;
     return at.localeCompare(bt);
+  });
+}
+
+/** Open tasks I own (`assigneeId === meId`) where it is someone else's turn. */
+export function waitingOnOthersTasks(meId: string | null | undefined): StoreTask[] {
+  if (!meId) return [];
+  const out: StoreTask[] = [];
+  for (const task of tasks.value.values()) {
+    if (
+      task.assigneeId === meId &&
+      task.waitingOn != null &&
+      task.waitingOn !== meId &&
+      !isClosed(task)
+    ) {
+      out.push(task);
+    }
+  }
+  return out.sort((a, b) => {
+    const ad = a.dueDate ?? Number.MAX_SAFE_INTEGER;
+    const bd = b.dueDate ?? Number.MAX_SAFE_INTEGER;
+    if (ad !== bd) return ad - bd;
+    return a.title.localeCompare(b.title);
   });
 }
 

@@ -7,7 +7,7 @@ import type {
 } from "@flow/shared";
 import { api, ApiError } from "../lib/api.js";
 import { append } from "../lib/frac.js";
-import { toast } from "../lib/toast.js";
+import { offerUndo, toast } from "../lib/toast.js";
 import { mergeTaskDetail } from "./apply.js";
 import {
   beginPending, comments, endPending, findStatus, flush, getSubtask, listById, listBucket,
@@ -61,6 +61,7 @@ export async function createTask(input: CreateTaskInput): Promise<Task | null> {
     assigneeId: input.assigneeId ?? null,
     assignedBy: input.assigneeId == null ? null : (me.value?.id ?? null),
     assignedAt: input.assigneeId == null ? null : now,
+    waitingOn: input.waitingOn ?? null,
     priority: input.priority ?? null,
     dueDate: input.dueDate ?? null,
     startDate: input.startDate ?? null,
@@ -116,7 +117,63 @@ export async function createTask(input: CreateTaskInput): Promise<Task | null> {
   }
 }
 
-export async function updateTask(input: UpdateTaskInput): Promise<void> {
+/** Fields whose change is offered back as an Undo, with the toast's wording. */
+const UNDO_LABEL: Partial<Record<keyof UpdateTaskInput, string>> = {
+  status: "Status changed",
+  assigneeId: "Assignee changed",
+  waitingOn: "Turn passed",
+  priority: "Priority changed",
+  dueDate: "Due date changed",
+  snoozedUntil: "Snooze changed",
+  tags: "Tags changed",
+};
+
+/**
+ * The update that puts a task back as it was before `input`, or null when
+ * `input` changes nothing worth offering back (typing in the title or the
+ * description has its own undo in the field).
+ */
+export function undoInputFor(prev: StoreTask, input: UpdateTaskInput, prevStatusName: string | null): { input: UpdateTaskInput; label: string } | null {
+  const back: UpdateTaskInput = { taskId: prev.id };
+  const labels: string[] = [];
+  const note = (key: keyof UpdateTaskInput) => labels.push(UNDO_LABEL[key] ?? "Task updated");
+  if (input.status !== undefined && prevStatusName !== null && input.status.toLowerCase() !== prevStatusName.toLowerCase()) {
+    back.status = prevStatusName;
+    // Closing a task clears its turn, so reopening it has to hand the turn back.
+    if (prev.waitingOn !== null) back.waitingOn = prev.waitingOn;
+    note("status");
+  }
+  if (input.assigneeId !== undefined && input.assigneeId !== prev.assigneeId) {
+    back.assigneeId = prev.assigneeId;
+    // Reassigning clears a turn left on someone else; put that back too.
+    back.waitingOn = prev.waitingOn;
+    note("assigneeId");
+  }
+  if (input.waitingOn !== undefined && input.waitingOn !== prev.waitingOn) {
+    back.waitingOn = prev.waitingOn;
+    note("waitingOn");
+  }
+  if (input.priority !== undefined && input.priority !== prev.priority) {
+    back.priority = prev.priority;
+    note("priority");
+  }
+  if (input.dueDate !== undefined && input.dueDate !== prev.dueDate) {
+    back.dueDate = prev.dueDate;
+    note("dueDate");
+  }
+  if (input.snoozedUntil !== undefined && input.snoozedUntil !== prev.snoozedUntil) {
+    back.snoozedUntil = prev.snoozedUntil;
+    note("snoozedUntil");
+  }
+  if (input.tags !== undefined && JSON.stringify(input.tags) !== JSON.stringify(prev.tags)) {
+    back.tags = prev.tags;
+    note("tags");
+  }
+  if (labels.length === 0) return null;
+  return { input: back, label: labels.length === 1 ? labels[0]! : "Task updated" };
+}
+
+export async function updateTask(input: UpdateTaskInput, opts?: { undoable?: boolean }): Promise<void> {
   const prev = taskIndex.get(input.taskId);
   if (!prev) return;
   const list = listById.value.get(prev.listId);
@@ -131,6 +188,7 @@ export async function updateTask(input: UpdateTaskInput): Promise<void> {
     next.assignedBy = input.assigneeId === null ? null : (me.value?.id ?? null);
     next.assignedAt = input.assigneeId === null ? null : next.updatedAt;
   }
+  if (input.waitingOn !== undefined) next.waitingOn = input.waitingOn;
   if (input.priority !== undefined) next.priority = input.priority;
   if (input.dueDate !== undefined) next.dueDate = input.dueDate;
   if (input.startDate !== undefined) next.startDate = input.startDate;
@@ -142,9 +200,19 @@ export async function updateTask(input: UpdateTaskInput): Promise<void> {
   putTask(next);
   flush();
 
+  // Offer the change back, unless this call is itself an undo.
+  let withdraw: (() => void) | null = null;
+  if (opts?.undoable !== false) {
+    const prevStatusName = list?.statuses.find((s) => s.id === prev.statusId)?.name ?? null;
+    const undo = undoInputFor(prev, input, prevStatusName);
+    if (undo) withdraw = offerUndo(undo.label, () => void updateTask(undo.input, { undoable: false }));
+  }
+
   try {
     settleTask(input.taskId, await api.updateTask(input));
   } catch (err) {
+    // The rollback already put it back; an Undo for it would undo nothing.
+    withdraw?.();
     settleTask(input.taskId, null, err);
   }
 }

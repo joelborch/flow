@@ -28,7 +28,7 @@ export function EmailedNote({ comment }: { comment: Comment }) {
         : `Sending to ${comment.emailTo}…`;
   return (
     <div
-      class={`mt-1 flex items-center gap-1 text-[11.5px] ${failed ? "text-danger" : "text-faint"}`}
+      class={`mt-1 flex items-center gap-1 text-[12px] ${failed ? "text-danger" : "text-faint"}`}
       title={failed ? "Delivery gave up. Send the reply again to retry." : undefined}
     >
       <MailIcon class="h-3.5 w-3.5" />
@@ -43,7 +43,7 @@ export function Comments({ comments }: { comments: Comment[] }) {
   return (
     <section>
       <SectionLabel
-        right={rows.length > 0 && <span class="text-[11.5px] font-medium tabular-nums text-faint">{rows.length}</span>}
+        right={rows.length > 0 && <span class="text-[12px] font-medium tabular-nums text-faint">{rows.length}</span>}
       >
         Comments
       </SectionLabel>
@@ -76,7 +76,7 @@ export function Comments({ comments }: { comments: Comment[] }) {
                         agent
                       </span>
                     )}
-                    <span class="text-[11.5px] text-faint" title={formatDateTime(c.createdAt)}>
+                    <span class="text-[12px] text-faint" title={formatDateTime(c.createdAt)}>
                       {relativeTime(c.createdAt)}
                     </span>
                   </div>
@@ -157,7 +157,7 @@ export function CommentComposer({
                 type="button"
                 disabled={sending}
                 onClick={() => void send()}
-                class="ml-auto rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-white transition-colors hover:bg-accent/90 disabled:opacity-50 sm:px-2.5 sm:py-1"
+                class="ml-auto rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-accent/90 disabled:opacity-50 sm:px-2.5 sm:py-1"
               >
                 Comment
               </button>

@@ -1,5 +1,5 @@
 /**
- * The 18 tools named in `MCP_TOOLS`.
+ * The 19 tools named in `MCP_TOOLS`.
  *
  * Every one is a thin wrapper over the same DO RPC method the REST route calls,
  * so a task created over MCP fires exactly the automations a task created in the
@@ -204,7 +204,7 @@ export function registerFlowTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Search tasks",
       description:
-        "Full-text and filtered task search: query (title + description), listId, spaceId, status (an array of status NAMES), assigneeId, tags, dueBefore/dueAfter/updatedAfter in epoch ms, includeClosed, limit and cursor for paging. Rows are concise by default (id, title, status, list, assignee, dueDate, priority); format=detailed adds listId, space, assigneeId, tags and updatedAt.",
+        "Full-text and filtered task search: query (title + description), listId, spaceId, status (an array of status NAMES), assigneeId (who owns it), turnOf (whose move it is: the person the turn was passed to, otherwise the assignee), tags, dueBefore/dueAfter/updatedAfter in epoch ms, includeClosed, limit and cursor for paging. Rows are concise by default (id, title, status, list, assignee, turn, dueDate, priority); format=detailed adds listId, space, assigneeId, tags and updatedAt.",
       inputSchema: SearchTasksArgs.shape,
       outputSchema: SearchTasksOut.shape,
       annotations: READ,
@@ -267,17 +267,17 @@ export function registerFlowTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "List my work",
       description:
-        "Open tasks assigned to you (or to assigneeId), grouped into overdue / today / thisWeek / later / noDate buckets; pass includeClosed to include finished work. Returns 50 rows by default — page with cursor for more — and concise rows unless format=detailed.",
+        "Open tasks assigned to you (or to assigneeId), or with scope=turn the tasks whose turn it is yours right now (ones passed to you, minus your own that are waiting on someone else), grouped into overdue / today / thisWeek / later / noDate buckets; pass includeClosed to include finished work. Returns 50 rows by default — page with cursor for more — and concise rows unless format=detailed.",
       inputSchema: ListMyWorkArgs.shape,
       outputSchema: ListMyWorkOut.shape,
       annotations: READ,
     },
-    ({ assigneeId, includeClosed, limit, cursor, format }) =>
+    ({ assigneeId, scope, includeClosed, limit, cursor, format }) =>
       guard(async () => {
         const target = assigneeId ?? ctx.auth.user.id;
         const [result, names] = await Promise.all([
           ctx.ws.searchTasks(
-            { assigneeId: target, includeClosed, limit, ...(cursor === undefined ? {} : { cursor }) },
+            { ...(scope === "turn" ? { turnOf: target } : { assigneeId: target }), includeClosed, limit, ...(cursor === undefined ? {} : { cursor }) },
             ctx.actor
           ),
           ctx.names(),
@@ -380,7 +380,7 @@ export function registerFlowTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Create task",
       description:
-        "Create one task in listId: title plus optional description (markdown), status NAME (defaults to the list's open status), assigneeId, priority, dueDate/startDate in epoch ms, tags and inline subtasks.",
+        "Create one task in listId: title plus optional description (markdown), status NAME (defaults to the list's open status), assigneeId, waitingOn (user id whose turn it is, when that isn't the assignee), priority, dueDate/startDate in epoch ms, tags and inline subtasks.",
       inputSchema: CreateTaskArgs.shape,
       outputSchema: CreateTaskOut.shape,
       annotations: WRITE,
@@ -400,7 +400,7 @@ export function registerFlowTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Update task",
       description:
-        "Change fields on one taskId — title, description, status NAME, assigneeId, priority, dueDate/startDate, tags, snoozedUntil (epoch ms; hides the task from the board until then, or null to wake it now — waking never changes the status) and blockedNote (what it is waiting on, 200 chars); omitted fields are left alone and null clears a nullable field.",
+        "Change fields on one taskId — title, description, status NAME, assigneeId, waitingOn (pass the turn: the user id whose move it is, without changing the owner; null clears waitingOn without sending a turn email — to hand the turn back with an email or turnNote, pass that person's user id) with optional turnNote (what you need from them; posted as a comment and quoted in their email), priority, dueDate/startDate, tags, snoozedUntil (epoch ms; hides the task from the board until then, or null to wake it now — waking never changes the status) and blockedNote (what outside the team it is blocked on, such as a client reply, 200 chars; for a teammate use waitingOn); omitted fields are left alone and null clears a nullable field.",
       inputSchema: UpdateTaskArgs.shape,
       outputSchema: UpdateTaskOut.shape,
       annotations: WRITE_IDEMPOTENT,
@@ -666,7 +666,7 @@ export function registerFlowTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Query with SQL",
       description:
-        "Answer a cross-cutting question in one call with a single read-only SQLite SELECT (or WITH … SELECT). Prefer it over chains of search/get calls when a question spans lists, people or dates. Only these views exist: tasks_v (id, title, description, list_id, list_name, space_id, space_name, status, status_type open|custom|closed, assignee_id, assignee_name, assignee_email, priority, due_date ms, due_on YYYY-MM-DD, start_date, tags JSON, tags_text '|a|b|' for LIKE '%|tag|%', snoozed_until, blocked_note, closed_at, is_closed, assigned_by, assigned_at, handoff_state, handoff_requested_by, created_by, created_at, updated_at, subtask_count, subtasks_done), subtasks_v (id, task_id, task_title, title, done, note, assignee_id, assignee_name, due_date, due_on, assigned_by, created_at), comments_v (id, task_id, author_id, author_name, body, via, email_to, email_status, created_at), lists_v (id, name, space_id, space_name, archived), spaces_v (id, name, visibility, archived), statuses_v (id, list_id, name, type, position), users_v (id, name, email, role, deactivated), space_members_v, attachments_v. Times are epoch ms; now is strftime('%s','now')*1000. Results are capped at maxRows (truncated says so). The views hold only the spaces you can see: every space for an owner/admin, your visible spaces for a member, who is also capped at 200 rows and 30 queries a minute. One query holds the whole workspace while it runs, so filter and LIMIT rather than scanning everything.",
+        "Answer a cross-cutting question in one call with a single read-only SQLite SELECT (or WITH … SELECT). Prefer it over chains of search/get calls when a question spans lists, people or dates. Only these views exist: tasks_v (id, title, description, list_id, list_name, space_id, space_name, status, status_type open|custom|closed, assignee_id, assignee_name, assignee_email, priority, due_date ms, due_on YYYY-MM-DD, start_date, tags JSON, tags_text '|a|b|' for LIKE '%|tag|%', snoozed_until, blocked_note, closed_at, is_closed, assigned_by, assigned_at, waiting_on, waiting_on_name, turn_user_id, turn_user_name (whose move it is: waiting_on if set, else the assignee), handoff_state, handoff_requested_by, created_by, created_at, updated_at, subtask_count, subtasks_done), subtasks_v (id, task_id, task_title, title, done, note, assignee_id, assignee_name, due_date, due_on, assigned_by, created_at), comments_v (id, task_id, author_id, author_name, body, via, email_to, email_status, created_at), lists_v (id, name, space_id, space_name, archived), spaces_v (id, name, visibility, archived), statuses_v (id, list_id, name, type, position), users_v (id, name, email, role, deactivated), space_members_v, attachments_v. Times are epoch ms; now is strftime('%s','now')*1000. Results are capped at maxRows (truncated says so). The views hold only the spaces you can see: every space for an owner/admin, your visible spaces for a member, who is also capped at 200 rows and 30 queries a minute. One query holds the whole workspace while it runs, so filter and LIMIT rather than scanning everything.",
       inputSchema: QueryArgs.shape,
       outputSchema: QueryOut.shape,
       annotations: READ,

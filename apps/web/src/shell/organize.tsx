@@ -79,7 +79,7 @@ function StatusChips({ statuses }: { statuses: StatusSpec[] }) {
       {statuses.map((s) => (
         <span
           key={s.name}
-          class="inline-flex items-center gap-1 rounded border border-line px-1.5 py-[1px] text-[10.5px] text-muted"
+          class="inline-flex items-center gap-1 rounded border border-line px-1.5 py-[1px] text-[11px] text-muted"
         >
           <span class="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: s.color }} />
           {s.name}
@@ -261,7 +261,7 @@ export function NewSpaceComposer() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        class="flex w-full items-center gap-2 rounded-lg px-2 py-[6px] text-[12.5px] text-muted transition-colors hover:bg-raised hover:text-text"
+        class="flex w-full items-center gap-2 rounded-lg px-2 py-[6px] text-[13px] text-muted transition-colors hover:bg-raised hover:text-text"
       >
         <Plus class="h-3.5 w-3.5 text-faint" />
         <span class="min-w-0 flex-1 truncate text-left">New space</span>
@@ -388,7 +388,7 @@ function NewListForm({ spaceId, onClose }: { spaceId: string; onClose: () => voi
         </div>
 
         <div class="max-h-[46vh] overflow-y-auto px-2 py-2">
-          <p class="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-faint">
+          <p class="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-faint">
             Statuses
           </p>
           <StatusSetChoice
@@ -412,7 +412,7 @@ function NewListForm({ spaceId, onClose }: { spaceId: string; onClose: () => voi
           <button
             type="button"
             onClick={onClose}
-            class="rounded-lg px-2.5 py-1.5 text-[12.5px] text-muted transition-colors hover:bg-raised hover:text-text"
+            class="rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-raised hover:text-text"
           >
             Cancel
           </button>
@@ -420,7 +420,7 @@ function NewListForm({ spaceId, onClose }: { spaceId: string; onClose: () => voi
             type="button"
             disabled={busy}
             onClick={() => void submit()}
-            class="rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            class="rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             Create list
           </button>

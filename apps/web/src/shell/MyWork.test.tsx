@@ -13,7 +13,7 @@ import {
   users,
   type StoreTask,
 } from "../store/state.js";
-import { MyWork } from "./MyWork.js";
+import { MyWork, myWorkKey } from "./MyWork.js";
 
 const AVERY: User = {
   id: "us_avery",
@@ -64,6 +64,7 @@ function delegatedTask(index: number): StoreTask {
     assigneeId: BLAKE.id,
     assignedBy: AVERY.id,
     assignedAt: now - index,
+    waitingOn: null,
     priority: null,
     dueDate: now + index * 86_400_000,
     snoozedUntil: null,
@@ -100,20 +101,21 @@ afterEach(() => {
   me.value = null;
 });
 
-describe("My Work assigned-out rail", () => {
-  it("starts collapsed, then shows five delegated items and expands the rest", () => {
+describe("My Work With others rail", () => {
+  it("starts collapsed, then shows five items across Delegated and Their turn and expands the rest", () => {
     for (let i = 1; i <= 6; i++) putTask(delegatedTask(i));
     flush();
     act(() => render(<MyWork />, root));
 
     const aside = root.querySelector("aside");
-    expect(aside?.textContent).toContain("Assigned out");
+    expect(aside?.textContent).toContain("With others");
     expect(aside?.querySelectorAll("li")).toHaveLength(0);
 
     const header = aside?.querySelector<HTMLButtonElement>('button[aria-expanded="false"]');
     expect(header).not.toBeNull();
     act(() => header?.click());
     expect(header?.getAttribute("aria-expanded")).toBe("true");
+    expect(aside?.textContent).toContain("Delegated");
     expect(aside?.textContent).toContain("Blake Rivers");
     expect(aside?.querySelectorAll("li")).toHaveLength(5);
 
@@ -124,5 +126,73 @@ describe("My Work assigned-out rail", () => {
     act(() => viewAll?.click());
     expect(aside?.querySelectorAll("li")).toHaveLength(6);
     expect(aside?.textContent).toContain("Show less");
+  });
+
+  it("shows both Delegated and Their turn subgroups and renders my-turn tasks in main buckets with owner chip", () => {
+    const now = Date.now();
+    putTask({
+      ...delegatedTask(1),
+      id: "tk_delegated",
+      title: "Delegated to Blake",
+      assigneeId: BLAKE.id,
+      assignedBy: AVERY.id,
+      waitingOn: null,
+    });
+    putTask({
+      ...delegatedTask(2),
+      id: "tk_waiting",
+      title: "My task waiting on Blake",
+      assigneeId: AVERY.id,
+      assignedBy: AVERY.id,
+      waitingOn: BLAKE.id,
+    });
+    putTask({
+      ...delegatedTask(3),
+      id: "tk_my_turn",
+      title: "Blake task handed to me",
+      assigneeId: BLAKE.id,
+      assignedBy: AVERY.id,
+      waitingOn: AVERY.id,
+      dueDate: now,
+    });
+    flush();
+    act(() => render(<MyWork />, root));
+
+    const main = root.querySelector("main");
+    expect(main?.textContent).toContain("Blake task handed to me");
+    expect(main?.textContent).toContain("Blake");
+    expect(main?.textContent).not.toContain("My task waiting on Blake");
+
+    const aside = root.querySelector("aside");
+    const header = aside?.querySelector<HTMLButtonElement>('button[aria-expanded="false"]');
+    act(() => header?.click());
+    expect(aside?.textContent).toContain("Delegated");
+    expect(aside?.textContent).toContain("Their turn");
+    expect(aside?.textContent).toContain("Delegated to Blake");
+    expect(aside?.textContent).toContain("My task waiting on Blake");
+    expect(aside?.textContent).not.toContain("Blake task handed to me");
+  });
+});
+
+describe("myWorkKey", () => {
+  const key = (k: string, extra: Partial<KeyboardEvent> = {}) => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, ...extra }) as KeyboardEvent;
+  const rows = [{} as HTMLElement, {} as HTMLElement];
+
+  it("moves with J/K and the arrows, and starts a task with N", () => {
+    expect(myWorkKey(key("j"), rows, null)).toBe("next");
+    expect(myWorkKey(key("ArrowDown"), rows, null)).toBe("next");
+    expect(myWorkKey(key("k"), rows, rows[1]!)).toBe("prev");
+    expect(myWorkKey(key("ArrowUp"), rows, rows[1]!)).toBe("prev");
+    expect(myWorkKey(key("N"), rows, null)).toBe("new");
+  });
+
+  it("enters the list from the top when nothing is focused, whichever way you press", () => {
+    expect(myWorkKey(key("k"), rows, null)).toBe("next");
+  });
+
+  it("leaves browser shortcuts and an empty list alone", () => {
+    expect(myWorkKey(key("j", { metaKey: true }), rows, null)).toBeNull();
+    expect(myWorkKey(key("j"), [], null)).toBeNull();
+    expect(myWorkKey(key("x"), rows, null)).toBeNull();
   });
 });

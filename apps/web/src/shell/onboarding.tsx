@@ -13,9 +13,9 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import { APP_ORIGIN, settingsApi, type CreatedApiKey } from "../lib/api.js";
-import { DEMO } from "../lib/demo.js";
 import { Button, CopyBlock, ErrorNote, errorMessage } from "../settings/ui.js";
 import { me } from "../store/index.js";
+import { DEMO } from "../lib/demo.js";
 import { canUseQuickAdd } from "./quick-add.js";
 import { X } from "./ui.js";
 
@@ -76,7 +76,7 @@ function Step({
 }) {
   return (
     <section class="flex gap-3 border-b border-line px-4 py-3.5 last:border-b-0 sm:px-5">
-      <span class="mt-[1px] inline-flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded-full bg-accent-soft text-[11.5px] font-semibold text-accent">
+      <span class="mt-[1px] inline-flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded-full bg-accent-soft text-[12px] font-semibold text-accent">
         {n}
       </span>
       <div class="min-w-0 flex-1 space-y-2">
@@ -89,7 +89,7 @@ function Step({
 
 function Key({ children }: { children: ComponentChildren }) {
   return (
-    <kbd class="rounded-[5px] border border-line bg-raised px-1.5 py-0.5 font-sans text-[11.5px] font-medium text-text">
+    <kbd class="rounded-md border border-line bg-raised px-1.5 py-0.5 font-sans text-[12px] font-medium text-text">
       {children}
     </kbd>
   );
@@ -123,12 +123,12 @@ function ConnectAgent() {
   if (!created) {
     return (
       <>
-        <p class="text-[12.5px] leading-relaxed text-muted">
+        <p class="text-[13px] leading-relaxed text-muted">
           Mint a key that acts as you, then paste the command below into your terminal. Anything the
           agent does shows up as your work, with the key recorded beside it.
         </p>
         {error && <ErrorNote message={error} />}
-        <Button tone="primary" disabled={busy} onClick={() => void create()}>
+        <Button disabled={busy} onClick={() => void create()}>
           {busy ? "Creating…" : error ? "Try again" : "Create my API key"}
         </Button>
       </>
@@ -196,8 +196,8 @@ export function Onboarding() {
         <header class="flex items-start gap-3 border-b border-line px-4 py-3.5 sm:px-5">
           <div class="min-w-0 flex-1">
             <h2 class="text-[15px] font-semibold tracking-[-0.01em] text-text">Welcome to Flow</h2>
-            <p class="mt-0.5 text-[12.5px] leading-relaxed text-muted">
-              Your workspace, minus the ceremony. Three things worth knowing before you start.
+            <p class="mt-0.5 text-[13px] leading-relaxed text-muted">
+              Three things worth knowing before you start. You can reopen this from the sidebar.
             </p>
           </div>
           <button
@@ -210,8 +210,23 @@ export function Onboarding() {
           </button>
         </header>
 
-        <Step n={1} title="The keyboard is the fast path">
-          <ul class="space-y-1 text-[12.5px] leading-relaxed text-muted">
+        {/* Ordered by who needs what: everyone needs to know where their work
+            is and what "your turn" means; the keyboard is next; connecting an
+            agent is last, since many teammates never will. */}
+        <Step n={1} title="Your work is on My Work">
+          <p class="text-[13px] leading-relaxed text-muted">
+            Flow opens on <span class="font-medium text-text">My Work</span>: every task that is yours to
+            move right now, across every list.
+          </p>
+          <p class="text-[13px] leading-relaxed text-muted">
+            A task has an owner and a <span class="font-medium text-text">turn</span>. Pass the turn when
+            you need something from a teammate, and they pass it back. The owner never changes, and
+            "Your turn" always means the next move is yours.
+          </p>
+        </Step>
+
+        <Step n={2} title="The keyboard is the fast path">
+          <ul class="space-y-1 text-[13px] leading-relaxed text-muted">
             <li>
               <Key>⌘K</Key> <span class="ml-1">jump to any task, list or action.</span>
             </li>
@@ -219,7 +234,10 @@ export function Onboarding() {
               <Key>?</Key> <span class="ml-1">every shortcut on the board.</span>
             </li>
             <li>
-              <Key>N</Key> <span class="ml-1">new task, right where you are.</span>
+              <Key>N</Key> <span class="ml-1">new task in the board column you're on.</span>
+            </li>
+            <li>
+              <Key>J</Key> <Key>K</Key> <span class="ml-1">move through My Work and the board.</span>
             </li>
             {canUseQuickAdd(me.value) && (
               <li>
@@ -229,22 +247,11 @@ export function Onboarding() {
           </ul>
         </Step>
 
-        <Step n={2} title="Connect your AI agent">
+        <Step n={3} title="Connect an AI agent, if you use one">
           <ConnectAgent />
         </Step>
 
-        <Step n={3} title="Your work lives here">
-          <p class="text-[12.5px] leading-relaxed text-muted">
-            <span class="font-medium text-text">My Work</span> is everything assigned to you across
-            every list, and the sidebar's <span class="font-medium text-text">Recent</span> tab is
-            whatever you touched last.
-          </p>
-        </Step>
-
         <footer class="mt-auto flex items-center justify-end gap-2 border-t border-line px-4 py-3 sm:px-5">
-          <Button tone="ghost" onClick={dismissOnboarding}>
-            Skip
-          </Button>
           <Button tone="primary" onClick={dismissOnboarding}>
             Start using Flow
           </Button>

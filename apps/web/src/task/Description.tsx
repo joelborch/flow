@@ -55,7 +55,7 @@ export function Description({ task }: { task: StoreTask }) {
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={onDoneClick}
-                class="rounded-md px-1.5 py-0.5 text-[11.5px] font-medium normal-case tracking-normal text-muted hover:bg-bg hover:text-text"
+                class="rounded-md px-1.5 py-0.5 text-[12px] font-medium normal-case tracking-normal text-muted hover:bg-bg hover:text-text"
               >
                 Done
               </button>
@@ -65,7 +65,7 @@ export function Description({ task }: { task: StoreTask }) {
               <button
                 type="button"
                 onClick={() => setEditing(true)}
-                class="rounded-md px-1.5 py-0.5 text-[11.5px] font-medium normal-case tracking-normal text-muted hover:bg-bg hover:text-text"
+                class="rounded-md px-1.5 py-0.5 text-[12px] font-medium normal-case tracking-normal text-muted hover:bg-bg hover:text-text"
               >
                 Edit
               </button>

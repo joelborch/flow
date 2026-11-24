@@ -25,6 +25,7 @@
 // survives all 5 flow-side-effects retries lands in flow-dlq, handled by
 // handleDeadLetterBatch: log, record, ack — no further retry queue.
 
+import { isPlaceholderEmail } from "@flow/shared/placeholder-email";
 import type { SideEffectPayload } from "@flow/core/automation";
 import type { WebhookPayload } from "@flow/shared";
 import {
@@ -41,6 +42,33 @@ export const DEFAULT_EMAIL_FROM = { email: "flow@mail.example.com", name: "Flow"
 export const WEBHOOK_TIMEOUT_MS = 7_000;
 export const SIGNATURE_HEADER = "X-Flow-Signature";
 
+export { isPlaceholderEmail };
+
+export class EmailConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EmailConfigError";
+  }
+}
+
+/**
+ * Refuse an individual live send (`EMAIL_DRY_RUN === "false"`) when `EMAIL_FROM`
+ * is unset or uses a placeholder domain. No-op when dry-run is on; Access vars
+ * are intentionally ignored and `EMAIL_REQUESTER_FROM_NAME` stays optional.
+ */
+export function assertLiveEmailSender(env: Pick<SideEffectEnv, "EMAIL_DRY_RUN" | "EMAIL_FROM">): void {
+  if (env.EMAIL_DRY_RUN !== "false") return;
+  const sender = env.EMAIL_FROM?.trim() ?? "";
+  if (!sender) {
+    throw new EmailConfigError("EMAIL_DRY_RUN is off but EMAIL_FROM is not set");
+  }
+  if (isPlaceholderEmail(sender)) {
+    throw new EmailConfigError(
+      `EMAIL_DRY_RUN is off but EMAIL_FROM "${sender}" uses a placeholder domain`
+    );
+  }
+}
+
 /**
  * Structural, so apps/api's Env (EMAIL_DRY_RUN/APP_HOSTNAME plus the DO, R2 and
  * Queue bindings) is assignable without either side importing the other.
@@ -51,6 +79,7 @@ export interface SideEffectEnv {
   EMAIL_FROM?: string;
   EMAIL_FROM_NAME?: string;
   EMAIL_BRAND_NAME?: string;
+  EMAIL_REQUESTER_FROM_NAME?: string;
   /** Reply-To for an emailed comment: `<alias>@EMAIL_INTAKE_DOMAIN`, back onto the ticket. */
   EMAIL_INTAKE_DOMAIN?: string;
   SEND_EMAIL?: SendEmail;
@@ -59,7 +88,7 @@ export interface SideEffectEnv {
 /** Sender identity from EMAIL_FROM / EMAIL_FROM_NAME vars, with safe fallbacks. */
 export function emailFrom(env: SideEffectEnv): { email: string; name: string } {
   return {
-    email: env.EMAIL_FROM || DEFAULT_EMAIL_FROM.email,
+    email: env.EMAIL_FROM?.trim() || DEFAULT_EMAIL_FROM.email,
     name: env.EMAIL_FROM_NAME || DEFAULT_EMAIL_FROM.name,
   };
 }
@@ -67,6 +96,11 @@ export function emailFrom(env: SideEffectEnv): { email: string; name: string } {
 /** Wordmark for the branded email header: EMAIL_BRAND_NAME, else EMAIL_FROM_NAME, else "Flow". */
 export function emailBrandName(env: SideEffectEnv): string {
   return env.EMAIL_BRAND_NAME || env.EMAIL_FROM_NAME || "Flow";
+}
+
+/** Display name for requester-facing mail: EMAIL_REQUESTER_FROM_NAME, else emailBrandName. */
+export function requesterFromName(env: SideEffectEnv): string {
+  return env.EMAIL_REQUESTER_FROM_NAME || emailBrandName(env);
 }
 
 export async function handleSideEffectBatch(batch: MessageBatch, env: Env): Promise<void> {
@@ -118,6 +152,16 @@ export async function handleSideEffectBatch(batch: MessageBatch, env: Env): Prom
 
       if (payload.kind === "gleap-screenshot") {
         msg.retry({ delaySeconds: gleapRetryDelay(msg.attempts) });
+        continue;
+      }
+
+      if (err instanceof EmailConfigError) {
+        if (payload.kind === "email-reply") {
+          await reportEmailReply(env, payload.commentId, "failed");
+        } else if (payload.kind === "email") {
+          await recordPermanentFailure(env, payload, err);
+        }
+        msg.ack();
         continue;
       }
 
@@ -409,6 +453,7 @@ export async function deliverEmail(
     return;
   }
 
+  assertLiveEmailSender(env);
   const binding = env.SEND_EMAIL;
   if (!binding) {
     throw new Error(
@@ -442,8 +487,9 @@ export async function deliverEmailReply(
   const domain = env.EMAIL_INTAKE_DOMAIN;
   if (!domain) throw new Error("EMAIL_INTAKE_DOMAIN is not set, so a reply would have no address to come back to");
   const replyTo = `${payload.alias}@${domain}`;
-  // Same sender as the intake acknowledgement: EMAIL_FROM / EMAIL_FROM_NAME.
-  const from = emailFrom(env);
+  // Same address as automation email, with requester-facing display name when set.
+  const baseFrom = emailFrom(env);
+  const from = { email: baseFrom.email, name: requesterFromName(env) };
   const html = renderEmailHtml(payload.body, {
     // External shell: clients can't sign in to Flow, so nothing links to it.
     audience: "external",
@@ -473,6 +519,7 @@ export async function deliverEmailReply(
     return;
   }
 
+  assertLiveEmailSender(env);
   const binding = env.SEND_EMAIL;
   if (!binding) {
     throw new Error('EMAIL_DRY_RUN is off but the SEND_EMAIL binding is missing from wrangler.jsonc');

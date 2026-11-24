@@ -24,6 +24,7 @@ const sampleTask: StoreTask = {
   assigneeId: null,
   assignedBy: null,
   assignedAt: null,
+  waitingOn: null,
   dueDate: null,
   startDate: null,
   snoozedUntil: null,

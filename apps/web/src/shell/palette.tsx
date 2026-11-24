@@ -473,7 +473,7 @@ function Palette() {
             onKeyDown={onKeyDown}
             class="min-w-0 flex-1 bg-transparent text-[14px] text-text outline-none placeholder:text-faint focus-visible:outline-hidden!"
           />
-          <kbd class="hidden shrink-0 rounded border border-line bg-raised px-1.5 py-px font-sans text-[10px] font-medium text-faint sm:block">
+          <kbd class="hidden shrink-0 rounded border border-line bg-raised px-1.5 py-px font-sans text-[11px] font-medium text-faint sm:block">
             esc
           </kbd>
         </div>
@@ -485,7 +485,7 @@ function Palette() {
           class="scroll-y max-h-[52vh] min-h-0 overflow-y-auto p-1.5"
         >
           {items.length === 0 && (
-            <p class="px-3 py-6 text-center text-[12.5px] text-faint">
+            <p class="px-3 py-6 text-center text-[13px] text-faint">
               Nothing matches “{query.trim()}”.
             </p>
           )}
@@ -498,7 +498,7 @@ function Palette() {
                 {header && (
                   <p
                     class={cn(
-                      "px-2 pb-1 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-faint",
+                      "px-2 pb-1 text-[11px] font-semibold uppercase tracking-[0.07em] text-faint",
                       i === 0 ? "pt-1" : "pt-2.5"
                     )}
                   >
@@ -525,19 +525,19 @@ function Palette() {
                   </span>
                   <span
                     class={cn(
-                      "min-w-0 flex-1 truncate text-[13.5px]",
+                      "min-w-0 flex-1 truncate text-[14px]",
                       on ? "font-medium text-text" : "text-text"
                     )}
                   >
                     {item.label}
                   </span>
                   {item.badge && (
-                    <span class="shrink-0 rounded border border-line px-1 text-[10px] uppercase tracking-wide text-faint">
+                    <span class="shrink-0 rounded border border-line px-1 text-[11px] uppercase tracking-[0.07em] text-faint">
                       {item.badge}
                     </span>
                   )}
                   {item.hint && (
-                    <span class="hidden max-w-[42%] shrink truncate text-[11.5px] text-faint sm:block">
+                    <span class="hidden max-w-[42%] shrink truncate text-[12px] text-faint sm:block">
                       {item.hint}
                     </span>
                   )}
@@ -561,7 +561,7 @@ function Palette() {
 function Hint({ keys, children }: { keys: string; children: string }) {
   return (
     <span class="flex items-center gap-1">
-      <kbd class="rounded border border-line bg-surface px-1 py-px font-sans text-[10px] font-medium text-faint">
+      <kbd class="rounded border border-line bg-surface px-1 py-px font-sans text-[11px] font-medium text-faint">
         {keys}
       </kbd>
       {children}
@@ -583,7 +583,7 @@ export function PaletteTrigger() {
     >
       <Search class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint" />
       <span class="truncate text-[13px] text-faint">Search tasks</span>
-      <kbd class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-line bg-raised px-1 py-px font-sans text-[10px] font-medium text-faint">
+      <kbd class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-line bg-raised px-1 py-px font-sans text-[11px] font-medium text-faint">
         ⌘K
       </kbd>
     </button>

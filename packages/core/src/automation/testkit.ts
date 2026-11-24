@@ -31,6 +31,7 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     assigneeId: null,
     assignedBy: null,
     assignedAt: null,
+    waitingOn: null,
     priority: null,
     dueDate: null,
     startDate: null,

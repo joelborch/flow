@@ -1,6 +1,6 @@
 // Everything assigned to me across every list, grouped
 // by when it's due — the view that answers "what am I doing today".
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { isSnoozed, snoozeUntilLabel } from "../lib/fmt.js";
 import { titleLink } from "../lib/title-link.js";
 import type { StoreTask } from "../store/index.js";
@@ -13,13 +13,15 @@ import {
   spaceOfList,
   statusOfTask,
   userById,
+  waitingOnOthersTasks,
   type AssignedOutItem,
   type MyOpenSubtask,
 } from "./data.js";
 import { cn, formatDue, startOfDay, today } from "./format.js";
 import { openTask } from "./nav.js";
+import { canUseQuickAdd, openQuickAdd } from "./quick-add.js";
 import {
-  Avatar, ChevronDown, ChevronRight, NoteLines, PriorityFlag, StatusDot, TitleLinkIcon,
+  Avatar, ChevronDown, ChevronRight, NoteLines, PriorityFlag, StatusDot, TitleLinkIcon, PILL_SM, PILL_TONE,
 } from "./ui.js";
 
 const DAY = 86_400_000;
@@ -87,20 +89,23 @@ function bucketize(items: WorkItem[]): Bucket[] {
   return buckets.filter((b) => b.items.length > 0);
 }
 
-function TaskRow({ task }: { task: StoreTask }) {
+function TaskRow({ task, meId }: { task: StoreTask; meId?: string }) {
   const status = statusOfTask(task);
   const list = listById(task.listId);
   const space = spaceOfList(task.listId);
   const snoozed = isSnoozed(task.snoozedUntil);
   const overdue = !snoozed && task.dueDate !== null && startOfDay(task.dueDate) < today();
   const link = titleLink(task.title);
+  const fromOther = meId !== undefined && task.assigneeId !== meId;
+  const owner = fromOther ? userById(task.assigneeId) : undefined;
 
   return (
     <li>
       <button
         type="button"
         onClick={() => openTask(task.id)}
-        class="group flex w-full items-center gap-2.5 border-b border-line px-2 py-2.5 text-left transition-colors last:border-b-0 hover:bg-raised sm:gap-3"
+        data-mw-row
+        class="group flex w-full items-center gap-2.5 border-b border-line px-2 py-2.5 text-left transition-colors last:border-b-0 hover:bg-raised focus-visible:bg-raised sm:gap-3"
       >
         {status ? <StatusDot color={status.color} /> : <span class="h-2.5 w-2.5" />}
 
@@ -108,18 +113,30 @@ function TaskRow({ task }: { task: StoreTask }) {
             one, and the breadcrumb is the only one allowed to shrink below its
             content — so a narrow window eats "Space / List" long before it
             starts clipping the thing the row is actually about. */}
-        <span class="min-w-0 flex-[3_1_0%] truncate text-[13.5px] text-text group-hover:text-text">
+        <span class="min-w-0 flex-[3_1_0%] truncate text-[14px] text-text group-hover:text-text">
           {task.title}
         </span>
         {link ? <TitleLinkIcon url={link} /> : null}
 
         {task.priority && <PriorityFlag priority={task.priority} class="shrink-0" />}
 
+        {fromOther ? (
+          <span
+            class={cn(PILL_SM, PILL_TONE.accent)}
+            title={owner ? `${owner.name}'s task — your turn` : "Unassigned — your turn"}
+          >
+            {/* The words carry it on a phone; the avatar joins from sm up. */}
+            {owner ? <span class="hidden sm:inline-flex"><Avatar user={owner} size="xs" /></span> : null}
+            <span class="max-w-[88px] truncate">
+              {owner ? `for ${owner.name.split(" ")[0] ?? owner.name}` : "Your turn"}
+            </span>
+          </span>
+        ) : null}
+
         <span
-          class="hidden min-w-0 max-w-[170px] flex-[1_1_0%] truncate text-right text-[12px] text-faint md:block"
+          class="hidden min-w-0 max-w-[280px] flex-[0_1_auto] truncate text-right text-[12px] text-faint md:block"
           title={`${space ? `${space.name} / ` : ""}${list?.name ?? "—"}`}
         >
-          {space ? `${space.name} / ` : ""}
           {list?.name ?? "—"}
         </span>
 
@@ -136,7 +153,7 @@ function TaskRow({ task }: { task: StoreTask }) {
           )}
           title={
             snoozed && task.snoozedUntil !== null
-              ? `${snoozeUntilLabel(task.snoozedUntil)}${task.blockedNote ? ` — waiting on ${task.blockedNote}` : ""}`
+              ? `${snoozeUntilLabel(task.snoozedUntil)}${task.blockedNote ? ` — blocked on ${task.blockedNote}` : ""}`
               : undefined
           }
         >
@@ -166,28 +183,31 @@ function SubtaskRow({ subtask, parent }: { subtask: MyOpenSubtask["subtask"]; pa
         aria-checked={false}
         aria-label={`Mark "${subtask.title}" done`}
         onClick={() => void toggleSubtask(subtask.id, true)}
-        class="relative flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-[4px] border border-line transition-colors hover:border-accent after:absolute after:-inset-2.5 after:content-[''] sm:after:hidden"
+        class="relative flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded border border-line transition-colors hover:border-accent after:absolute after:-inset-[15px] after:content-[''] sm:after:hidden"
       />
 
       <button
         type="button"
         onClick={() => openTask(parent.id)}
+        data-mw-row
         class="flex min-w-0 flex-1 items-center gap-2.5 py-2.5 text-left sm:gap-3"
       >
-        <span
-          class="min-w-0 flex-[3_1_0%] truncate text-[13.5px] text-text"
-          title={subtask.note ?? undefined}
-        >
-          {subtask.title}
-          {subtask.note && (
-            <NoteLines class="ml-1.5 inline-block h-3 w-3 align-[-1px] text-faint" />
-          )}
+        <span class="min-w-0 flex-[3_1_0%]" title={subtask.note ?? undefined}>
+          <span class="block truncate text-[14px] text-text">
+            {subtask.title}
+            {subtask.note && (
+              <NoteLines class="ml-1.5 inline-block h-3 w-3 align-[-1px] text-faint" />
+            )}
+          </span>
+          {/* Below md the parent column is gone, and a bare "Step 2" says
+              nothing, so the parent rides on a second line instead. */}
+          <span class="block truncate text-[12px] text-faint md:hidden">{parent.title}</span>
         </span>
 
         {/* The parent task is the context that matters for a step; the full
             Space / List path still lives in the tooltip. */}
         <span
-          class="hidden min-w-0 max-w-[170px] flex-[1_1_0%] truncate text-right text-[12px] text-faint md:block"
+          class="hidden min-w-0 max-w-[280px] flex-[0_1_auto] truncate text-right text-[12px] text-faint md:block"
           title={`${space ? `${space.name} / ` : ""}${list?.name ?? "—"} / ${parent.title}`}
         >
           {parent.title}
@@ -228,42 +248,59 @@ function assignedIsSnoozed(item: AssignedOutItem): boolean {
   return isSnoozed(assignedTask(item).snoozedUntil);
 }
 
-function AssignedOutRow({ item }: { item: AssignedOutItem }) {
+function AssignedOutRow({
+  item,
+  mode,
+}: {
+  item: AssignedOutItem;
+  mode: "delegated" | "waiting";
+}) {
   const task = assignedTask(item);
   const list = listById(task.listId);
   const assignee = userById(assignedAssigneeId(item));
+  const ballHolder =
+    item.kind === "task" && task.waitingOn ? userById(task.waitingOn) : assignee;
   const due = assignedDue(item);
   const snoozed = assignedIsSnoozed(item);
   const overdue = !snoozed && due !== null && startOfDay(due) < today();
+
+  const meta =
+    mode === "waiting"
+      ? `${ballHolder?.name ?? "Someone"}${list ? ` · ${list.name}` : ""}`
+      : `${assignee?.name ?? "Unassigned"}${
+          item.kind === "task" &&
+          task.waitingOn &&
+          task.waitingOn !== task.assigneeId &&
+          ballHolder
+            ? ` → ${ballHolder.name.split(" ")[0] ?? ballHolder.name}`
+            : ""
+        }${list ? ` · ${list.name}` : ""}${item.kind === "subtask" ? ` · ${task.title}` : ""}`;
 
   return (
     <li>
       <button
         type="button"
         onClick={() => openTask(task.id)}
+        title={mode === "waiting" && ballHolder ? `Your task — ${ballHolder.name}'s turn` : undefined}
         class="group flex w-full items-start gap-2.5 border-b border-line px-3 py-3 text-left transition-colors last:border-b-0 hover:bg-raised"
       >
-        <Avatar user={assignee} size="sm" />
+        <Avatar user={ballHolder} size="sm" />
         <span class="min-w-0 flex-1">
-          <span class="line-clamp-2 text-[12.5px] leading-[1.35] text-text">
+          <span class="line-clamp-2 text-[13px] leading-[1.35] text-text">
             {assignedTitle(item)}
           </span>
-          <span class="mt-1 block truncate text-[11px] text-faint">
-            {assignee?.name ?? "Unassigned"}
-            {list ? ` · ${list.name}` : ""}
-            {item.kind === "subtask" ? ` · ${task.title}` : ""}
-          </span>
+          <span class="mt-1 block truncate text-[11px] text-faint">{meta}</span>
         </span>
         <span
           class={cn(
-            "mt-0.5 max-w-[64px] shrink-0 text-right text-[10.5px] tabular-nums",
+            "mt-0.5 max-w-[64px] shrink-0 text-right text-[11px] tabular-nums",
             snoozed || due === null ? "text-faint" : overdue ? "font-medium text-danger" : "text-muted"
           )}
         >
           {snoozed && task.snoozedUntil !== null
             ? `zZ ${formatDue(task.snoozedUntil)}`
             : due === null
-              ? "No date"
+              ? "—"
               : formatDue(due)}
         </span>
       </button>
@@ -271,31 +308,48 @@ function AssignedOutRow({ item }: { item: AssignedOutItem }) {
   );
 }
 
-function AssignedOutCard({ items }: { items: AssignedOutItem[] }) {
+function AssignedOutCard({
+  delegated,
+  waitingOn,
+}: {
+  delegated: AssignedOutItem[];
+  waitingOn: StoreTask[];
+}) {
   const [open, setOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
-  const ordered = [...items].sort((a, b) => {
-    const snoozed = Number(assignedIsSnoozed(a)) - Number(assignedIsSnoozed(b));
-    return snoozed;
-  });
-  const visible = showAll ? ordered : ordered.slice(0, ASSIGNED_OUT_PREVIEW);
+  const sortSnoozedLast = (a: AssignedOutItem, b: AssignedOutItem) =>
+    Number(assignedIsSnoozed(a)) - Number(assignedIsSnoozed(b));
+  const orderedDelegated = [...delegated].sort(sortSnoozedLast);
+  const orderedWaiting: AssignedOutItem[] = [...waitingOn]
+    .map((task): AssignedOutItem => ({ kind: "task", task }))
+    .sort(sortSnoozedLast);
+  const allItems = [...orderedDelegated, ...orderedWaiting];
+  const total = allItems.length;
+  const visibleDelegated = showAll
+    ? orderedDelegated
+    : orderedDelegated.slice(0, ASSIGNED_OUT_PREVIEW);
+  const remainingPreview = Math.max(0, ASSIGNED_OUT_PREVIEW - visibleDelegated.length);
+  const visibleWaiting = showAll
+    ? orderedWaiting
+    : orderedWaiting.slice(0, remainingPreview);
+
   const t0 = today();
-  const overdue = items.filter((item) => {
+  const overdue = allItems.filter((item) => {
     const due = assignedDue(item);
     return !assignedIsSnoozed(item) && due !== null && startOfDay(due) < t0;
   }).length;
-  const dueToday = items.filter((item) => {
+  const dueToday = allItems.filter((item) => {
     const due = assignedDue(item);
     return !assignedIsSnoozed(item) && due !== null && startOfDay(due) === t0;
   }).length;
-  const summary = items.length === 0
-    ? "Nothing delegated right now"
+  const summary = total === 0
+    ? "Nothing waiting on anyone else"
     : [overdue > 0 ? `${overdue} overdue` : null, dueToday > 0 ? `${dueToday} today` : null]
         .filter(Boolean)
         .join(" · ") || "No immediate deadlines";
 
   return (
-    <section aria-label="Assigned out" class="overflow-hidden rounded-xl border border-line bg-surface">
+    <section aria-label="With others" class="overflow-hidden rounded-xl border border-line bg-surface">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -306,35 +360,63 @@ function AssignedOutCard({ items }: { items: AssignedOutItem[] }) {
         )}
       >
         <span class="min-w-0 flex-1">
-          <span class="block text-[13px] font-semibold text-text">Assigned out</span>
-          <span class="mt-0.5 block text-[11.5px] text-muted">{summary}</span>
+          <span class="block text-[13px] font-semibold text-text">With others</span>
+          <span class="mt-0.5 block text-[12px] text-muted">{summary}</span>
         </span>
         <span class="rounded-full bg-accent-soft px-2.5 py-1 text-[11px] font-semibold tabular-nums text-accent">
-          {items.length}
+          {total}
         </span>
         {open ? <ChevronDown class="h-3.5 w-3.5 text-faint" /> : <ChevronRight class="h-3.5 w-3.5 text-faint" />}
       </button>
 
       {open ? (
-        items.length === 0 ? (
+        total === 0 ? (
           <p class="px-4 py-5 text-center text-[12px] text-faint">
-            Tasks you assign to other people will appear here.
+            Nothing is waiting on anyone else.
           </p>
         ) : (
           <>
-            <ul>{visible.map((item) => (
-              <AssignedOutRow
-                key={item.kind === "task" ? item.task.id : item.subtask.id}
-                item={item}
-              />
-            ))}</ul>
-            {items.length > ASSIGNED_OUT_PREVIEW ? (
+            {visibleDelegated.length > 0 ? (
+              <div>
+                <div class="flex items-baseline gap-1.5 px-3 pt-3 pb-1">
+                  <h4 class="text-[11px] font-semibold uppercase tracking-[0.07em] text-faint">
+                    Delegated
+                  </h4>
+                  <span class="text-[11px] tabular-nums text-faint">{delegated.length}</span>
+                </div>
+                <ul>{visibleDelegated.map((item) => (
+                  <AssignedOutRow
+                    key={item.kind === "task" ? item.task.id : item.subtask.id}
+                    item={item}
+                    mode="delegated"
+                  />
+                ))}</ul>
+              </div>
+            ) : null}
+            {visibleWaiting.length > 0 ? (
+              <div class={visibleDelegated.length > 0 ? "border-t border-line" : undefined}>
+                <div class="flex items-baseline gap-1.5 px-3 pt-3 pb-1">
+                  <h4 class="text-[11px] font-semibold uppercase tracking-[0.07em] text-faint">
+                    Their turn
+                  </h4>
+                  <span class="text-[11px] tabular-nums text-faint">{waitingOn.length}</span>
+                </div>
+                <ul>{visibleWaiting.map((item) => (
+                  <AssignedOutRow
+                    key={item.kind === "task" ? item.task.id : item.subtask.id}
+                    item={item}
+                    mode="waiting"
+                  />
+                ))}</ul>
+              </div>
+            ) : null}
+            {total > ASSIGNED_OUT_PREVIEW ? (
               <button
                 type="button"
                 onClick={() => setShowAll((value) => !value)}
-                class="w-full px-4 py-2.5 text-center text-[11.5px] font-medium text-accent transition-colors hover:bg-raised"
+                class="w-full border-t border-line px-4 py-2.5 text-center text-[12px] font-medium text-accent transition-colors hover:bg-raised"
               >
-                {showAll ? "Show less" : `View all ${items.length}`}
+                {showAll ? "Show less" : `View all ${total}`}
               </button>
             ) : null}
           </>
@@ -345,7 +427,7 @@ function AssignedOutCard({ items }: { items: AssignedOutItem[] }) {
 }
 
 /** The snoozed pile at the bottom: present, countable, collapsed by default. */
-function SnoozedBucket({ tasks }: { tasks: StoreTask[] }) {
+function SnoozedBucket({ tasks, meId }: { tasks: StoreTask[]; meId?: string }) {
   const [open, setOpen] = useState(false);
   if (tasks.length === 0) return null;
 
@@ -367,15 +449,63 @@ function SnoozedBucket({ tasks }: { tasks: StoreTask[] }) {
       </button>
       {open ? (
         <ul class="rounded-xl border border-line bg-surface px-1 opacity-70">
-          {tasks.map((t) => <TaskRow key={t.id} task={t} />)}
+          {tasks.map((t) => <TaskRow key={t.id} task={t} meId={meId} />)}
         </ul>
       ) : null}
     </section>
   );
 }
 
+/** Rows of the main list in reading order: J/K and the arrows walk these. */
+function myWorkRows(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("[data-mw-row]"));
+}
+
+function isTyping(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.tagName !== "string") return false;
+  return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable === true;
+}
+
+/**
+ * My Work's keyboard: J/K (or the arrows) move through the rows, Enter opens
+ * the focused one (rows are buttons, so that part is native), and N starts a
+ * new task through quick add where this account has it.
+ */
+export function myWorkKey(ev: KeyboardEvent, rows: HTMLElement[], active: Element | null): "next" | "prev" | "new" | null {
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return null;
+  const key = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
+  if (key === "n") return "new";
+  if (rows.length === 0) return null;
+  if (key === "j" || key === "ArrowDown") return "next";
+  if (key === "k" || key === "ArrowUp") return active && rows.includes(active as HTMLElement) ? "prev" : "next";
+  return null;
+}
+
 export function MyWork() {
   const user = me.value;
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (isTyping(ev.target) || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      const rows = myWorkRows();
+      const action = myWorkKey(ev, rows, document.activeElement);
+      if (action === null) return;
+      if (action === "new") {
+        // Quick add files into a personal inbox only some accounts have.
+        if (!canUseQuickAdd(me.value)) return;
+        ev.preventDefault();
+        openQuickAdd();
+        return;
+      }
+      ev.preventDefault();
+      const at = rows.indexOf(document.activeElement as HTMLElement);
+      const next = action === "next" ? Math.min(at + 1, rows.length - 1) : Math.max(at - 1, 0);
+      rows[next]?.focus();
+      rows[next]?.scrollIntoView({ block: "nearest" });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const all = myOpenTasks(user?.id);
   const allSubtasks = myOpenSubtasks(user?.id);
   // A snoozed task is not what you are doing today, so it leaves its due-date
@@ -391,6 +521,7 @@ export function MyWork() {
   ].sort(compareItems);
   const buckets = bucketize(items);
   const delegated = assignedOutBy(user?.id);
+  const waitingOn = waitingOnOthersTasks(user?.id);
 
   return (
     <div class="mx-auto max-w-[1240px] px-3 py-6 sm:px-6 sm:py-8">
@@ -419,14 +550,10 @@ export function MyWork() {
           </p>
         </header>
 
-        <div class="xl:hidden">
-          <AssignedOutCard items={delegated} />
-        </div>
-
         <main class="min-w-0 xl:col-start-1 xl:row-start-2">
           {buckets.length === 0 && snoozedTasks.length === 0 ? (
             <div class="rounded-xl border border-dashed border-line px-6 py-10 text-center">
-              <p class="text-[13.5px] text-muted">Pick a list in the sidebar to see the board and assign yourself work.</p>
+              <p class="text-[14px] text-muted">Pick a list in the sidebar to see the board and assign yourself work.</p>
             </div>
           ) : (
             <div class="space-y-7">
@@ -446,7 +573,7 @@ export function MyWork() {
                   <ul class="rounded-xl border border-line bg-surface px-1">
                     {b.items.map((item) =>
                       item.kind === "task" ? (
-                        <TaskRow key={item.task.id} task={item.task} />
+                        <TaskRow key={item.task.id} task={item.task} meId={user?.id} />
                       ) : (
                         <SubtaskRow key={item.subtask.id} subtask={item.subtask} parent={item.parent} />
                       )
@@ -455,13 +582,18 @@ export function MyWork() {
                 </section>
               ))}
 
-              <SnoozedBucket tasks={snoozedTasks} />
+              <SnoozedBucket tasks={snoozedTasks} meId={user?.id} />
             </div>
           )}
         </main>
 
+        {/* Below xl the card stacks under your own work: what is yours comes first. */}
+        <div class="xl:hidden">
+          <AssignedOutCard delegated={delegated} waitingOn={waitingOn} />
+        </div>
+
         <aside class="sticky top-[72px] hidden max-h-[calc(100vh-88px)] overflow-y-auto xl:col-start-2 xl:row-start-1 xl:row-span-2 xl:block">
-          <AssignedOutCard items={delegated} />
+          <AssignedOutCard delegated={delegated} waitingOn={waitingOn} />
         </aside>
       </div>
     </div>

@@ -10,7 +10,7 @@ import { AutomationsTab, } from "./Automations.js";
 import { ApiKeysTab, isWorkspaceAdmin } from "./ApiKeys.js";
 import { InboundTab } from "./Inbound.js";
 import { SpacesTab } from "./Spaces.js";
-import { activeTab, closeSettings, SETTINGS_TABS, TAB_LABEL, type SettingsTab } from "./route.js";
+import { activeTab, closeSettings, setSettingsTab, SETTINGS_TABS, TAB_LABEL, type SettingsTab } from "./route.js";
 import { Panel, Tag, X } from "./ui.js";
 
 export { settingsOpen, openSettings, closeSettings } from "./route.js";
@@ -38,9 +38,9 @@ function WorkspaceStrip() {
         {members.map((u) => (
           <li key={u.id} class="flex items-center gap-2.5 px-4 py-2">
             <Avatar user={u} size="sm" />
-            <span class="min-w-0 flex-1 truncate text-[12.5px] text-text">
+            <span class="min-w-0 flex-1 truncate text-[13px] text-text">
               {u.name}
-              {u.id === myId && <span class="ml-1.5 text-[11.5px] text-faint">you</span>}
+              {u.id === myId && <span class="ml-1.5 text-[12px] text-faint">you</span>}
             </span>
             <span class="hidden min-w-0 flex-1 truncate text-[12px] text-muted sm:block">
               {u.email}
@@ -49,7 +49,7 @@ function WorkspaceStrip() {
           </li>
         ))}
         {members.length === 0 && (
-          <li class="px-4 py-6 text-center text-[12.5px] text-faint">No members loaded.</li>
+          <li class="px-4 py-6 text-center text-[13px] text-faint">No members loaded.</li>
         )}
       </ul>
       {/* The welcome panel is the only place the MCP command and the REST base
@@ -95,7 +95,7 @@ function AppearanceStrip() {
             onClick={() => setTheme(pref)}
             aria-pressed={current === pref}
             class={cn(
-              "rounded-lg border px-3 py-1.5 text-[12.5px] font-medium transition-colors",
+              "rounded-lg border px-3 py-1.5 text-[13px] font-medium transition-colors",
               current === pref
                 ? "border-accent/45 bg-accent-soft text-text"
                 : "border-line text-muted hover:border-line-strong hover:text-text"
@@ -114,7 +114,7 @@ function Tabs() {
   // the pane actually rendered.
   const current = visibleSettingsTabs().includes(activeTab.value)
     ? activeTab.value
-    : (visibleSettingsTabs()[0] ?? "api-keys");
+    : (visibleSettingsTabs()[0] ?? "general");
   // API keys are self-serve now, so the tab is everyone's: a member sees their
   // own keys and can mint one for their agent. The admin-only extra — every
   // key in the workspace, with who each one impersonates — lives inside it.
@@ -127,9 +127,7 @@ function Tabs() {
         <button
           key={tab}
           type="button"
-          onClick={() => {
-            activeTab.value = tab;
-          }}
+          onClick={() => setSettingsTab(tab)}
           aria-current={current === tab ? "page" : undefined}
           class={cn(
             "-mb-px shrink-0 whitespace-nowrap border-b-2 px-2.5 pb-2 pt-1 text-[13px] font-medium transition-colors",
@@ -157,7 +155,7 @@ export function SettingsTopBar() {
       <button
         type="button"
         onClick={closeSettings}
-        class="inline-flex h-[28px] shrink-0 items-center gap-1.5 rounded-lg border border-line px-2 text-[12.5px] font-medium text-muted transition-colors hover:border-line-strong hover:text-text sm:px-2.5"
+        class="inline-flex h-[28px] shrink-0 items-center gap-1.5 rounded-lg border border-line px-2 text-[13px] font-medium text-muted transition-colors hover:border-line-strong hover:text-text sm:px-2.5"
       >
         <X class="h-3 w-3" />
         <span class="hidden sm:inline">Back to board</span>
@@ -177,13 +175,19 @@ export function Settings() {
   // A member deep-linked (or defaulted) onto a tab they cannot see lands on
   // the first tab they can, rather than a blank pane.
   const visible = visibleSettingsTabs();
-  const tab = visible.includes(activeTab.value) ? activeTab.value : (visible[0] ?? "api-keys");
+  const tab = visible.includes(activeTab.value) ? activeTab.value : (visible[0] ?? "general");
   return (
     <div class="mx-auto w-full max-w-[900px] px-3 py-4 sm:px-5 sm:py-5">
       <div class="space-y-4">
-        <WorkspaceStrip />
-        <AppearanceStrip />
         <Tabs />
+        {/* Workspace and Appearance used to sit above the tabs, pushing every
+            section 260px down the page. They are a section of their own. */}
+        {tab === "general" && (
+          <>
+            <WorkspaceStrip />
+            <AppearanceStrip />
+          </>
+        )}
         {tab === "automations" && <AutomationsTab />}
         {tab === "api-keys" && <ApiKeysTab />}
         {tab === "inbound" && <InboundTab />}

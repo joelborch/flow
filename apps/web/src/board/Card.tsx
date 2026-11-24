@@ -1,14 +1,15 @@
 import { isClosed } from "../shell/data.js";
+import { cn } from "../shell/format.js";
 import { useEffect, useRef } from "preact/hooks";
 import type { User } from "@flow/shared";
 import {
-  avatarHue, dueLabel, initials, isOverdue, isSnoozed, PRIORITY_COLOR, PRIORITY_LABEL, snoozeLabel,
+  avatarHue, dueLabel, initials, isOverdue, isSnoozed, PRIORITY_LABEL, snoozeLabel,
   visibleTags,
 } from "../lib/fmt.js";
 import { openTask } from "../lib/shell-bridge.js";
 import { titleLink } from "../lib/title-link.js";
-import { TitleLinkIcon } from "../shell/ui.js";
-import { prefetchTaskDetail, subtaskProgress, userById, type StoreTask } from "../store/index.js";
+import { PILL_SM, PILL_TONE, PriorityFlag, TitleLinkIcon } from "../shell/ui.js";
+import { me, prefetchTaskDetail, subtaskProgress, userById, type StoreTask } from "../store/index.js";
 import { consumedByDrag, onCardPointerDown } from "./dnd.js";
 import { focusCard, rangeSelect } from "./keyboard.js";
 
@@ -20,8 +21,8 @@ function Avatar({ user }: { user: User }) {
   const hue = avatarHue(user);
   return (
     <span
-      class="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[5px] text-[9px] font-semibold tracking-wide text-white"
-      style={{ backgroundColor: `hsl(${hue} 42% 48%)` }}
+      class="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full text-[9px] font-semibold tracking-wide text-white"
+      style={{ backgroundColor: `hsl(${hue} 45% 36%)` }}
       title={user.name}
     >
       {initials(user.name)}
@@ -57,8 +58,11 @@ function SubtaskProgress({ done, total }: { done: number; total: number }) {
 
 export function Card({ task }: { task: StoreTask }) {
   const assignee = task.assigneeId ? userById.value.get(task.assigneeId) : undefined;
+  const closed = isClosed(task);
+  const ballHolder = !closed && task.waitingOn != null ? userById.value.get(task.waitingOn) : undefined;
+  const myTurn = !closed && task.waitingOn != null && task.waitingOn === me.value?.id;
   const progress = subtaskProgress(task.id);
-  const overdue = task.dueDate !== null && isOverdue(task.dueDate) && !isClosed(task);
+  const overdue = task.dueDate !== null && isOverdue(task.dueDate) && !closed;
   // A snoozed card is normally filtered out entirely; it only reaches here when
   // "Show snoozed" is on, so it renders dimmed and says why.
   const snoozed = isSnoozed(task.snoozedUntil);
@@ -66,6 +70,7 @@ export function Card({ task }: { task: StoreTask }) {
   const tags = visibleTags(task.tags);
   const hasMeta =
     snoozed ||
+    ballHolder !== undefined ||
     task.priority !== null ||
     task.dueDate !== null ||
     progress.total > 0 ||
@@ -119,7 +124,7 @@ export function Card({ task }: { task: StoreTask }) {
       tabIndex={0}
       role="button"
       aria-label={task.title}
-      class={`cursor-default select-none touch-manipulation rounded-card border border-line bg-surface px-3 py-2.5 transition-colors [-webkit-touch-callout:none] hover:border-line-strong sm:px-2.5 sm:py-2${
+      class={`cursor-default select-none touch-manipulation rounded-lg border border-line bg-surface px-3 py-2.5 transition-colors [-webkit-touch-callout:none] hover:border-line-strong sm:px-2.5 sm:py-2${
         snoozed ? " opacity-55 hover:opacity-100" : ""
       }`}
     >
@@ -131,19 +136,18 @@ export function Card({ task }: { task: StoreTask }) {
       {hasMeta ? (
         <div class="mt-2 flex min-w-0 items-center gap-2 overflow-hidden text-[11px] text-muted">
           {task.priority ? (
-            <span
-              class="h-[7px] w-[7px] shrink-0 rounded-full"
-              style={{ backgroundColor: PRIORITY_COLOR[task.priority] }}
-              title={`${PRIORITY_LABEL[task.priority]} priority`}
-            />
+            // The same flag My Work and the panel use, so priority reads one way.
+            <span class="shrink-0" title={`${PRIORITY_LABEL[task.priority]} priority`}>
+              <PriorityFlag priority={task.priority} class="[&>svg]:h-3 [&>svg]:w-3" />
+            </span>
           ) : null}
 
           {snoozed && task.snoozedUntil !== null ? (
             <span
-              class="shrink-0 rounded bg-raised px-1 py-[1px] font-medium tabular-nums text-muted"
+              class={cn(PILL_SM, PILL_TONE.neutral, "tabular-nums")}
               title={
                 task.blockedNote
-                  ? `Snoozed — waiting on ${task.blockedNote}`
+                  ? `Snoozed — blocked on ${task.blockedNote}`
                   : "Snoozed — hidden until this date"
               }
             >
@@ -154,9 +158,7 @@ export function Card({ task }: { task: StoreTask }) {
           {task.dueDate !== null ? (
             <span
               class={
-                overdue
-                  ? "shrink-0 rounded bg-danger-soft px-1 py-[1px] font-medium text-danger"
-                  : "shrink-0 tabular-nums"
+                overdue ? cn(PILL_SM, PILL_TONE.danger, "tabular-nums") : "shrink-0 tabular-nums"
               }
             >
               {dueLabel(task.dueDate)}
@@ -170,7 +172,7 @@ export function Card({ task }: { task: StoreTask }) {
               {tags.slice(0, 2).map((tag) => (
                 <span
                   key={tag}
-                  class="truncate rounded border border-line bg-raised px-1 py-[1px] text-[10px] text-muted"
+                  class={cn(PILL_SM, PILL_TONE.neutral, "min-w-0 shrink truncate")}
                 >
                   {tag}
                 </span>
@@ -181,7 +183,16 @@ export function Card({ task }: { task: StoreTask }) {
             </span>
           ) : null}
 
-          <span class="ml-auto flex shrink-0 items-center">
+          {/* Whose turn sits with the owner's avatar, always in the same place. */}
+          <span class="ml-auto flex shrink-0 items-center gap-1.5">
+            {ballHolder ? (
+              <span
+                class={cn(PILL_SM, myTurn ? PILL_TONE.accent : PILL_TONE.outline)}
+                title={`${ballHolder.name}'s turn`}
+              >
+                {myTurn ? "Your turn" : `${ballHolder.name.split(" ")[0] ?? ballHolder.name}'s turn`}
+              </span>
+            ) : null}
             {assignee ? <Avatar user={assignee} /> : null}
           </span>
         </div>

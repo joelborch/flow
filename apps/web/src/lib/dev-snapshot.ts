@@ -121,6 +121,7 @@ export function devSnapshot(taskCount = 48): BoardSnapshot {
         assigneeId,
         assignedBy: delegated ? "us_alice" : null,
         assignedAt: delegated ? now - ((i % 5) + 1) * DAY : null,
+        waitingOn: null,
         priority: PRIORITIES[Math.floor(rnd() * PRIORITIES.length)]!,
         dueDate: hasDue ? now + Math.round((rnd() * 20 - 6)) * DAY : null,
         snoozedUntil: snoozed ? now + Math.round(1 + rnd() * 9) * DAY : null,
@@ -184,6 +185,18 @@ export function devSnapshot(taskCount = 48): BoardSnapshot {
       stateChangedAt: now - DAY,
     };
   }
+
+  // And a few passed turns, so My Work's "With others" card, the board's turn
+  // pill and the panel's Turn row are all exercisable: two of Alice's tasks
+  // waiting on teammates, and two of theirs passed to her.
+  const open = tasks.filter((t) => t.snoozedUntil === null && !closedIds.has(t.statusId) && t.handoff == null);
+  const alices = open.filter((t) => t.assigneeId === "us_alice");
+  if (alices[0]) alices[0].waitingOn = "us_ana";
+  if (alices[1]) alices[1].waitingOn = "us_mara";
+  for (const t of open.filter((t) => t.assigneeId !== null && t.assigneeId !== "us_alice").slice(0, 2)) {
+    t.waitingOn = "us_alice";
+  }
+  if (ask) ask.waitingOn = "us_alice";
 
   return { seq: 0, spaces, lists, tasks, subtasks, users, automationRules: [] };
 }

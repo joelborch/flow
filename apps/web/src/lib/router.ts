@@ -1,5 +1,7 @@
-// History-based router. The whole app needs exactly three slots, so the route
+// History-based router. The whole app needs a handful of slots, so the route
 // is parsed into them rather than matched against a pattern table:
+//   /my-work                     My Work, the landing page
+//   /my-work/t/:taskId           My Work with a task open
 //   /s/:spaceId/l/:listId        board
 //   /t/:taskId                   task deep link (the shell renders the panel)
 //   /s/:spaceId/l/:listId/t/:taskId  both
@@ -9,8 +11,12 @@ export type Route = {
   spaceId: string | null;
   listId: string | null;
   taskId: string | null;
+  /** True on /my-work. It has its own path so a reload or a reopened tab stays on it. */
+  myWork: boolean;
   path: string;
 };
+
+export const MY_WORK_PATH = "/my-work";
 
 function parse(path: string): Route {
   const seg = path.split("/").filter(Boolean);
@@ -19,7 +25,7 @@ function parse(path: string): Route {
     if (i === -1) return null;
     return seg[i + 1] ?? null;
   };
-  return { spaceId: at("s"), listId: at("l"), taskId: at("t"), path };
+  return { spaceId: at("s"), listId: at("l"), taskId: at("t"), myWork: seg[0] === "my-work", path };
 }
 
 export const route = signal<Route>(parse(location.pathname));
@@ -50,7 +56,8 @@ export function listPath(spaceId: string, listId: string, taskId?: string | null
 
 /** Keeps the current board location, swapping the task deep-link segment. */
 export function withTask(taskId: string | null): string {
-  const { spaceId, listId } = route.value;
+  const { spaceId, listId, myWork } = route.value;
+  if (myWork) return taskId ? `${MY_WORK_PATH}/t/${taskId}` : MY_WORK_PATH;
   if (spaceId && listId) return listPath(spaceId, listId, taskId);
   return taskId ? `/t/${taskId}` : "/";
 }

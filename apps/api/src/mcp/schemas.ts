@@ -83,6 +83,12 @@ export const CONCISE_COMMENT_LIMIT = 15;
 export const ListMyWorkArgs = z.object({
   /** Defaults to the user this api key acts as. */
   assigneeId: Id.optional(),
+  /**
+   * "assigned" (default) is what the person owns. "turn" is what is on their
+   * plate right now: tasks whose turn is theirs, including ones other people
+   * own, and without their own tasks that are waiting on someone else.
+   */
+  scope: z.enum(["assigned", "turn"]).default("assigned"),
   includeClosed: z.boolean().default(false),
   /**
    * 50 is a plate, not an archive. An agent that genuinely needs more should

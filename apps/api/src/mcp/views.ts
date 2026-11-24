@@ -44,6 +44,7 @@ export function taskView(row: TaskRow | Task, names: NameIndex): TaskView {
     space: names.spaceNameForList(row.listId),
     assignee: names.userName(row.assigneeId),
     assigneeId: row.assigneeId,
+    turn: names.userName(row.waitingOn ?? row.assigneeId),
     priority: row.priority,
     dueDate: row.dueDate,
     tags: row.tags,
@@ -104,6 +105,7 @@ export function conciseTaskView(row: TaskRow | Task, names: NameIndex): ConciseT
     status: names.statusName(row.statusId),
     list: names.listName(row.listId),
     assignee: names.userName(row.assigneeId),
+    turn: names.userName(row.waitingOn ?? row.assigneeId),
     dueDate: row.dueDate,
     priority: row.priority,
   };
@@ -129,6 +131,8 @@ export function taskDetailView(task: Task, names: NameIndex): TaskDetailView {
     // deliberately parked this until Monday".
     snoozedUntil: task.snoozedUntil ?? null,
     blockedNote: task.blockedNote ?? null,
+    waitingOn: task.waitingOn ?? null,
+    waitingOnName: names.userName(task.waitingOn ?? null),
   };
 }
 

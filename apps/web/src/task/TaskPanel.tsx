@@ -3,15 +3,16 @@
 // panel-local because the store doesn't carry them.
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { Attachment, TaskDetail } from "@flow/shared";
-import { addComment, comments as commentStore, fetchTaskDetail, updateTask } from "../store/index.js";
+import { addComment, comments as commentStore, deleteTask, fetchTaskDetail, updateTask } from "../store/index.js";
 import { listById, spaceOfList, taskById } from "../shell/data.js";
 import { formatDateTime } from "../shell/format.js";
 import { panelFocus } from "../shell/nav.js";
 import { titleLink } from "../lib/title-link.js";
-import { CalendarIcon, ExternalLink, FlagIcon, Moon, TagIcon, X, useDialogFocus } from "../shell/ui.js";
+import { toast } from "../lib/toast.js";
+import { Button, ChevronDown, ChevronRight, Dots, ExternalLink, Menu, MenuItem, X, useDialogFocus } from "../shell/ui.js";
 import {
   AssigneePicker, BlockedNoteField, DuePicker, PriorityPicker, PropertyRow, SnoozeBanner,
-  SnoozePicker, StatusPicker, TagEditor,
+  SnoozePicker, StatusPicker, TagEditor, WaitingOnPicker,
 } from "./fields.js";
 import { Description } from "./Description.js";
 import { HandoffStrip } from "./HandoffStrip.js";
@@ -21,7 +22,92 @@ import { Attachments } from "./Attachments.js";
 import { uploadAttachment } from "./api.js";
 import { useAutogrow } from "./autogrow.js";
 
+const MORE_FIELDS_KEY = "flow.panel.moreFields";
+
+/**
+ * Actions on the task itself. Delete is permanent on the server (the task, its
+ * subtasks, comments and attachments), so it takes a second, explicit click
+ * and is the one change here with no Undo.
+ */
+function TaskMenu({ taskId, onDeleted }: { taskId: string; onDeleted: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const copy = (text: string, done: string) => {
+    void navigator.clipboard
+      .writeText(text)
+      .then(() => toast(done))
+      .catch(() => toast("Couldn't copy — your browser blocked the clipboard", "error"));
+  };
+  return (
+    <Menu
+      label="Task actions"
+      width="w-56"
+      align="right"
+      trigger={() => (
+        <span class="flex rounded-lg p-2.5 text-faint transition-colors hover:bg-bg hover:text-text sm:p-1.5">
+          <Dots />
+        </span>
+      )}
+    >
+      {(close) => (
+        <div>
+          <MenuItem
+            onClick={() => {
+              close();
+              copy(`${location.origin}/t/${taskId}`, "Link copied");
+            }}
+          >
+            Copy link
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              close();
+              copy(taskId, "Task ID copied");
+            }}
+          >
+            Copy task ID
+          </MenuItem>
+          <div class="my-1 h-px bg-line" />
+          {confirming ? (
+            <MenuItem
+              danger
+              onClick={() => {
+                close();
+                setConfirming(false);
+                onDeleted();
+                void deleteTask(taskId).then(() => toast("Task deleted"));
+              }}
+            >
+              Delete for good — no undo
+            </MenuItem>
+          ) : (
+            <MenuItem danger onClick={() => setConfirming(true)}>
+              Delete task…
+            </MenuItem>
+          )}
+        </div>
+      )}
+    </Menu>
+  );
+}
+
 export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => void }) {
+  // Remembered per browser: someone who always wants every field sees them.
+  const [moreFields, setMoreFields] = useState(() => {
+    try {
+      return localStorage.getItem(MORE_FIELDS_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleMoreFields = () =>
+    setMoreFields((open) => {
+      try {
+        localStorage.setItem(MORE_FIELDS_KEY, open ? "0" : "1");
+      } catch {
+        // Private windows can refuse storage; the toggle still works for this visit.
+      }
+      return !open;
+    });
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -177,14 +263,12 @@ export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => 
       >
         {/* header */}
         <header class="flex h-[52px] shrink-0 items-center gap-2 border-b border-line px-3 sm:px-5">
-          <div class="flex min-w-0 flex-1 items-center gap-1.5 text-[12.5px] text-muted">
+          <div class="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] text-muted">
             {space && <span class="truncate">{space.name}</span>}
             {space && list && <span class="text-faint">/</span>}
             {list && <span class="truncate text-text">{list.name}</span>}
           </div>
-          <span class="hidden shrink-0 font-mono text-[11px] text-faint sm:inline" title="Task id">
-            {taskId}
-          </span>
+          {task ? <TaskMenu taskId={taskId} onDeleted={onClose} /> : null}
           <button
             type="button"
             onClick={onClose}
@@ -208,13 +292,9 @@ export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => 
               ) : (
                 <div>
                   <p class="text-[14px] text-text">{loadError ?? "That task could not be loaded."}</p>
-                  <button
-                    type="button"
-                    onClick={() => void load()}
-                    class="mt-3 rounded-lg border border-line px-2.5 py-1 text-[12.5px] font-medium text-text hover:bg-raised"
-                  >
-                    Try again
-                  </button>
+                  <div class="mt-3">
+                    <Button onClick={() => void load()}>Try again</Button>
+                  </div>
                 </div>
               )}
             </div>
@@ -256,21 +336,50 @@ export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => 
                   <PropertyRow label="Assignee">
                     <AssigneePicker task={task} />
                   </PropertyRow>
-                  <PropertyRow label="Due" icon={<CalendarIcon class="h-3.5 w-3.5 text-faint" />}>
+                  <PropertyRow label="Turn">
+                    <WaitingOnPicker task={task} />
+                  </PropertyRow>
+                  <PropertyRow label="Due">
                     <DuePicker task={task} />
                   </PropertyRow>
-                  <PropertyRow label="Snooze" icon={<Moon class="h-3.5 w-3.5 text-faint" />}>
-                    <SnoozePicker task={task} />
-                  </PropertyRow>
-                  <PropertyRow label="Waiting on">
-                    <BlockedNoteField task={task} />
-                  </PropertyRow>
-                  <PropertyRow label="Priority" icon={<FlagIcon class="h-3.5 w-3.5 text-faint" />}>
-                    <PriorityPicker task={task} />
-                  </PropertyRow>
-                  <PropertyRow label="Tags" icon={<TagIcon class="h-3.5 w-3.5 text-faint" />}>
-                    <TagEditor task={task} />
-                  </PropertyRow>
+                  {/* The four above are what people set every day. These four
+                      show when they hold a value, and the rest wait behind
+                      "More fields" so the panel opens on the task, not a form. */}
+                  {(moreFields || task.priority !== null) && (
+                    <PropertyRow label="Priority">
+                      <PriorityPicker task={task} />
+                    </PropertyRow>
+                  )}
+                  {(moreFields || task.tags.length > 0) && (
+                    <PropertyRow label="Tags">
+                      <TagEditor task={task} />
+                    </PropertyRow>
+                  )}
+                  {(moreFields || task.snoozedUntil !== null) && (
+                    <PropertyRow label="Snooze">
+                      <SnoozePicker task={task} />
+                    </PropertyRow>
+                  )}
+                  {(moreFields || task.blockedNote !== null) && (
+                    <PropertyRow label="Blocked on">
+                      <BlockedNoteField task={task} />
+                    </PropertyRow>
+                  )}
+                  {(moreFields ||
+                    task.priority === null ||
+                    task.tags.length === 0 ||
+                    task.snoozedUntil === null ||
+                    task.blockedNote === null) && (
+                    <button
+                      type="button"
+                      onClick={toggleMoreFields}
+                      aria-expanded={moreFields}
+                      class="mt-1 inline-flex items-center gap-1 rounded-md px-1 py-1 text-[12px] font-medium text-muted transition-colors hover:bg-bg hover:text-text"
+                    >
+                      {moreFields ? <ChevronDown class="h-3 w-3" /> : <ChevronRight class="h-3 w-3" />}
+                      {moreFields ? "Fewer fields" : "More fields"}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -287,7 +396,7 @@ export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => 
 
               <div class="border-t border-line px-4 py-5 sm:px-6 sm:py-6">
                 <Comments comments={thread} />
-                <p class="mt-6 text-[11.5px] text-faint">
+                <p class="mt-6 text-[12px] text-faint">
                   Created {formatDateTime(task.createdAt)} · updated {formatDateTime(task.updatedAt)}
                 </p>
               </div>
@@ -298,7 +407,7 @@ export function TaskPanel({ taskId, onClose }: { taskId: string; onClose: () => 
         {task && <CommentComposer onSend={send} focusNonce={composerFocusNonce} />}
 
         {dragging && (
-          <div class="pointer-events-none absolute inset-3 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-accent/60 bg-accent/[0.06]">
+          <div class="pointer-events-none absolute inset-3 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-accent/60 bg-accent/[0.06]">
             <span class="rounded-lg bg-surface px-3 py-1.5 text-[13px] font-medium text-accent shadow-sm">
               Drop to attach
             </span>
@@ -320,7 +429,7 @@ function TitleLinkRow({ title }: { title: string }) {
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      class="mt-1 inline-flex max-w-full items-center gap-1.5 rounded text-[12.5px] text-muted transition-colors hover:text-accent"
+      class="mt-1 inline-flex max-w-full items-center gap-1.5 rounded text-[13px] text-muted transition-colors hover:text-accent"
     >
       <ExternalLink class="h-3.5 w-3.5" />
       <span class="truncate">Open {new URL(url).host}</span>

@@ -55,7 +55,7 @@ function MembersEditor({ space }: { space: Space }) {
 
   return (
     <div class="border-t border-line bg-raised/40 px-4 py-3">
-      <p class="mb-2 text-[11.5px] text-faint">
+      <p class="mb-2 text-[12px] text-faint">
         Owners and admins always have access and are not listed below. Everyone
         else needs to be checked here to see this space.
       </p>
@@ -64,12 +64,12 @@ function MembersEditor({ space }: { space: Space }) {
       {status === "ok" && current && (
         <>
           {candidates.length === 0 ? (
-            <p class="text-[12.5px] text-faint">No eligible members to add.</p>
+            <p class="text-[13px] text-faint">No eligible members to add.</p>
           ) : (
             <ul class="space-y-1">
               {candidates.map((u) => (
                 <li key={u.id}>
-                  <label class="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-[12.5px] text-text hover:bg-bg">
+                  <label class="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-[13px] text-text hover:bg-bg">
                     <input
                       type="checkbox"
                       checked={current.has(u.id)}
@@ -93,7 +93,7 @@ function MembersEditor({ space }: { space: Space }) {
               {saving ? "Saving…" : "Save"}
             </Button>
             {dirty && (
-              <span class="text-[11.5px] text-faint">Unsaved changes.</span>
+              <span class="text-[12px] text-faint">Unsaved changes.</span>
             )}
           </div>
         </>
@@ -160,7 +160,7 @@ function SpaceRow({ space }: { space: Space }) {
         </span>
 
         <span class="flex shrink-0 items-center gap-2">
-          <span class="text-[11.5px] text-muted">{isPrivate ? "Private" : "Workspace"}</span>
+          <span class="text-[12px] text-muted">{isPrivate ? "Private" : "Workspace"}</span>
           <Switch
             checked={isPrivate}
             busy={busy}

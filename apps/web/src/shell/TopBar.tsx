@@ -20,7 +20,7 @@ function ConnectionDot() {
             : "h-[6px] w-[6px] animate-pulse rounded-full bg-warn"
         }
       />
-      {!live && <span class="hidden text-[11.5px] text-warn sm:inline">reconnecting</span>}
+      {!live && <span class="hidden text-[12px] text-warn sm:inline">reconnecting</span>}
     </span>
   );
 }

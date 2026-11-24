@@ -2,11 +2,11 @@ import { render } from "preact";
 import { useEffect } from "preact/hooks";
 import { Board } from "./board/index.js";
 import { readBootCache, readCachedMe, setBootUserId } from "./lib/boot-cache.js";
-import { listPath, navigate, routeListId, routeTaskId } from "./lib/router.js";
+import { MY_WORK_PATH, listPath, navigate, route, routeListId, routeTaskId } from "./lib/router.js";
 import { registerShell, shell, shellExists, shellModule } from "./lib/shell-bridge.js";
 import { DEMO, DEMO_EMBED, DEPLOY_URL, REPO_URL } from "./lib/demo.js";
 import { setupNeeded } from "./lib/setup.js";
-import { dismissToast, toasts } from "./lib/toast.js";
+import { dismissToast, toasts, undoLast } from "./lib/toast.js";
 import { settingsOpen } from "./settings/route.js";
 import * as shellMod from "./shell/index.js";
 import { SetupScreen } from "./shell/SetupScreen.js";
@@ -52,13 +52,13 @@ function FallbackSidebar({ activeListId }: { activeListId: string | null }) {
         <span class="h-[7px] w-[7px] rounded-full bg-accent" />
         <span class="text-[13px] font-semibold tracking-[-0.01em]">Flow</span>
         {!connected.value ? (
-          <span class="ml-auto text-[10px] uppercase tracking-wider text-faint">offline</span>
+          <span class="ml-auto text-[11px] uppercase tracking-[0.07em] text-faint">offline</span>
         ) : null}
       </div>
       <div class="scroll-y flex-1 px-1.5 pb-3">
         {spaces.value.map((space) => (
           <div key={space.id} class="mb-3">
-            <p class="px-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-faint">
+            <p class="px-1.5 pb-1 text-[11px] font-semibold uppercase tracking-[0.07em] text-faint">
               {space.name}
             </p>
             {(bySpace.get(space.id) ?? []).map((list) => {
@@ -71,7 +71,7 @@ function FallbackSidebar({ activeListId }: { activeListId: string | null }) {
                     ev.preventDefault();
                     navigate(listPath(space.id, list.id));
                   }}
-                  class={`block truncate rounded px-1.5 py-1 text-[12.5px] ${
+                  class={`block truncate rounded px-1.5 py-1 text-[13px] ${
                     active ? "bg-accent-soft font-medium text-accent" : "text-muted hover:bg-raised"
                   }`}
                 >
@@ -86,25 +86,58 @@ function FallbackSidebar({ activeListId }: { activeListId: string | null }) {
   );
 }
 
-function Toasts() {
+export function Toasts() {
+  // Cmd/Ctrl+Z reverses the newest change while its toast is up. A field with
+  // a caret keeps its own undo.
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key.toLowerCase() !== "z" || !(ev.metaKey || ev.ctrlKey) || ev.shiftKey || ev.altKey) return;
+      const el = ev.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable === true) return;
+      if (undoLast()) ev.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const items = toasts.value;
-  if (items.length === 0) return null;
   return (
-    <div class="pointer-events-none fixed bottom-4 left-1/2 z-[70] flex -translate-x-1/2 flex-col gap-1.5">
-      {items.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          onClick={() => dismissToast(t.id)}
-          class={`pointer-events-auto rounded-md border px-3 py-1.5 text-[12px] ${
-            t.kind === "error"
-              ? "border-danger bg-danger-soft text-danger"
-              : "border-line bg-surface text-muted"
-          }`}
-        >
-          {t.message}
-        </button>
-      ))}
+    <div
+      role="status"
+      aria-live="polite"
+      class="pointer-events-none fixed bottom-4 left-1/2 z-[70] flex -translate-x-1/2 flex-col items-center gap-1.5"
+    >
+      {items.map((t) =>
+        t.action ? (
+          <div
+            key={t.id}
+            class="pointer-events-auto flex items-center gap-2 rounded-lg border border-line bg-surface py-1 pl-3 pr-1.5 text-[12px] text-text shadow-md"
+          >
+            <span class="text-muted">{t.message}</span>
+            <button
+              type="button"
+              onClick={t.action.run}
+              class="rounded-md px-2 py-1 font-medium text-accent transition-colors hover:bg-accent-soft"
+            >
+              {t.action.label}
+            </button>
+          </div>
+        ) : (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => dismissToast(t.id)}
+            class={`pointer-events-auto rounded-lg border px-3 py-1.5 text-[12px] ${
+              t.kind === "error"
+                ? "border-danger bg-danger-soft text-danger"
+                : "border-line bg-surface text-muted"
+            }`}
+          >
+            {t.message}
+          </button>
+        )
+      )}
     </div>
   );
 }
@@ -138,9 +171,9 @@ function App() {
   // My Work overlay is up, and the URL's list id otherwise.
   const shellList = mod?.activeListId ? mod.activeListId.value : undefined;
 
-  // Default route: the first list, once we know what that is. /settings carries
-  // no list id and is a legitimate destination, so it opts out of the redirect —
-  // otherwise a settings deep link would be bounced on hydration.
+  // Default route: My Work. /settings and /my-work carry no list id and are
+  // legitimate destinations, so they opt out of the redirect — otherwise a
+  // settings deep link would be bounced on hydration.
   //
   // A bare /t/:taskId is also list-less, and it is a real deep link (the one the
   // panel's header hands out). The redirect has to carry the task segment along
@@ -152,12 +185,19 @@ function App() {
   const deepTaskSpaceId = deepTaskListId
     ? (listById.value.get(deepTaskListId)?.spaceId ?? null)
     : null;
+  const onMyWork = route.value.myWork;
   useEffect(() => {
-    if (routed || !fallbackList || inSettings) return;
+    if (routed || inSettings || onMyWork) return;
+    // The bare root opens on My Work, with or without any lists yet.
+    if (deepTaskId === null) {
+      navigate(MY_WORK_PATH, { replace: true });
+      return;
+    }
+    if (!fallbackList) return;
     const spaceId = deepTaskSpaceId ?? fallbackList.spaceId;
     const listId = deepTaskListId ?? fallbackList.id;
     navigate(listPath(spaceId, listId, deepTaskId), { replace: true });
-  }, [routed, fallbackList?.id, inSettings, deepTaskId, deepTaskListId, deepTaskSpaceId]);
+  }, [routed, fallbackList?.id, inSettings, onMyWork, deepTaskId, deepTaskListId, deepTaskSpaceId]);
 
   // A fresh deploy with no sign-in configured: the steps, not an empty board.
   if (setupNeeded.value) return <SetupScreen />;
@@ -203,4 +243,5 @@ if (import.meta.env.DEV) {
   });
 }
 
-render(<App />, document.getElementById("app")!);
+const mount = document.getElementById("app");
+if (mount) render(<App />, mount);

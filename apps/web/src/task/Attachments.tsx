@@ -49,7 +49,7 @@ export function Attachments({
     <section>
       <SectionLabel
         right={
-          <label class="inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium normal-case tracking-normal text-muted hover:bg-bg hover:text-text sm:px-1.5 sm:py-0.5">
+          <label class="inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium normal-case tracking-normal text-muted hover:bg-bg hover:text-text sm:px-1.5 sm:py-0.5">
             <Upload class="h-3 w-3" />
             Add file
             <input
@@ -109,8 +109,8 @@ export function Attachments({
                   <Paperclip class="h-3.5 w-3.5" />
                 </span>
                 <span class="min-w-0 flex-1 truncate text-[13px] text-text">{a.filename}</span>
-                <span class="shrink-0 text-[11.5px] tabular-nums text-faint">{formatBytes(a.size)}</span>
-                <span class="hidden shrink-0 text-[11.5px] text-faint sm:inline">
+                <span class="shrink-0 text-[12px] tabular-nums text-faint">{formatBytes(a.size)}</span>
+                <span class="hidden shrink-0 text-[12px] text-faint sm:inline">
                   {relativeTime(a.createdAt)}
                 </span>
               </a>
@@ -125,7 +125,7 @@ export function Attachments({
             <li key={name} class="flex items-center gap-2.5 px-0 py-1.5 text-[13px] text-faint">
               <span class="h-7 w-7 shrink-0 animate-pulse rounded-md bg-bg" />
               <span class="min-w-0 flex-1 truncate">{name}</span>
-              <span class="text-[11.5px]">uploading…</span>
+              <span class="text-[12px]">uploading…</span>
             </li>
           ))}
         </ul>

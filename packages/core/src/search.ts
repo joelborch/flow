@@ -12,7 +12,7 @@ import { resolveStatusNamesAcrossLists } from "./statuses.js";
 // ---------------------------------------------------------------------------
 
 const SELECT_COLUMNS = `t.id, t.list_id, t.title, t.description, t.status_id,
-  t.assignee_id, t.priority, t.due_date, t.start_date, t.tags, t.position,
+  t.assignee_id, t.waiting_on, t.priority, t.due_date, t.start_date, t.tags, t.position,
   t.created_by, t.created_at, t.updated_at, t.closed_at, t.clickup_id`;
 
 /**
@@ -108,6 +108,11 @@ export function searchTasks(
   if (input.assigneeId !== undefined) {
     where.push("t.assignee_id = ?");
     params.push(input.assigneeId);
+  }
+
+  if (input.turnOf !== undefined) {
+    where.push("COALESCE(t.waiting_on, t.assignee_id) = ?");
+    params.push(input.turnOf);
   }
 
   if (input.tags !== undefined) {

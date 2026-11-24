@@ -79,10 +79,14 @@ async function authenticateApiKey(
 }
 
 /** Cloudflare Access path. */
-async function authenticateAccess(c: Context<AppEnv>, jwt: string): Promise<AuthContext> {
+async function authenticateAccess(
+  c: Context<AppEnv>,
+  jwt: string,
+  audience = c.env.ACCESS_AUD
+): Promise<AuthContext> {
   let email: string;
   try {
-    const claims = await verifyAccessJwt(jwt, c.env.ACCESS_TEAM_DOMAIN, c.env.ACCESS_AUD);
+    const claims = await verifyAccessJwt(jwt, c.env.ACCESS_TEAM_DOMAIN, audience);
     email = claims.email;
   } catch (err) {
     if (err instanceof AccessJwtError) throw unauthorized(err.message);
@@ -162,6 +166,29 @@ export function assertSameOrigin(c: Context<AppEnv>): void {
 /** Resolve the caller for a request, or throw an ApiError. */
 export async function resolveAuth(c: Context<AppEnv>): Promise<AuthContext> {
   const bearer = parseBearer(c.req.header("Authorization"));
+  // Access validates and strips the opaque OAuth bearer at the edge, then
+  // forwards its signed assertion. Verify that assertion against the dedicated
+  // MCP audience, never the browser app's audience or a cookie fallback.
+  if (
+    c.req.path === "/mcp/oauth" &&
+    c.env.MCP_ACCESS_OAUTH_ENABLED === "true" &&
+    (bearer === null || (bearer.startsWith("oauth:") && bearer.length > "oauth:".length))
+  ) {
+    const jwt = c.req.header(ACCESS_JWT_HEADER);
+    if (!jwt) throw unauthorized("Managed OAuth requires a signed Access assertion");
+    const audience = c.env.MCP_ACCESS_AUD;
+    if (!audience?.trim()) throw unauthorized("MCP_ACCESS_AUD is not configured");
+    // Preserve the CSRF gate for all browser-origin or cookie-bearing requests.
+    if (
+      c.req.header("Origin") !== undefined ||
+      c.req.header("Sec-Fetch-Site") !== undefined ||
+      c.req.header("Cookie") !== undefined
+    ) {
+      assertSameOrigin(c);
+    }
+    const auth = await authenticateAccess(c, jwt, audience);
+    return { ...auth, actor: { ...auth.actor, via: "mcp" } };
+  }
   if (bearer !== null) {
     if (!looksLikeApiToken(bearer)) {
       throw unauthorized("Authorization bearer must be a flow_ api key");

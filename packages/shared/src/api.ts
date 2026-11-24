@@ -19,6 +19,7 @@ export const CreateTaskInput = z.object({
   // Status NAME (case-insensitive) or omitted for the list's open status.
   status: z.string().optional(),
   assigneeId: Id.nullable().optional(),
+  waitingOn: Id.nullable().optional(),
   priority: Priority.nullable().optional(),
   dueDate: Ts.nullable().optional(),
   startDate: Ts.nullable().optional(),
@@ -46,6 +47,15 @@ export const UpdateTaskInput = z.object({
   description: taskDescription().optional(),
   status: z.string().optional(), // status name
   assigneeId: Id.nullable().optional(),
+  waitingOn: Id.nullable().optional(),
+  // What you need from the person the turn is passed to. Only valid with a
+  // waitingOn that moves the turn to someone; posted as a comment and quoted
+  // in their "Your turn" email.
+  turnNote: z
+    .string()
+    .min(1)
+    .max(LIMITS.commentBodyMax, `Turn note must be ${LIMITS.commentBodyMax} characters or fewer.`)
+    .optional(),
   priority: Priority.nullable().optional(),
   dueDate: Ts.nullable().optional(),
   startDate: Ts.nullable().optional(),
@@ -72,6 +82,9 @@ export const SearchTasksInput = z.object({
   spaceId: Id.optional(),
   status: z.array(z.string()).optional(),
   assigneeId: Id.optional(),
+  // Whose turn it is: waitingOn where set, otherwise the assignee. This is
+  // "what is on this person's plate", where assigneeId is "what they own".
+  turnOf: Id.optional(),
   tags: z.array(z.string()).optional(),
   includeClosed: z.boolean().default(false),
   dueBefore: Ts.optional(),
@@ -84,7 +97,7 @@ export type SearchTasksInput = z.infer<typeof SearchTasksInput>;
 
 // Concise rows for search results / board hydration side-channel uses.
 export const TaskRow = Task.pick({
-  id: true, listId: true, title: true, statusId: true, assigneeId: true,
+  id: true, listId: true, title: true, statusId: true, assigneeId: true, waitingOn: true,
   priority: true, dueDate: true, tags: true, position: true, updatedAt: true,
 });
 export type TaskRow = z.infer<typeof TaskRow>;

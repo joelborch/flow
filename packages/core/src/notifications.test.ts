@@ -108,6 +108,7 @@ describe("default notification prefs", () => {
   it("maps each notification kind to its gating pref", () => {
     expect(PREF_KEY).toEqual({
       assigned: "assigned_to_me",
+      turn: "assigned_to_me",
       comment: "comment_on_my_task",
       status: "status_change_on_my_task",
     });
@@ -185,6 +186,7 @@ describe("templates", () => {
 describe("notificationTag", () => {
   it("names the event for the queue payload / dry-run log", () => {
     expect(notificationTag("assigned")).toBe("notify:assigned_to_me");
+    expect(notificationTag("turn")).toBe("notify:turn_passed_to_me");
     expect(notificationTag("comment")).toBe("notify:comment_on_my_task");
     expect(notificationTag("status")).toBe("notify:status_change_on_my_task");
   });

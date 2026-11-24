@@ -111,6 +111,16 @@ export const ChevronDown = svg(<path d="M3.5 6 8 10.5 12.5 6" />);
 export const Check = svg(<path d="M3 8.5 6.25 11.75 13 5" />);
 export const X = svg(<path d="M4 4l8 8M12 4l-8 8" />);
 export const Plus = svg(<path d="M8 3.5v9M3.5 8h9" />);
+export const HelpIcon = svg([
+  <circle cx="8" cy="8" r="5.75" />,
+  <path d="M6.4 6.4a1.7 1.7 0 1 1 2.5 1.5c-.6.35-.9.75-.9 1.35" />,
+  <circle cx="8" cy="11.4" r="0.5" fill="currentColor" />,
+]);
+export const Dots = svg([
+  <circle cx="3.5" cy="8" r="0.6" fill="currentColor" />,
+  <circle cx="8" cy="8" r="0.6" fill="currentColor" />,
+  <circle cx="12.5" cy="8" r="0.6" fill="currentColor" />,
+]);
 export const Search = svg([
   <circle cx="7" cy="7" r="3.75" />,
   <path d="M10 10l3 3" />,
@@ -236,7 +246,7 @@ export function Avatar({
   return (
     <span
       title={title ?? user.name}
-      style={{ backgroundColor: `hsl(${avatarHue(user)} 42% 48%)` }}
+      style={{ backgroundColor: `hsl(${avatarHue(user)} 45% 36%)` }}
       class={cn(
         "inline-flex select-none items-center justify-center rounded-full font-semibold uppercase tracking-tight text-white",
         user.deactivated && "opacity-45 saturate-50",
@@ -379,6 +389,43 @@ export function SectionLabel({ children, right }: { children: ComponentChildren;
   );
 }
 
+/**
+ * The one pill. Every small label in the app (tags, states, turn, overdue,
+ * roles) is this shape in one of these tones, so they read as the same family
+ * on every screen. `PILL_SM` is the dense variant for board cards and rows.
+ */
+export const PILL = "inline-flex max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] font-medium";
+export const PILL_SM = "inline-flex max-w-full shrink-0 items-center gap-1 rounded px-1.5 py-px text-[11px] font-medium";
+export type PillTone = "neutral" | "accent" | "ok" | "warn" | "danger" | "outline";
+export const PILL_TONE: Record<PillTone, string> = {
+  neutral: "bg-bg text-muted",
+  accent: "bg-accent-soft text-accent",
+  ok: "bg-ok/12 text-ok",
+  warn: "bg-warn/15 text-warn",
+  danger: "bg-danger-soft text-danger",
+  outline: "bg-surface text-muted ring-1 ring-inset ring-line",
+};
+
+export function Pill({
+  children,
+  tone = "neutral",
+  size = "md",
+  title,
+  class: cls,
+}: {
+  children: ComponentChildren;
+  tone?: PillTone;
+  size?: "md" | "sm";
+  title?: string;
+  class?: string;
+}) {
+  return (
+    <span title={title} class={cn(size === "sm" ? PILL_SM : PILL, PILL_TONE[tone], cls)}>
+      {children}
+    </span>
+  );
+}
+
 export function Chip({
   children,
   onRemove,
@@ -394,10 +441,8 @@ export function Chip({
     <span
       title={title}
       class={cn(
-        "inline-flex max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] font-medium",
-        tone === "accent" && "bg-accent/10 text-accent",
-        tone === "warn" && "bg-danger-soft text-danger",
-        tone === "neutral" && "bg-bg text-muted"
+        PILL,
+        PILL_TONE[tone === "warn" ? "danger" : tone]
       )}
     >
       <span class="truncate">{children}</span>
@@ -412,6 +457,47 @@ export function Chip({
         </button>
       )}
     </span>
+  );
+}
+
+// --- button ------------------------------------------------------------------
+
+export function Button({
+  children,
+  onClick,
+  tone = "default",
+  size = "sm",
+  disabled,
+  type = "button",
+  ariaLabel,
+}: {
+  children: ComponentChildren;
+  onClick?: () => void;
+  tone?: "default" | "primary" | "danger" | "ghost";
+  size?: "sm" | "xs";
+  disabled?: boolean;
+  type?: "button" | "submit";
+  /** For a short label repeated down a list ("Edit", "Copy"), so each one still
+   *  names the row it acts on. */
+  ariaLabel?: string;
+}) {
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      class={cn(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-lg border font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        size === "xs" ? "h-[24px] px-2 text-[12px]" : "h-[28px] px-2.5 text-[13px]",
+        tone === "primary" && "border-accent bg-accent text-white hover:bg-accent/90",
+        tone === "danger" && "border-danger/40 bg-danger-soft text-danger hover:border-danger/70",
+        tone === "default" && "border-line bg-surface text-text hover:border-line-strong hover:bg-raised",
+        tone === "ghost" && "border-transparent bg-transparent text-muted hover:bg-bg hover:text-text"
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

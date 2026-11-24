@@ -112,7 +112,7 @@ Every mutation runs as one synchronous turn inside the DO: write rows, append on
 
 ## Quickstart
 
-**One click.** The [Deploy to Cloudflare](https://deploy.workers.cloudflare.com/?url=https://github.com/joelborch/flow) button copies the repo into your GitHub account, creates the Durable Object, R2 bucket and queues, and deploys to a `*.workers.dev` address. Until sign-in is set up, Flow shows the remaining steps: create two Cloudflare Access applications, then set `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `OWNER_EMAIL` under the Worker's Settings → Variables ([details](docs/SELF_HOSTING.md#5-cloudflare-access)). The button deploys from the root `wrangler.jsonc`; for a custom domain and email, use the manual setup below. If the Cloudflare account already runs a Flow, rename the bucket and both queues on the button's setup page, because it preselects existing resources with the default names.
+**One click.** The [Deploy to Cloudflare](https://deploy.workers.cloudflare.com/?url=https://github.com/joelborch/flow) button copies the repo into your GitHub account, creates the Durable Object, R2 bucket and queues in your own Cloudflare account, and deploys a separate `flow-selfhost-example` Worker to a `*.workers.dev` address. Because `pnpm run deploy` is the macOS-only guarded deploy script for maintainers' production checkouts, set **Build command** to `pnpm run build` and **Deploy command** to `pnpm --filter @flow/api exec wrangler deploy --config ../../wrangler.jsonc` on the button's setup screen (that raw command is only for deploying the `flow-selfhost-example` template to a self-hoster's own Cloudflare account, never this checkout's production Worker). Until sign-in is set up, Flow shows the remaining steps: create two Cloudflare Access applications, then set `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `OWNER_EMAIL` under the Worker's Settings → Variables ([details](docs/SELF_HOSTING.md#5-cloudflare-access)). The button deploys from the root `wrangler.jsonc` (`flow-selfhost-example`); for a custom domain and email, use the manual setup below. If your Cloudflare account already runs another Flow instance, rename the Worker, bucket, and both queues on the button's setup page so it cannot collide with existing resources.
 
 **By hand.** Prerequisites: Node 20+, [pnpm](https://pnpm.io), a Cloudflare account, `wrangler` (installed as a dev dependency).
 
@@ -143,8 +143,11 @@ cd apps/api
 pnpm exec wrangler r2 bucket create flow-attachments
 pnpm exec wrangler queues create flow-side-effects
 pnpm exec wrangler queues create flow-dlq
-pnpm deploy    # builds the SPA, deploys the Worker
+cd ../..
+pnpm run deploy  # macOS guarded deploy: checks clean main, builds SPA, shows resolved config + account, asks macOS approval
 ```
+
+Off macOS (self-hosters deploying into **your own Cloudflare account using your own config** — never against a maintainer's production Worker), `pnpm run deploy` refuses because it requires macOS `/usr/bin/osascript` human-presence confirmation. Self-hosters off macOS build the SPA and run Wrangler against their own account and explicit config (`pnpm --filter @flow/web build && pnpm --filter @flow/api exec wrangler deploy --config wrangler.jsonc` with your gitignored `apps/api/wrangler.jsonc`, or `pnpm run build && pnpm --filter @flow/api exec wrangler deploy --config ../../wrangler.jsonc` for the root `flow-selfhost-example` template). For the **Deploy to Cloudflare** button (Workers Builds on Linux), set the Build command to `pnpm run build` and Deploy command to `pnpm --filter @flow/api exec wrangler deploy --config ../../wrangler.jsonc`.
 
 The full runbook — custom domain, Cloudflare Access application setup, email sending, first-user bootstrap — is in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md).
 

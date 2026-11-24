@@ -45,7 +45,7 @@ claude mcp add --transport http flow https://flow.example.com/mcp \
 }
 ```
 
-**ChatGPT and other streamable-HTTP-compatible clients:** point the connector at `https://flow.example.com/mcp` with the same `Authorization: Bearer flow_...` header. Any client that speaks MCP streamable HTTP with a static bearer header works — there's no OAuth dance.
+**ChatGPT and other streamable-HTTP-compatible clients:** point the connector at `https://flow.example.com/mcp` with the same `Authorization: Bearer flow_...` header, or enable Cloudflare Access Managed OAuth on `/mcp/oauth` (opt in via `MCP_ACCESS_OAUTH_ENABLED="true"` and a dedicated Access application audience in `MCP_ACCESS_AUD`, leaving `ACCESS_AUD` unchanged; Access validates the OAuth token at the edge and Flow verifies the injected `Cf-Access-Jwt-Assertion`). Any client that speaks MCP streamable HTTP with a static bearer header works without OAuth.
 
 **By hand** (note the spec requires clients to accept both content types, so omit the `Accept` header and you get a 406):
 
@@ -79,11 +79,11 @@ Tool names are declared in `MCP_TOOLS` in `packages/shared/src/api.ts` and asser
 | Tool | What it does |
 |---|---|
 | `flow_get_workspace_map` | The orientation call: every space, list, each list's valid status **names**, and members. `includeTags` adds tags in use (a full task scan, off by default); `format: "detailed"` adds per-list open-task counts and member emails/roles. |
-| `flow_search_tasks` | Full-text search over title + description, plus filters: `listId`, `spaceId`, `status` (array of names), `assigneeId`, `tags`, `dueBefore`/`dueAfter`/`updatedAfter` (epoch ms), `includeClosed`. Pages by `cursor`. |
+| `flow_search_tasks` | Full-text search over title + description, plus filters: `listId`, `spaceId`, `status` (array of names), `assigneeId` (owner), `turnOf` (whose move it is: `waitingOn` else assignee), `tags`, `dueBefore`/`dueAfter`/`updatedAfter` (epoch ms), `includeClosed`. Pages by `cursor`. |
 | `flow_get_task` | One task in full: description, subtasks, comments, attachments. Concise mode returns the 15 newest comments and reports how many it dropped in `commentsOmitted`. |
-| `flow_list_my_work` | Open tasks assigned to you (or `assigneeId`), grouped `overdue` / `today` / `thisWeek` / `later` / `noDate`. |
-| `flow_create_task` | One task, optionally with inline subtasks. |
-| `flow_update_task` | Change fields on one task: absent leaves alone, `null` clears. Includes snooze (`snoozedUntil`, `blockedNote`). |
+| `flow_list_my_work` | Open tasks assigned to you (or `assigneeId`), or with `scope: "turn"` the tasks whose turn is yours right now, grouped `overdue` / `today` / `thisWeek` / `later` / `noDate`. |
+| `flow_create_task` | One task, optionally with `waitingOn` and inline subtasks. |
+| `flow_update_task` | Change fields on one task: absent leaves alone, `null` clears. Includes turn passing (`waitingOn`, `turnNote`) and snooze (`snoozedUntil`, external `blockedNote`). |
 | `flow_move_task` | Another list and/or status, optional fractional position. |
 | `flow_bulk_create_tasks` | Up to 200 creates, one ok/error result per item. |
 | `flow_bulk_update_tasks` | Up to 200 updates, one ok/error result per `taskId`. |
@@ -121,7 +121,7 @@ Reads default to the smaller answer, because context an agent spends on fields i
 
 | Tool | Concise (default) | Detailed adds |
 |---|---|---|
-| `flow_search_tasks` | id, title, status, list, assignee, dueDate, priority | listId, space, assigneeId, tags, updatedAt |
+| `flow_search_tasks` | id, title, status, list, assignee, turn, dueDate, priority | listId, space, assigneeId, tags, updatedAt |
 | `flow_list_my_work` | same rows, 50 per page | the full row shape |
 | `flow_get_task` | 15 newest comments + `commentsOmitted` count | the whole thread |
 | `flow_get_workspace_map` | ids, names, status names, members as `{id, name}` | per-list `openTasks`, member emails and roles |

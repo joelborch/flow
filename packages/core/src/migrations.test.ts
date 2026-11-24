@@ -246,7 +246,8 @@ describe("core-0013-handoffs", () => {
     const sql = sqliteStorage(db);
     const txn = savepointTxn(db);
     sql.exec("CREATE TABLE IF NOT EXISTS _migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)");
-    applyMigrations(sql, MIGRATIONS.filter((m) => m.id !== "core-0013-handoffs"), txn);
+    // Only the migrations before it: later ones (core-0017) read its columns.
+    applyMigrations(sql, MIGRATIONS.slice(0, MIGRATIONS.findIndex((m) => m.id === "core-0013-handoffs")), txn);
     sql.exec(
       `INSERT INTO tasks (id, list_id, title, status_id, position, created_by, created_at, updated_at)
        VALUES ('tk_old', 'ls_1', 'Old', 'st_1', 1, 'us_1', 0, 0)`
@@ -255,7 +256,7 @@ describe("core-0013-handoffs", () => {
       `INSERT INTO comments (id, task_id, author_id, body, created_at) VALUES ('cm_old', 'tk_old', 'us_1', 'hi', 0)`
     );
 
-    expect(runMigrations(sql, txn)).toEqual(["core-0013-handoffs"]);
+    expect(runMigrations(sql, txn)[0]).toBe("core-0013-handoffs");
     const task = sql
       .exec<{ handoff_state: string | null; handoff_requested_by: string | null }>("SELECT handoff_state, handoff_requested_by FROM tasks WHERE id = 'tk_old'")
       .one();
@@ -426,5 +427,35 @@ describe("core-0014-email-replies", () => {
         "SELECT email_to, email_status FROM comments WHERE id = 'cm_old'"
       ).one()
     ).toEqual({ email_to: null, email_status: null });
+  });
+});
+
+describe("core-0017-handoff-turns", () => {
+  it("gives open handoffs the turn their state implies and leaves everything else alone", () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = sqliteStorage(db);
+    const txn = savepointTxn(db);
+    sql.exec("CREATE TABLE IF NOT EXISTS _migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)");
+    applyMigrations(sql, MIGRATIONS.slice(0, MIGRATIONS.findIndex((m) => m.id === "core-0017-handoff-turns")), txn);
+    const insert = (id: string, extra: string, values: string): void => {
+      sql.exec(
+        `INSERT INTO tasks (id, list_id, title, status_id, position, created_by, created_at, updated_at, assignee_id${extra})
+         VALUES ('${id}', 'ls_1', 't', 'st_1', 1, 'us_1', 0, 0, 'us_to'${values})`
+      );
+    };
+    insert("tk_working", ", handoff_state, handoff_requested_by, handoff_state_changed_at", ", 'working', 'us_from', 0");
+    insert("tk_needs", ", handoff_state, handoff_requested_by, handoff_state_changed_at", ", 'needs_input', 'us_from', 0");
+    insert("tk_kept", ", handoff_state, handoff_requested_by, handoff_state_changed_at, waiting_on", ", 'working', 'us_from', 0, 'us_other'");
+    insert("tk_closed", ", handoff_state, handoff_requested_by, handoff_state_changed_at, closed_at", ", 'done', 'us_from', 0, 5");
+    insert("tk_plain", "", "");
+
+    expect(runMigrations(sql, txn)).toEqual(["core-0017-handoff-turns"]);
+    const turn = (id: string): string | null =>
+      sql.exec<{ waiting_on: string | null }>(`SELECT waiting_on FROM tasks WHERE id = '${id}'`).one().waiting_on;
+    expect(turn("tk_working")).toBe("us_to");
+    expect(turn("tk_needs")).toBe("us_from");
+    expect(turn("tk_kept")).toBe("us_other");
+    expect(turn("tk_closed")).toBeNull();
+    expect(turn("tk_plain")).toBeNull();
   });
 });

@@ -5,7 +5,7 @@ import type { ComponentChildren } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { ApiError } from "../lib/api.js";
 import { cn } from "../shell/format.js";
-import { Check, ChevronDown, ChevronRight, X } from "../shell/ui.js";
+import { Button, Check, ChevronDown, ChevronRight, PILL, PILL_TONE, X } from "../shell/ui.js";
 
 export { Check, ChevronDown, ChevronRight, X };
 
@@ -13,11 +13,20 @@ export { Check, ChevronDown, ChevronRight, X };
 
 export type AsyncStatus = "loading" | "ok" | "error";
 
+/**
+ * What went wrong, in words, with what to do about it. A bare status line
+ * ("502 Bad Gateway") tells the person nothing they can act on, so those are
+ * replaced; a message the API wrote itself is kept, since it names the cause.
+ */
 export function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
-    // A network failure in `vite dev` with no Worker is the common case; say so
-    // rather than surfacing "Failed to fetch".
-    return err.status === 0 ? "Can't reach the API." : err.message;
+    const bare = err.message.trim() === "" || /^\d{3}\b/.test(err.message.trim());
+    if (err.status === 0) return "Can't reach Flow. Check your connection, then retry.";
+    if (err.status === 401) return "Your session expired. Reload the page to sign in again.";
+    if (err.status === 403 && bare) return "You don't have access to this. An owner or admin can change that.";
+    if (err.status === 404 && bare) return "This couldn't be found. It may have been deleted.";
+    if (err.status >= 500 && bare) return `Flow's server had a problem (${err.status}). Retry in a moment.`;
+    return err.message;
   }
   return err instanceof Error ? err.message : String(err);
 }
@@ -93,11 +102,11 @@ export function Row({ children, class: cls }: { children: ComponentChildren; cla
 }
 
 export function Empty({ children }: { children: ComponentChildren }) {
-  return <p class="px-4 py-6 text-center text-[12.5px] text-faint">{children}</p>;
+  return <p class="px-4 py-6 text-center text-[13px] text-faint">{children}</p>;
 }
 
 export function Loading({ children = "Loading…" }: { children?: ComponentChildren }) {
-  return <p class="px-4 py-6 text-center text-[12.5px] text-faint">{children}</p>;
+  return <p class="px-4 py-6 text-center text-[13px] text-faint">{children}</p>;
 }
 
 /** The one failure surface. Never a crash: the API being unreachable is normal
@@ -105,7 +114,7 @@ export function Loading({ children = "Loading…" }: { children?: ComponentChild
 export function ErrorNote({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
     <div class="m-3 flex items-start gap-3 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2">
-      <p class="min-w-0 flex-1 text-[12.5px] leading-relaxed text-danger">{message}</p>
+      <p class="min-w-0 flex-1 text-[13px] leading-relaxed text-danger">{message}</p>
       {onRetry && (
         <button
           type="button"
@@ -121,44 +130,8 @@ export function ErrorNote({ message, onRetry }: { message: string; onRetry?: () 
 
 // --- controls --------------------------------------------------------------
 
-export function Button({
-  children,
-  onClick,
-  tone = "default",
-  size = "sm",
-  disabled,
-  type = "button",
-  ariaLabel,
-}: {
-  children: ComponentChildren;
-  onClick?: () => void;
-  tone?: "default" | "primary" | "danger" | "ghost";
-  size?: "sm" | "xs";
-  disabled?: boolean;
-  type?: "button" | "submit";
-  /** For a short label repeated down a list ("Edit", "Copy"), so each one still
-   *  names the row it acts on. */
-  ariaLabel?: string;
-}) {
-  return (
-    <button
-      type={type}
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={ariaLabel}
-      class={cn(
-        "inline-flex shrink-0 items-center gap-1.5 rounded-lg border font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-        size === "xs" ? "h-[24px] px-2 text-[11.5px]" : "h-[28px] px-2.5 text-[12.5px]",
-        tone === "primary" && "border-accent bg-accent text-white hover:bg-accent/90",
-        tone === "danger" && "border-danger/40 bg-danger-soft text-danger hover:border-danger/70",
-        tone === "default" && "border-line bg-surface text-text hover:border-line-strong hover:bg-raised",
-        tone === "ghost" && "border-transparent bg-transparent text-muted hover:bg-bg hover:text-text"
-      )}
-    >
-      {children}
-    </button>
-  );
-}
+// The shared button lives in shell/ui so every screen uses the same one.
+export { Button };
 
 export function TextInput({
   value,
@@ -189,7 +162,7 @@ export function TextInput({
         }
       }}
       class={cn(
-        "h-[28px] min-w-0 rounded-lg border border-line bg-surface px-2.5 text-[12.5px] text-text transition-colors placeholder:text-faint hover:border-line-strong focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-accent/10",
+        "h-[28px] min-w-0 rounded-lg border border-line bg-surface px-2.5 text-[13px] text-text transition-colors placeholder:text-faint hover:border-line-strong focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-accent/10",
         mono && "font-mono"
       )}
     />
@@ -316,11 +289,11 @@ export function CopyBlock({
           )}
         </Button>
       </div>
-      <pre class="scroll-y max-h-40 overflow-x-auto px-2.5 py-2 font-mono text-[11.5px] leading-relaxed text-text">
+      <pre class="scroll-y max-h-40 overflow-x-auto px-2.5 py-2 font-mono text-[12px] leading-relaxed text-text">
         {value}
       </pre>
       {warning && (
-        <p class="border-t border-line px-2.5 py-1.5 text-[11.5px] font-medium text-warn">{warning}</p>
+        <p class="border-t border-line px-2.5 py-1.5 text-[12px] font-medium text-warn">{warning}</p>
       )}
     </div>
   );
@@ -340,14 +313,7 @@ export function Tag({
   return (
     <span
       title={title}
-      class={cn(
-        "inline-flex max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] font-medium",
-        tone === "neutral" && "bg-bg text-muted",
-        tone === "accent" && "bg-accent/10 text-accent",
-        tone === "ok" && "bg-ok/12 text-ok",
-        tone === "warn" && "bg-warn/15 text-warn",
-        tone === "danger" && "bg-danger-soft text-danger"
-      )}
+      class={cn(PILL, PILL_TONE[tone])}
     >
       <span class="truncate">{children}</span>
     </span>

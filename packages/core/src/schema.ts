@@ -584,6 +584,29 @@ export const MIGRATIONS: readonly Migration[] = [
   { id: "core-0012-email-intake", statements: EMAIL_INTAKE },
   { id: "core-0013-handoffs", statements: HANDOFFS },
   { id: "core-0014-email-replies", statements: EMAIL_REPLIES },
+  {
+    id: "core-0015-waiting-on",
+    statements: [
+      `ALTER TABLE tasks ADD COLUMN waiting_on TEXT`,
+      `CREATE INDEX idx_tasks_waiting_on ON tasks(waiting_on) WHERE waiting_on IS NOT NULL`,
+    ],
+  },
+  {
+    // Closing a task now clears its turn; tidy the few closed before that rule.
+    id: "core-0016-clear-turn-on-closed",
+    statements: [`UPDATE tasks SET waiting_on = NULL WHERE closed_at IS NOT NULL AND waiting_on IS NOT NULL`],
+  },
+  {
+    // Handoff states now set the turn; give open handoffs filed before that
+    // rule the turn their state implies. One a person already set is kept.
+    id: "core-0017-handoff-turns",
+    statements: [
+      `UPDATE tasks
+       SET waiting_on = CASE handoff_state WHEN 'needs_input' THEN handoff_requested_by ELSE assignee_id END
+       WHERE handoff_state IN ('requested', 'working', 'needs_input')
+         AND closed_at IS NULL AND waiting_on IS NULL`,
+    ],
+  },
 ];
 
 /**

@@ -5,6 +5,7 @@ import {
   OPEN_HANDOFF_STATES,
   decideHandoffState,
   handoffStateForStatusMove,
+  handoffTurnHolder,
   handoffStatusMove,
   isTerminalHandoffState,
 } from "./handoffs.js";
@@ -73,6 +74,18 @@ describe("handoffStatusMove", () => {
   it("agrees with isTerminalHandoffState", () => {
     expect(ALL.filter(isTerminalHandoffState)).toEqual(["done", "declined"]);
     expect(ALL.filter((s) => !isTerminalHandoffState(s))).toEqual([...OPEN_HANDOFF_STATES]);
+  });
+});
+
+describe("handoffTurnHolder", () => {
+  it("puts the turn on the recipient while open, the requester on needs_input, and no one when finished", () => {
+    expect(handoffTurnHolder("requested", "us_to", "us_from")).toBe("us_to");
+    expect(handoffTurnHolder("working", "us_to", "us_from")).toBe("us_to");
+    expect(handoffTurnHolder("needs_input", "us_to", "us_from")).toBe("us_from");
+    expect(handoffTurnHolder("done", "us_to", "us_from")).toBeNull();
+    expect(handoffTurnHolder("declined", "us_to", "us_from")).toBeNull();
+    // An unassigned open handoff has no recipient to hold it.
+    expect(handoffTurnHolder("working", null, "us_from")).toBeNull();
   });
 });
 

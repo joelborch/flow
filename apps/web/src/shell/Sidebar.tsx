@@ -22,7 +22,9 @@ import {
   toggleDormant, togglePin, toggleSpace, type SidebarMode,
 } from "./prefs.js";
 import { recentListRows, recentTaskRows } from "./recents.js";
-import { Archive, ChevronDown, ChevronRight, Inbox, LockIcon, StatusDot, X } from "./ui.js";
+import { Archive, ChevronDown, ChevronRight, Inbox, LockIcon, StatusDot, X, HelpIcon,
+} from "./ui.js";
+import { openOnboarding } from "./onboarding.js";
 
 function Wordmark() {
   return (
@@ -33,7 +35,7 @@ function Wordmark() {
           <path d="M4 5.5h8M4 10.5h4.5" />
         </svg>
       </span>
-      <span class="min-w-0 flex-1 truncate text-[14.5px] font-semibold tracking-[-0.02em] text-text">
+      <span class="min-w-0 flex-1 truncate text-[15px] font-semibold tracking-[-0.02em] text-text">
         Flow
       </span>
       {/* Only reachable while the drawer is up; at sm+ the nav is never over
@@ -69,7 +71,7 @@ function SpaceHeader({ space, collapsed, focused }: { space: Space; collapsed: b
   };
 
   return (
-    <div class="group flex w-full items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-faint">
+    <div class="group flex w-full items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-semibold uppercase tracking-[0.07em] text-faint">
       <button
         type="button"
         onClick={() => toggleSpace(space.id)}
@@ -87,7 +89,7 @@ function SpaceHeader({ space, collapsed, focused }: { space: Space; collapsed: b
       {renaming ? (
         <RenameRow
           value={space.name}
-          class="text-[11px] font-semibold uppercase tracking-[0.06em]"
+          class="text-[11px] font-semibold uppercase tracking-[0.07em]"
           onCancel={stopRename}
           onCommit={(name) => {
             stopRename();
@@ -199,14 +201,14 @@ function ListRow({
             )}
           </button>
           {list.archived && (
-            <span class="shrink-0 rounded border border-line px-1 text-[10px] uppercase tracking-wide text-faint">
+            <span class="shrink-0 rounded border border-line px-1 text-[11px] uppercase tracking-[0.07em] text-faint">
               archived
             </span>
           )}
           {count > 0 && (
             <span
               class={cn(
-                "shrink-0 text-[11.5px] tabular-nums transition-opacity group-hover:opacity-0",
+                "shrink-0 text-[12px] tabular-nums transition-opacity group-hover:opacity-0",
                 active ? "text-muted" : "text-faint"
               )}
             >
@@ -249,7 +251,7 @@ function PinnedSection({ activeListId }: { activeListId: string | null }) {
 
   return (
     <>
-      <p class="px-1.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-faint">
+      <p class="px-1.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-faint">
         Pinned
       </p>
       <ul class="mb-2">
@@ -275,7 +277,7 @@ function DormantToggle({ spaceId, count, open }: { spaceId: string; count: numbe
       type="button"
       onClick={() => toggleDormant(spaceId)}
       aria-expanded={open}
-      class="flex w-full items-center gap-1.5 rounded-lg py-[5px] pl-2 pr-1.5 text-left text-[12.5px] text-faint transition-colors hover:bg-raised hover:text-muted"
+      class="flex w-full items-center gap-1.5 rounded-lg py-[5px] pl-2 pr-1.5 text-left text-[13px] text-faint transition-colors hover:bg-raised hover:text-muted"
     >
       {open ? <ChevronDown class="h-3 w-3" /> : <ChevronRight class="h-3 w-3" />}
       <span class="min-w-0 flex-1 truncate">
@@ -318,7 +320,7 @@ function SpaceGroup({ space, activeListId }: { space: Space; activeListId: strin
       {!collapsed && (
         <ul class="mt-0.5">
           {spaceLists.length === 0 && (
-            <li class="px-2 py-1 pl-[26px] text-[12.5px] text-faint">No lists</li>
+            <li class="px-2 py-1 pl-[26px] text-[13px] text-faint">No lists</li>
           )}
           {visible.map((list) => (
             <li key={list.id}>
@@ -345,7 +347,7 @@ function SpaceGroup({ space, activeListId }: { space: Space; activeListId: strin
 /** Group heading, same type as the Pinned label above. */
 function GroupLabel({ children }: { children: string }) {
   return (
-    <p class="px-1.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-faint">
+    <p class="px-1.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-faint">
       {children}
     </p>
   );
@@ -376,7 +378,7 @@ function ModeSwitch() {
             aria-selected={on}
             onClick={() => setSidebarMode(o.value)}
             class={cn(
-              "min-w-0 flex-1 truncate rounded-[6px] px-2 py-[3px] text-[12px] transition-colors",
+              "min-w-0 flex-1 truncate rounded-md px-2 py-[3px] text-[12px] transition-colors",
               on ? "bg-surface font-medium text-text shadow-[0_1px_2px_rgb(0_0_0/0.06)]" : "text-muted hover:text-text"
             )}
           >
@@ -430,7 +432,7 @@ function RecentPanel({ activeListId }: { activeListId: string | null }) {
 
   if (lists.length === 0 && taskRows.length === 0) {
     return (
-      <p class="px-2 py-3 text-[12.5px] text-faint">
+      <p class="px-2 py-3 text-[13px] text-faint">
         Nothing here yet. Lists and tasks you spend a moment on show up in this tab.
       </p>
     );
@@ -503,7 +505,7 @@ export function Sidebar() {
           <Inbox class={cn("h-4 w-4", view.kind === "my-work" ? "text-accent" : "text-faint")} />
           <span class="min-w-0 flex-1 truncate text-left">My Work</span>
           {myCount > 0 && (
-            <span class="shrink-0 text-[11.5px] tabular-nums text-faint">{myCount}</span>
+            <span class="shrink-0 text-[12px] tabular-nums text-faint">{myCount}</span>
           )}
         </button>
 
@@ -520,7 +522,7 @@ export function Sidebar() {
             <PinnedSection activeListId={activeId} />
 
             {spaceList.length === 0 && (
-              <p class="px-2 py-3 text-[12.5px] text-faint">No spaces yet.</p>
+              <p class="px-2 py-3 text-[13px] text-faint">No spaces yet.</p>
             )}
 
             {spaceList.map((space) => (
@@ -539,7 +541,7 @@ export function Sidebar() {
           }}
           aria-pressed={includeArchived}
           class={cn(
-            "flex w-full items-center gap-2 rounded-lg px-2 py-[6px] text-[12.5px] transition-colors",
+            "flex w-full items-center gap-2 rounded-lg px-2 py-[6px] text-[13px] transition-colors",
             includeArchived
               ? "bg-accent-soft text-text"
               : "text-muted hover:bg-raised hover:text-text"
@@ -547,6 +549,18 @@ export function Sidebar() {
         >
           <Archive class="h-3.5 w-3.5 text-faint" />
           <span class="min-w-0 flex-1 truncate text-left">{includeArchived ? "Hide archived" : "Show archived"}</span>
+        </button>
+        {/* The welcome guide was reachable only from Settings; this is the help link. */}
+        <button
+          type="button"
+          onClick={() => {
+            closeDrawer();
+            openOnboarding();
+          }}
+          class="flex w-full items-center gap-2 rounded-lg px-2 py-[6px] text-[13px] text-muted transition-colors hover:bg-raised hover:text-text"
+        >
+          <HelpIcon class="h-3.5 w-3.5 text-faint" />
+          <span class="min-w-0 flex-1 truncate text-left">Help and shortcuts</span>
         </button>
       </div>
     </nav>

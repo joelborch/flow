@@ -99,4 +99,71 @@ describe("GET /api/health", () => {
     await expect(cachedBackupHealth(env, 1_000)).rejects.toThrow("reset");
     await expect(cachedBackupHealth(env, 1_001)).resolves.toMatchObject({ stale: false });
   });
+
+  it("keeps /api/health and /api/setup serving even when Access is configured, EMAIL_DRY_RUN is false, and email vars are unset", async () => {
+    const { default: worker } = await import("./index.js");
+    const env = {
+      ACCESS_TEAM_DOMAIN: "acme.cloudflareaccess.com",
+      ACCESS_AUD: "a".repeat(64),
+      EMAIL_DRY_RUN: "false",
+      WORKSPACE: {
+        idFromName: vi.fn().mockReturnValue({}),
+        get: vi.fn().mockReturnValue({ getBackupStatus: vi.fn().mockResolvedValue(STATUS) }),
+      },
+    } as unknown as Env;
+    const ctx = {
+      waitUntil: () => undefined,
+      passThroughOnException: () => undefined,
+      props: {},
+    } as unknown as ExecutionContext;
+
+    const health = await worker.fetch(new Request("https://flow.example/api/health"), env, ctx);
+    expect(health.status).toBe(200);
+    await expect(health.json()).resolves.toMatchObject({ ok: true });
+
+    const setup = await worker.fetch(new Request("https://flow.example/api/setup"), env, ctx);
+    expect(setup.status).toBe(200);
+    await expect(setup.json()).resolves.toEqual({ signIn: "access" });
+  });
+
+  it("dispatches renamed template DLQ batches (ending in -dlq) to handleDeadLetterBatch", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const recordDeliveryFailure = vi.fn().mockResolvedValue({ ok: true });
+    try {
+      const { default: worker } = await import("./index.js");
+      const ack = vi.fn();
+      const env = {
+        WORKSPACE: {
+          idFromName: vi.fn().mockReturnValue({}),
+          get: vi.fn().mockReturnValue({ recordDeliveryFailure }),
+        },
+      } as unknown as Env;
+      const batch = {
+        queue: "flow-selfhost-example-dlq",
+        messages: [
+          {
+            id: "msg_dlq",
+            attempts: 5,
+            body: {
+              kind: "webhook",
+              url: "https://example.com/hook",
+              body: { event: "task.updated" },
+              ruleId: "ar_1",
+              taskId: "tk_1",
+            },
+            ack,
+            retry: vi.fn(),
+          },
+        ],
+      } as unknown as MessageBatch;
+
+      await worker.queue(batch, env);
+      expect(recordDeliveryFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ ruleId: "ar_1", taskId: "tk_1", kind: "webhook" })
+      );
+      expect(ack).toHaveBeenCalledOnce();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 });

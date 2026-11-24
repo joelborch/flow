@@ -39,14 +39,14 @@ const BREAK = "break-words";
 const S = {
   p: `mt-3.5 text-[15px] leading-[1.65] text-text ${BREAK}`,
   h1: `mt-7 mb-1.5 text-[19px] font-semibold tracking-[-0.015em] text-text ${BREAK}`,
-  h2: `mt-6 mb-1.5 text-[16.5px] font-semibold tracking-[-0.012em] text-text ${BREAK}`,
-  h3: `mt-5 mb-1 text-[14.5px] font-semibold text-text ${BREAK}`,
-  h4: `mt-4 mb-1 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted ${BREAK}`,
+  h2: `mt-6 mb-1.5 text-[16px] font-semibold tracking-[-0.012em] text-text ${BREAK}`,
+  h3: `mt-5 mb-1 text-[15px] font-semibold text-text ${BREAK}`,
+  h4: `mt-4 mb-1 text-[12px] font-semibold uppercase tracking-[0.07em] text-muted ${BREAK}`,
   ul: "mt-3 space-y-1.5 pl-5 text-[15px] list-disc marker:text-faint",
   ol: "mt-3 space-y-1.5 pl-5 text-[15px] list-decimal marker:text-[13px] marker:font-medium marker:text-faint",
   li: `text-[15px] leading-[1.6] text-text ${BREAK} [&>ul]:mt-1.5 [&>ol]:mt-1.5 [&>p]:mt-0`,
   tasks: "mt-3 space-y-1.5",
-  code: "mt-4 overflow-x-auto rounded-lg border border-line bg-bg px-3.5 py-3 font-mono text-[12.5px] leading-[1.6] text-text scroll-y",
+  code: "mt-4 overflow-x-auto rounded-lg border border-line bg-bg px-3.5 py-3 font-mono text-[13px] leading-[1.6] text-text scroll-y",
   inlineCode: `rounded bg-bg px-1.5 py-[1px] font-mono text-[0.86em] text-text ${BREAK}`,
   quote: `mt-4 border-l-2 border-line pl-4 text-[15px] leading-[1.65] text-muted ${BREAK} [&>p]:mt-2 [&>p:first-child]:mt-0`,
   hr: "my-6 border-0 border-t border-line",
@@ -55,7 +55,7 @@ const S = {
   // A table is the one block that legitimately wants to be wider than the
   // measure, so it scrolls inside its own box instead of stretching the column.
   tableWrap: "mt-4 max-w-full overflow-x-auto rounded-lg border border-line scroll-y",
-  table: "w-full border-collapse text-[13.5px]",
+  table: "w-full border-collapse text-[14px]",
   th: "border-b border-line bg-bg px-3 py-2 text-left align-top font-semibold text-text",
   td: "border-b border-line px-3 py-2 align-top text-text last:border-b-0",
 } as const;
@@ -239,7 +239,7 @@ function blocks(lines: string[], key: string): VNode[] {
       const lang = fence[2] ?? "";
       out.push(
         <pre key={nextKey()} class={S.code}>
-          {lang && <span class="mb-1.5 block select-none text-[10px] font-semibold uppercase tracking-[0.08em] text-faint">{lang}</span>}
+          {lang && <span class="mb-1.5 block select-none text-[11px] font-semibold uppercase tracking-[0.07em] text-faint">{lang}</span>}
           <code>{body.join("\n")}</code>
         </pre>
       );
@@ -386,8 +386,8 @@ function blocks(lines: string[], key: string): VNode[] {
                   aria-hidden="true"
                   class={
                     it.checked
-                      ? "mt-[3px] flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-[4px] bg-accent text-white"
-                      : "mt-[3px] h-[15px] w-[15px] shrink-0 rounded-[4px] border border-line-strong"
+                      ? "mt-[3px] flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded bg-accent text-white"
+                      : "mt-[3px] h-[15px] w-[15px] shrink-0 rounded border border-line-strong"
                   }
                 >
                   {it.checked && (

@@ -67,7 +67,7 @@ function addChoices(taken: ReadonlySet<string>): SpaceChoices[] {
     .filter((group) => group.lists.length > 0);
 }
 
-const FIELD_LABEL = "mb-1 block text-[11.5px] font-medium text-muted";
+const FIELD_LABEL = "mb-1 block text-[12px] font-medium text-muted";
 
 /**
  * Alias + senders, shared by add and edit. Add passes `choices` and gets a list
@@ -117,7 +117,7 @@ function IntakeForm({
   if (choices && choices.length === 0) {
     return (
       <div class="flex flex-wrap items-center gap-2">
-        <p class="min-w-0 flex-1 text-[12.5px] text-faint">Every active list already has an address.</p>
+        <p class="min-w-0 flex-1 text-[13px] text-faint">Every active list already has an address.</p>
         <Button tone="ghost" size="xs" onClick={onCancel}>
           Cancel
         </Button>
@@ -139,7 +139,7 @@ function IntakeForm({
           <select
             value={listId}
             onChange={(e) => setListId((e.currentTarget as HTMLSelectElement).value)}
-            class="h-[28px] w-full max-w-[360px] rounded-lg border border-line bg-surface px-2 text-[12.5px] text-text hover:border-line-strong focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-accent/10"
+            class="h-[28px] w-full max-w-[360px] rounded-lg border border-line bg-surface px-2 text-[13px] text-text hover:border-line-strong focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-accent/10"
           >
             <option value="">Choose a list…</option>
             {choices.map(({ space, lists: inSpace }) => (
@@ -163,7 +163,7 @@ function IntakeForm({
         </span>
       </label>
       {renaming && (
-        <p class="text-[11.5px] text-warn">
+        <p class="text-[12px] text-warn">
           Mail to the old address, {intakeAddress(initialAlias, domain) ?? initialAlias}, stops
           opening tasks once you save.
         </p>
@@ -178,10 +178,10 @@ function IntakeForm({
           aria-describedby={hintId}
           placeholder={"name@example.com\n@example.com"}
           onInput={(e) => setSenders((e.currentTarget as HTMLTextAreaElement).value)}
-          class="block w-full max-w-[480px] resize-y rounded-lg border border-line bg-surface px-2.5 py-1.5 font-mono text-[12.5px] leading-relaxed text-text transition-colors placeholder:text-faint hover:border-line-strong focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-accent/10"
+          class="block w-full max-w-[480px] resize-y rounded-lg border border-line bg-surface px-2.5 py-1.5 font-mono text-[13px] leading-relaxed text-text transition-colors placeholder:text-faint hover:border-line-strong focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-accent/10"
         />
       </label>
-      <p id={hintId} class="text-[11.5px] text-faint">
+      <p id={hintId} class="text-[12px] text-faint">
         One per line: an address, or @example.com to admit everyone at that domain.
       </p>
 
@@ -290,12 +290,12 @@ function IntakeRow({
             )}
           </Button>
         ) : (
-          <span class="shrink-0 text-[11.5px] text-faint">no intake domain set</span>
+          <span class="shrink-0 text-[12px] text-faint">no intake domain set</span>
         )}
       </div>
 
       <div class="mt-1.5 flex flex-wrap items-center gap-1">
-        <span class="mr-0.5 text-[11.5px] text-faint">From</span>
+        <span class="mr-0.5 text-[12px] text-faint">From</span>
         {intake.allowedSenders.map((sender) => (
           <Tag key={sender}>{sender}</Tag>
         ))}
