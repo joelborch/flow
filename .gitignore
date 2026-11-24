@@ -17,9 +17,6 @@ apps/api/wrangler.jsonc
 .env
 .env.*
 
-# Importer working data (raw ClickUp exports and transformed output)
-apps/importer/data/
-
 # OS / editor noise
 .DS_Store
 *.log

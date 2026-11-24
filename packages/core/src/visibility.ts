@@ -118,10 +118,9 @@ export function privateSpaceError(spaceId: string): string {
 
 /**
  * Mutations that the workspace itself decided on, rather than a person: inline
- * automation actions and `importBatch`. They run as system and are exempt from
- * the space guard — an automation scoped to a private space must still fire for
- * the member whose task tripped it, and an import loads spaces it is in the
- * middle of creating.
+ * automation actions and system `"import"` actors. They run as system and are
+ * exempt from the space guard — an automation scoped to a private space must
+ * still fire for the member whose task tripped it.
  */
 export function isSystemActor(actor: Actor): boolean {
   return actor.via === "automation" || actor.via === "import";

@@ -16,7 +16,9 @@ import {
   extractEffectiveCrons,
   extractEffectiveRoutes,
   formatDialogSummary,
+  formatEffectiveRoutes,
   formatResolvedConfig,
+  hashDirectory,
   humanApproval,
   isPlaceholderEmail,
   parseConfigArg,
@@ -27,6 +29,7 @@ import {
   resolveEffectivePreviewUrls,
   resolveEffectiveWorkersDev,
   runDeploy,
+  sanitizedWebBuildEnv,
   sanitizedWranglerEnv,
   selectWebBuildScript,
   summarizeMigrations,
@@ -59,6 +62,7 @@ function makeFixtureRepo() {
   const outside = join(base, "flow-private");
 
   mkdirSync(join(checkout, "apps", "api", "src"), { recursive: true });
+  mkdirSync(join(checkout, "apps", "web", "src"), { recursive: true });
   mkdirSync(join(checkout, "apps", "web", "dist"), { recursive: true });
   mkdirSync(join(checkout, "apps", "web", "dist-demo"), { recursive: true });
   mkdirSync(join(checkout, "apps", "static-assets"), { recursive: true });
@@ -80,6 +84,7 @@ function makeFixtureRepo() {
   writeFileSync(join(checkout, "apps", "api", "custom.tsconfig.json"), "{}\n");
   writeFileSync(join(checkout, "apps", "api", "blob.txt"), "hello\n");
   writeFileSync(join(checkout, "apps", "web", "package.json"), '{"name":"@flow/web"}\n');
+  writeFileSync(join(checkout, "apps", "web", "src", "main.tsx"), "export {};\n");
   writeFileSync(join(checkout, "apps", "static-assets", "index.html"), "<html/>\n");
   writeFileSync(join(checkout, "packages", "core", "src", "index.ts"), "export {};\n");
   writeFileSync(join(checkout, "packages", "core", "node_modules", "dep", "index.js"), "export {};\n");
@@ -163,6 +168,14 @@ describe("parseDeployArgs and CLOUDFLARE_ENV", () => {
       /CF_API_BASE_URL is set/
     );
     assert.throws(
+      () => parseDeployArgs([], { cwd: "/repo", env: { CLOUDFLARE_API_HEADERS: '{"X-Test":"1"}' }, root: "/repo" }),
+      /CLOUDFLARE_API_HEADERS is set/
+    );
+    assert.throws(
+      () => parseDeployArgs([], { cwd: "/repo", env: { CLOUDFLARE_COMPLIANCE_REGION: "fedramp_high" }, root: "/repo" }),
+      /CLOUDFLARE_COMPLIANCE_REGION is set/
+    );
+    assert.throws(
       () => parseDeployArgs(["--main", "foo.ts"], { cwd: "/repo", env: {}, root: "/repo" }),
       /unexpected argument/
     );
@@ -171,22 +184,51 @@ describe("parseDeployArgs and CLOUDFLARE_ENV", () => {
       PATH: "/usr/bin",
       CLOUDFLARE_ENV: "prod",
       CLOUDFLARE_API_BASE_URL: "https://evil.test",
+      CLOUDFLARE_API_KEY: "key",
+      CLOUDFLARE_EMAIL: "op@acme.test",
+      CLOUDFLARE_API_HEADERS: '{"X-Evil":"1"}',
+      CLOUDFLARE_COMPLIANCE_REGION: "fedramp_high",
+      CLOUDFLARE_INCLUDE_PROCESS_ENV: "true",
       CF_API_TOKEN: "tok",
       CF_ACCOUNT_ID: "acc",
       CF_API_BASE_URL: "https://evil.test",
+      CF_API_KEY: "cfkey",
+      CF_EMAIL: "cf@acme.test",
       WRANGLER_CI_OVERRIDE_NAME: "hijack",
       WRANGLER_CONFIG_FILENAME: "other.jsonc",
       wrangler_api_environment: "staging",
     });
-    assert.equal("CLOUDFLARE_ENV" in cleaned, false);
-    assert.equal("CLOUDFLARE_API_BASE_URL" in cleaned, false);
-    assert.equal("CF_API_TOKEN" in cleaned, false);
-    assert.equal("CF_ACCOUNT_ID" in cleaned, false);
-    assert.equal("CF_API_BASE_URL" in cleaned, false);
-    assert.equal("WRANGLER_CI_OVERRIDE_NAME" in cleaned, false);
-    assert.equal("WRANGLER_CONFIG_FILENAME" in cleaned, false);
-    assert.equal("wrangler_api_environment" in cleaned, false);
+    for (const removedKey of [
+      "CLOUDFLARE_ENV",
+      "CLOUDFLARE_API_BASE_URL",
+      "CLOUDFLARE_API_KEY",
+      "CLOUDFLARE_EMAIL",
+      "CLOUDFLARE_API_HEADERS",
+      "CLOUDFLARE_COMPLIANCE_REGION",
+      "CLOUDFLARE_INCLUDE_PROCESS_ENV",
+      "CF_API_TOKEN",
+      "CF_ACCOUNT_ID",
+      "CF_API_BASE_URL",
+      "CF_API_KEY",
+      "CF_EMAIL",
+      "WRANGLER_CI_OVERRIDE_NAME",
+      "WRANGLER_CONFIG_FILENAME",
+      "wrangler_api_environment",
+    ]) {
+      assert.equal(removedKey in cleaned, false, `expected ${removedKey} stripped`);
+    }
     assert.equal(cleaned.PATH, "/usr/bin");
+
+    const webEnv = sanitizedWebBuildEnv({
+      PATH: "/usr/bin",
+      VITE_DEMO: "true",
+      VITE_APP_ORIGIN: "https://evil.test",
+      vite_custom: "1",
+    });
+    assert.equal("VITE_DEMO" in webEnv, false);
+    assert.equal("VITE_APP_ORIGIN" in webEnv, false);
+    assert.equal("vite_custom" in webEnv, false);
+    assert.equal(webEnv.PATH, "/usr/bin");
   });
 
   it("strictly parses .env/.dev.vars (KEY=value, KEY: value, lone \\r, U+2028) and refuses CF_*/CLOUDFLARE_*/WRANGLER_* or unparseable lines", () => {
@@ -218,6 +260,21 @@ describe("parseDeployArgs and CLOUDFLARE_ENV", () => {
         /CF_API_TOKEN, CF_ACCOUNT_ID, CF_API_BASE_URL, WRANGLER_CI_OVERRIDE_NAME/
       );
       rmSync(join(apiDir, ".env"));
+
+      // .env.example / .dev.vars.example are loaded under `--env example` and must be checked too.
+      writeFileSync(join(apiDir, ".dev.vars.example"), "CLOUDFLARE_ACCOUNT_ID=acc_example\n");
+      assert.throws(
+        () => assertNoEnvFileOverrides([apiDir], fx.checkout),
+        /env file apps\/api\/\.dev\.vars\.example sets forbidden override variable\(s\): CLOUDFLARE_ACCOUNT_ID/
+      );
+      rmSync(join(apiDir, ".dev.vars.example"));
+
+      writeFileSync(join(apiDir, ".env.example"), "CF_API_TOKEN=tok\n");
+      assert.throws(
+        () => assertNoEnvFileOverrides([apiDir], fx.checkout),
+        /env file apps\/api\/\.env\.example sets forbidden override variable\(s\): CF_API_TOKEN/
+      );
+      rmSync(join(apiDir, ".env.example"));
 
       writeFileSync(join(apiDir, ".dev.vars.local"), "CLOUDFLARE_ACCOUNT_ID=acc_other\n");
       assert.throws(
@@ -317,7 +374,7 @@ describe("validateDeployConfig boundaries, env selection, and git tracking", () 
     }
   });
 
-  it("refuses untracked main/tsconfig/assets, gitignored or excluded files under apps/api/src and packages, and hidden git index flags", () => {
+  it("refuses untracked main/tsconfig/assets/site entry-points, base_dir path mismatches, gitignored or excluded source files, status.showUntrackedFiles=no, and hidden git index flags", () => {
     const fx = makeFixtureRepo();
     try {
       const untrackedMain = join(fx.checkout, "apps", "api", "src", "untracked.ts");
@@ -327,6 +384,72 @@ describe("validateDeployConfig boundaries, env selection, and git tracking", () 
       assert.throws(() => validateDeployConfig(cfg1, fx.checkout), /main is not tracked by git/);
       rmSync(untrackedMain);
 
+      // Blocker regression: Wrangler resolves main and assets.directory relative to configDir, ignoring base_dir.
+      // 1) base_dir + main="index.ts" when apps/api/index.ts is excluded must NOT validate apps/api/src/index.ts!
+      writeFileSync(join(fx.checkout, ".git", "info", "exclude"), "apps/api/index.ts\n");
+      writeFileSync(join(fx.checkout, "apps", "api", "index.ts"), "export default { pwn: true };\n");
+      const cfgBaseMain = join(fx.checkout, "apps", "api", "base-main.jsonc");
+      writeFileSync(
+        cfgBaseMain,
+        JSON.stringify({ name: "flow", base_dir: "src", main: "index.ts", assets: { directory: "../web/dist" } })
+      );
+      assert.throws(() => validateDeployConfig(cfgBaseMain, fx.checkout), /main is not tracked by git: apps\/api\/index\.ts/);
+      rmSync(join(fx.checkout, "apps", "api", "index.ts"));
+      writeFileSync(join(fx.checkout, ".git", "info", "exclude"), "");
+
+      // 2) base_dir + assets.directory escaping configDir must be refused even when base_dir + assets would stay inside checkout!
+      mkdirSync(join(fx.checkout, "apps", "api", "src", "side-effects"), { recursive: true });
+      const cfgBaseAssets = join(fx.checkout, "apps", "api", "base-assets.jsonc");
+      writeFileSync(
+        cfgBaseAssets,
+        JSON.stringify({
+          name: "flow",
+          base_dir: "src/side-effects",
+          main: "src/index.ts",
+          assets: { directory: "../../../web/dist" },
+        })
+      );
+      assert.throws(() => validateDeployConfig(cfgBaseAssets, fx.checkout), /assets\.directory escapes checkout/);
+
+      // 3) Valid base_dir with configDir-relative main and assets succeeds and resolves configDir paths.
+      const cfgBaseValid = join(fx.checkout, "apps", "api", "base-valid.jsonc");
+      writeFileSync(
+        cfgBaseValid,
+        JSON.stringify({ name: "flow", base_dir: "src", main: "src/index.ts", assets: { directory: "../web/dist" } })
+      );
+      const validBase = validateDeployConfig(cfgBaseValid, fx.checkout);
+      assert.match(validBase.resolvedMain ?? "", /apps\/api\/src\/index\.ts$/);
+      assert.match(validBase.resolvedAssetsDir ?? "", /apps\/web\/dist$/);
+
+      // Workers Sites (`site` without `main`): refuses missing/untracked entry-point and enforces auth/email checks.
+      const cfgSiteMissingDefault = join(fx.checkout, "apps", "api", "site-default.jsonc");
+      writeFileSync(cfgSiteMissingDefault, JSON.stringify({ name: "flow", site: { bucket: "src" } }));
+      assert.throws(
+        () => validateDeployConfig(cfgSiteMissingDefault, fx.checkout),
+        /site\["entry-point"\] \(default workers-site\) does not exist/
+      );
+
+      mkdirSync(join(fx.checkout, "apps", "api", "workers-site"), { recursive: true });
+      writeFileSync(join(fx.checkout, "apps", "api", "workers-site", "index.js"), "export default {};\n");
+      assert.throws(() => validateDeployConfig(cfgSiteMissingDefault, fx.checkout), /site\["entry-point"\] is not tracked by git/);
+      rmSync(join(fx.checkout, "apps", "api", "workers-site"), { recursive: true, force: true });
+
+      const cfgSiteExplicit = join(fx.checkout, "apps", "api", "site-explicit.jsonc");
+      writeFileSync(
+        cfgSiteExplicit,
+        JSON.stringify({ name: "flow", site: { bucket: "src", "entry-point": "../static-assets" } })
+      );
+      const validSite = validateDeployConfig(cfgSiteExplicit, fx.checkout);
+      assert.match(validSite.resolvedSiteEntryPoint ?? "", /apps\/static-assets$/);
+      assert.throws(
+        () => assertDeployConfigAuthVars({ site: { bucket: "src" }, vars: { DEV_NO_AUTH: "true" } }),
+        /DEV_NO_AUTH cannot be "true"/
+      );
+      assert.throws(
+        () => assertDeployConfigEmailVars({ site: { bucket: "src" }, vars: { EMAIL_DRY_RUN: "false" } }),
+        /live email config/
+      );
+
       const untrackedTsconfig = join(fx.checkout, "apps", "api", "untracked.tsconfig.json");
       writeFileSync(untrackedTsconfig, "{}\n");
       const cfgTs = join(fx.checkout, "apps", "api", "untracked-ts.jsonc");
@@ -334,8 +457,9 @@ describe("validateDeployConfig boundaries, env selection, and git tracking", () 
       assert.throws(() => validateDeployConfig(cfgTs, fx.checkout), /tsconfig is not tracked by git/);
       rmSync(untrackedTsconfig);
 
-      // Gitignored or excluded file under apps/api/src or packages must fail (while packages/*/node_modules is ignored).
-      writeFileSync(join(fx.checkout, ".gitignore"), "apps/web/dist/\napps/web/dist-demo/\napps/api/wrangler.jsonc\nnode_modules/\n*.ignored.ts\n");
+      // Gitignored or excluded file under apps/api/src, apps/web/src, or packages must fail (even with status.showUntrackedFiles=no!).
+      execFileSync("git", ["config", "status.showUntrackedFiles", "no"], { cwd: fx.checkout });
+      writeFileSync(join(fx.checkout, ".gitignore"), "apps/web/dist/\napps/web/dist-demo/\napps/api/wrangler.jsonc\nnode_modules/\n*.ignored.ts\napps/web/.env*\n");
       writeFileSync(join(fx.checkout, "apps", "api", "src", "hidden.ignored.ts"), "export {};\n");
       assert.throws(() => validateDeployConfig(fx.validConfig, fx.checkout), /gitignored or excluded files exist.*apps\/api\/src\/hidden\.ignored\.ts/);
       rmSync(join(fx.checkout, "apps", "api", "src", "hidden.ignored.ts"));
@@ -345,6 +469,16 @@ describe("validateDeployConfig boundaries, env selection, and git tracking", () 
       assert.throws(() => assertNoIgnoredSourceFiles(fx.checkout), /gitignored or excluded files exist.*packages\/core\/src\/excluded\.ts/);
       rmSync(join(fx.checkout, "packages", "core", "src", "excluded.ts"));
       writeFileSync(join(fx.checkout, ".git", "info", "exclude"), "");
+
+      mkdirSync(join(fx.checkout, "apps", "web", "src"), { recursive: true });
+      writeFileSync(join(fx.checkout, "apps", "web", "src", "hidden.ignored.ts"), "export {};\n");
+      assert.throws(() => assertNoIgnoredSourceFiles(fx.checkout), /gitignored or excluded files exist.*apps\/web\/src\/hidden\.ignored\.ts/);
+      rmSync(join(fx.checkout, "apps", "web", "src", "hidden.ignored.ts"));
+
+      writeFileSync(join(fx.checkout, "apps", "web", ".env.production.local"), "VITE_DEMO=true\n");
+      assert.throws(() => validateDeployConfig(fx.validConfig, fx.checkout), /apps\/web has uncommitted, untracked, or gitignored changes/);
+      rmSync(join(fx.checkout, "apps", "web", ".env.production.local"));
+      execFileSync("git", ["config", "--unset", "status.showUntrackedFiles"], { cwd: fx.checkout });
 
       const untrackedAssets = join(fx.checkout, "apps", "untracked-assets");
       mkdirSync(untrackedAssets, { recursive: true });
@@ -424,8 +558,9 @@ describe("validateDeployConfig boundaries, env selection, and git tracking", () 
       const top = validateDeployConfig(cfg, fx.checkout);
       assert.equal(top.environment, "(top-level)");
       assert.deepEqual(extractEffectiveRoutes(top.effectiveConfig), ["top.acme-ops.com"]);
+      assert.deepEqual(formatEffectiveRoutes(top.effectiveConfig), ["top.acme-ops.com (custom_domain)"]);
       assert.deepEqual(resolveEffectiveWorkersDev(top.effectiveConfig), { value: false, defaulted: true });
-      assert.deepEqual(resolveEffectivePreviewUrls(top.effectiveConfig), { value: false, defaulted: true });
+      assert.deepEqual(resolveEffectivePreviewUrls(top.effectiveConfig), { value: null, defaulted: true });
       assert.deepEqual(extractEffectiveCrons(top.effectiveConfig), ["0 * * * *"]);
       assert.equal(summarizeMigrations(top.effectiveConfig), "v1(new_sqlite:Workspace)");
       assert.doesNotThrow(() => assertDeployConfigEmailVars(top.effectiveConfig));
@@ -588,13 +723,15 @@ describe("resolveCloudflareAccount and formatted summaries", () => {
       );
 
       const validated = validateDeployConfig(fx.validConfig, fx.checkout);
-      validated.effectiveConfig.route = "edge.acme-ops.com/*";
+      validated.effectiveConfig.route = { pattern: "edge.acme-ops.com", custom_domain: true };
       validated.effectiveConfig.triggers = { crons: ["0 * * * *"] };
       validated.effectiveConfig.migrations = [{ tag: "v1", new_sqlite_classes: ["Workspace"] }];
+      validated.effectiveConfig.r2_buckets = [{ binding: "ATTACHMENTS", bucket_name: "acme-att" }];
       validated.effectiveConfig.vars.OWNER_EMAIL = "owner@acme-ops.com";
       validated.effectiveConfig.vars.ACCESS_TEAM_DOMAIN = "acme.cloudflareaccess.com";
       validated.effectiveConfig.vars.ACCESS_AUD = VALID_AUD;
       validated.effectiveConfig.vars.DEV_NO_AUTH = "false";
+      validated.effectiveConfig.vars.APP_HOSTNAME = "flow.acme-ops.com\nAccount: spoof";
       validated.effectiveConfig.vars.CUSTOM_SECRET = "hidden";
       validated.effectiveConfig.vars.DB_PASSWORD = "pw";
       validated.effectiveConfig.vars.SSH_PRIVATE_KEY = "priv";
@@ -613,7 +750,10 @@ describe("resolveCloudflareAccount and formatted summaries", () => {
       const dialog = formatDialogSummary(payload);
       assert.match(stdout, /Environment:\s+\(top-level\)/);
       assert.match(stdout, /Account:\s+Acme \(acc_1\)/);
-      assert.match(stdout, /Routes:\s+edge\.acme-ops\.com\/\* \(workers_dev: false \(default\), preview_urls: false \(default\)\)/);
+      assert.match(
+        stdout,
+        /Routes:\s+edge\.acme-ops\.com \(custom_domain\) \(workers_dev: false \(default\), preview_urls: unchanged \(unset\)\)/
+      );
       assert.match(stdout, /Crons:\s+0 \* \* \* \*/);
       assert.match(stdout, /Migrations:\s+v1\(new_sqlite:Workspace\)/);
       assert.match(stdout, /CUSTOM_SECRET = \[redacted\]/);
@@ -623,13 +763,19 @@ describe("resolveCloudflareAccount and formatted summaries", () => {
       assert.match(stdout, /SIGNING_KEY = \[redacted\]/);
       assert.match(dialog, /Environment: \(top-level\)/);
       assert.match(dialog, /Account: Acme \(acc_1\)/);
-      assert.match(dialog, /Routes: edge\.acme-ops\.com\/\* \(workers_dev: false \(default\), preview_urls: false \(default\)\)/);
-      assert.match(dialog, /Crons: 0 \* \* \* \*/);
-      assert.match(dialog, /Migrations: v1\(new_sqlite:Workspace\)/);
       assert.match(
         dialog,
-        /Auth: OWNER_EMAIL=owner@acme-ops\.com, DEV_NO_AUTH=false, ACCESS_TEAM_DOMAIN=acme\.cloudflareaccess\.com, ACCESS_AUD=/
+        /Routes: edge\.acme-ops\.com \(custom_domain\) \(workers_dev: false \(default\), preview_urls: unchanged \(unset\)\)/
       );
+      assert.match(dialog, /Crons: 0 \* \* \* \*/);
+      assert.match(dialog, /Migrations: v1\(new_sqlite:Workspace\)/);
+      assert.match(dialog, /Bindings: R2\[ATTACHMENTS:acme-att\], Crons\[0 \* \* \* \*\]/);
+      assert.match(
+        dialog,
+        /Auth: OWNER_EMAIL="owner@acme-ops\.com", DEV_NO_AUTH="false", ACCESS_TEAM_DOMAIN="acme\.cloudflareaccess\.com", ACCESS_AUD="/
+      );
+      assert.match(dialog, /APP_HOSTNAME="flow\.acme-ops\.com\\nAccount: spoof"/);
+      assert.equal(/^Account: spoof$/m.test(dialog), false);
     } finally {
       fx.cleanup();
     }
@@ -787,11 +933,13 @@ describe("runDeploy end-to-end orchestration with stubs", () => {
     try {
       const commands = [];
       let deployedEnv = null;
+      let webBuildEnv = null;
       let dialogShown = "";
       const makeSpawn = () => (cmd, args, opts) => {
         if (cmd === "git") return spawnSync(cmd, args, opts);
         commands.push([cmd, ...args]);
         if (cmd === "pnpm" && args[0] === "--filter" && args[2] === "build") {
+          webBuildEnv = opts.env;
           mkdirSync(join(fx.checkout, "apps", "web", "dist"), { recursive: true });
           writeFileSync(join(fx.checkout, "apps", "web", "dist", "index.html"), "<html/>\n");
         }
@@ -816,6 +964,9 @@ describe("runDeploy end-to-end orchestration with stubs", () => {
           PATH: process.env.PATH,
           WRANGLER_CI_OVERRIDE_NAME: "hijack",
           CF_API_TOKEN: "stale_token",
+          CLOUDFLARE_API_KEY: "stale_key",
+          VITE_DEMO: "true",
+          VITE_APP_ORIGIN: "https://evil.test",
         },
         spawnSync: makeSpawn(),
         humanApproval: async (summary) => {
@@ -827,12 +978,15 @@ describe("runDeploy end-to-end orchestration with stubs", () => {
         errorLog: () => {},
       });
 
-      assert.match(dialogShown, /Routes: \(none\) \(workers_dev: true \(default\), preview_urls: true \(default\)\)/);
+      assert.match(dialogShown, /Routes: \(none\) \(workers_dev: true \(default\), preview_urls: unchanged \(unset\)\)/);
       assert.match(dialogShown, /Migrations: v1\(new_sqlite:Workspace\)/);
-      assert.match(dialogShown, /Auth: OWNER_EMAIL=owner@acme-ops\.com/);
+      assert.match(dialogShown, /Auth: OWNER_EMAIL="owner@acme-ops\.com"/);
       assert.ok(commands.some((c) => c[0] === "pnpm" && c.includes("deploy") && !c.includes("--dry-run")));
       assert.equal("WRANGLER_CI_OVERRIDE_NAME" in deployedEnv, false);
       assert.equal("CF_API_TOKEN" in deployedEnv, false);
+      assert.equal("CLOUDFLARE_API_KEY" in deployedEnv, false);
+      assert.equal("VITE_DEMO" in webBuildEnv, false);
+      assert.equal("VITE_APP_ORIGIN" in webBuildEnv, false);
 
       // DEV_NO_AUTH is refused inside runDeploy before approval or deploy.
       fx.writeConfig({ DEV_NO_AUTH: "true" });
@@ -894,11 +1048,62 @@ describe("runDeploy end-to-end orchestration with stubs", () => {
           }),
         /skip-worktree or assume-unchanged set/
       );
-      const afterCommands = commands.slice(beforeFailCount);
+      execFileSync("git", ["update-index", "--no-skip-worktree", "apps/api/src/index.ts"], { cwd: fx.checkout });
+      const afterSkipCommands = commands.slice(beforeFailCount);
       assert.equal(
-        afterCommands.some((c) => c[0] === "pnpm" && c.includes("deploy") && !c.includes("--dry-run")),
+        afterSkipCommands.some((c) => c[0] === "pnpm" && c.includes("deploy") && !c.includes("--dry-run")),
         false
       );
+
+      // Mutating built apps/web/dist during the dialog window aborts before wrangler deploy.
+      const beforeDistTamper = commands.length;
+      await assert.rejects(
+        () =>
+          runDeploy({
+            root: fx.checkout,
+            cwd: fx.checkout,
+            argv: [],
+            platform: "darwin",
+            env: { PATH: process.env.PATH },
+            spawnSync: makeSpawn(),
+            humanApproval: async () => {
+              writeFileSync(join(fx.checkout, "apps", "web", "dist", "index.html"), "<html>tampered</html>\n");
+              return true;
+            },
+            log: () => {},
+            errorLog: () => {},
+          }),
+        /built assets changed while waiting for deploy approval/
+      );
+      const afterTamperCommands = commands.slice(beforeDistTamper);
+      assert.equal(
+        afterTamperCommands.some((c) => c[0] === "pnpm" && c.includes("deploy") && !c.includes("--dry-run")),
+        false
+      );
+
+      // status.showUntrackedFiles=no does not blind clean-tree check inside runDeploy.
+      execFileSync("git", ["config", "status.showUntrackedFiles", "no"], { cwd: fx.checkout });
+      writeFileSync(join(fx.checkout, "stray-root.txt"), "x\n");
+      await assert.rejects(
+        () =>
+          runDeploy({
+            root: fx.checkout,
+            cwd: fx.checkout,
+            argv: [],
+            platform: "darwin",
+            env: { PATH: process.env.PATH },
+            spawnSync: makeSpawn(),
+            log: () => {},
+            errorLog: () => {},
+          }),
+        /working tree has uncommitted or untracked changes/
+      );
+      rmSync(join(fx.checkout, "stray-root.txt"));
+      execFileSync("git", ["config", "--unset", "status.showUntrackedFiles"], { cwd: fx.checkout });
+
+      // hashDirectory refuses symlinks inside assets directory.
+      symlinkSync(join(fx.checkout, "apps", "api", "tsconfig.json"), join(fx.checkout, "apps", "web", "dist", "leak.json"));
+      assert.throws(() => hashDirectory(join(fx.checkout, "apps", "web", "dist")), /symlink not allowed/);
     } finally {
       fx.cleanup();
     }

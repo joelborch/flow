@@ -89,7 +89,7 @@ export interface SideEffectEnv {
 /** Sender identity from EMAIL_FROM / EMAIL_FROM_NAME vars, with safe fallbacks. */
 export function emailFrom(env: SideEffectEnv): { email: string; name: string } {
   return {
-    email: env.EMAIL_FROM || DEFAULT_EMAIL_FROM.email,
+    email: env.EMAIL_FROM?.trim() || DEFAULT_EMAIL_FROM.email,
     name: env.EMAIL_FROM_NAME || DEFAULT_EMAIL_FROM.name,
   };
 }

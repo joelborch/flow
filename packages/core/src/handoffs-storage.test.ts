@@ -17,7 +17,7 @@ import { fakeCtx } from "./testkit.js";
 // replyHandoff's comment `via`, its state rules per role, the close/reopen
 // status moves and the audit row; the `handoff` field riding task deltas only
 // when it changes; listHandoffs' direction, state filter, ordering, limit and
-// per-space visibility; and importBatch still landing tasks with no handoff.
+// per-space visibility.
 //
 // Same real-Workspace-over-node:sqlite harness as email-intake-storage.test.ts.
 // ---------------------------------------------------------------------------

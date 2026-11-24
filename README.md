@@ -61,7 +61,6 @@ Task managers are slow, expensive per seat, and hostile to agents. Flow inverts 
 - **Inbound webhooks** — per-list `inb_` tokens so a bug tracker or form tool can create tasks in exactly one list, with idempotent delivery
 - **Per-space visibility** — spaces are workspace-visible or private to a member list; snapshots, deltas, search results, and writes all enforce it
 - **Audit log** — every mutation records who, via what (`ui`/`api`/`mcp`/`webhook`/`automation`/`import`), which API key, which automation rule, and the diff
-- **ClickUp import** — a three-pass extract/transform/load pipeline with deterministic ids, so re-running is an upsert, not a duplicate workspace
 - **Dark mode, keyboard layer, instant loads** — Preact + Signals SPA, ~no dependencies, boot cache, early WebSocket open from an inline script in `index.html`
 
 <table>

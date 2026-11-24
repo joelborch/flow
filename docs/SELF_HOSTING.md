@@ -116,7 +116,7 @@ cd ../..           # repo root
 pnpm run deploy    # deploys gitignored apps/api/wrangler.jsonc only
 ```
 
-Note on guard limits: `scripts/deploy-guarded.mjs` refuses any `.env*` or `.dev.vars*` file that sets `CLOUDFLARE_API_TOKEN` (or any `CLOUDFLARE_*`, `WRANGLER_*`, or `CF_*` variable) so ambient files cannot redirect auth or targets — authenticate via `wrangler login` or shell environment variables outside `.env` files instead. In addition, the guard checks only the local `wrangler.jsonc` `vars` block and cannot see `DEV_NO_AUTH` if set remotely as a Worker secret or Cloudflare dashboard variable (for example when `keep_vars` is true).
+Note on guard limits: `scripts/deploy-guarded.mjs` refuses any `.env*` or `.dev.vars*` file that sets `CLOUDFLARE_API_TOKEN` (or any `CLOUDFLARE_*`, `WRANGLER_*`, or `CF_*` variable) so ambient files cannot redirect auth or targets — authenticate via `wrangler login` or shell environment variables outside `.env` files instead. Multiline quoted `.env` / `.dev.vars` values (for example pretty-printed JSON) fail closed cleanly as unparseable lines. In addition, the guard checks only the local `wrangler.jsonc` `vars` block (so it cannot see `DEV_NO_AUTH` if set remotely as a Worker secret or Cloudflare dashboard variable under `keep_vars: true`), and macOS `/usr/bin/osascript` human-presence confirmation assumes macOS Accessibility boundaries (any local process already granted Accessibility permission could script clicking the dialog).
 
 For **self-hosters off macOS** (Linux / Windows deploying into **your own Cloudflare account using your own config** — never run raw Wrangler commands against an existing production checkout), `pnpm run deploy` refuses because native macOS `/usr/bin/osascript` human-presence confirmation is required. Self-hosters off macOS build and deploy into their own account with an explicit `--config`:
 
@@ -155,7 +155,7 @@ flow.example.com/ws
 flow.example.com/assets/*
 ```
 
-Give it a single policy with action **Bypass**, include **Everyone**. This is safe because the Worker rejects anything on `/api/*` and `/mcp` without a valid credential (`flow_` bearer or Access JWT), `/ws` authenticates via the `CF_Authorization` cookie, and `/assets/*` is just the fingerprinted JS/CSS — bypassing assets is what lets the SPA shell load fast and lets the login redirect not eat your bundle requests.
+Give it a single policy with action **Bypass**, include **Everyone**. This is safe because the Worker rejects anything on `/api/*` and `/mcp` without a valid credential (`flow_` bearer or Access JWT), `/ws` authenticates via the `CF_Authorization` cookie, and `/assets/*` is just the fingerprinted JS/CSS — bypassing assets is what lets the SPA shell load fast and lets the login redirect not eat your bundle requests. If you enable opt-in Access Managed OAuth (`MCP_ACCESS_OAUTH_ENABLED = "true"` and `MCP_ACCESS_AUD`), add a separate Access **Allow** application on the more specific `flow.example.com/mcp/oauth` path so it wins over the `/mcp/*` bypass.
 
 **App 2 — the allow app.** Add a second self-hosted application named e.g. `flow`, on the bare hostname:
 
