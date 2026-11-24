@@ -421,7 +421,7 @@ describe("validateDeployConfig boundaries, env selection, and git tracking", () 
       assert.match(validBase.resolvedMain ?? "", /apps\/api\/src\/index\.ts$/);
       assert.match(validBase.resolvedAssetsDir ?? "", /apps\/web\/dist$/);
 
-      // Workers Sites (`site` without `main`): refuses missing/untracked entry-point and enforces auth/email checks.
+      // Workers Sites (`site` without `main`): refuses missing/untracked entry-point, untracked bucket, env.<name>.site, and enforces auth/email checks.
       const cfgSiteMissingDefault = join(fx.checkout, "apps", "api", "site-default.jsonc");
       writeFileSync(cfgSiteMissingDefault, JSON.stringify({ name: "flow", site: { bucket: "src" } }));
       assert.throws(
@@ -432,7 +432,59 @@ describe("validateDeployConfig boundaries, env selection, and git tracking", () 
       mkdirSync(join(fx.checkout, "apps", "api", "workers-site"), { recursive: true });
       writeFileSync(join(fx.checkout, "apps", "api", "workers-site", "index.js"), "export default {};\n");
       assert.throws(() => validateDeployConfig(cfgSiteMissingDefault, fx.checkout), /site\["entry-point"\] is not tracked by git/);
+
+      // env.<name>.site (and other top-level-only Wrangler keys) must be refused even when paired with --env prod.
+      const cfgEnvSite = join(fx.checkout, "apps", "api", "env-site.jsonc");
+      writeFileSync(
+        cfgEnvSite,
+        JSON.stringify({
+          name: "flow",
+          site: { bucket: "src", "entry-point": "../static-assets" },
+          env: { prod: { site: { bucket: "src", "entry-point": "../static-assets" } } },
+        })
+      );
+      assert.throws(
+        () => validateDeployConfig(cfgEnvSite, fx.checkout, { envName: "prod" }),
+        /env\.prod\.site is not allowed \(top-level only in Wrangler\)/
+      );
+      for (const topKey of ["keep_vars", "text_blobs"]) {
+        const cfgTopInEnv = join(fx.checkout, "apps", "api", `env-${topKey}.jsonc`);
+        writeFileSync(
+          cfgTopInEnv,
+          JSON.stringify({
+            name: "flow",
+            main: "src/index.ts",
+            env: { prod: { [topKey]: topKey === "keep_vars" ? true : { K: "blob.txt" } } },
+          })
+        );
+        assert.throws(
+          () => validateDeployConfig(cfgTopInEnv, fx.checkout, { envName: "prod" }),
+          new RegExp(`env\\.prod\\.${topKey} is not allowed \\(top-level only in Wrangler\\)`)
+        );
+      }
+
+      // Top-level site omitting entry-point with --env prod (and no main) still requires tracked workers-site.
+      const cfgSiteEnvDefault = join(fx.checkout, "apps", "api", "site-env-default.jsonc");
+      writeFileSync(
+        cfgSiteEnvDefault,
+        JSON.stringify({ name: "flow", site: { bucket: "src" }, env: { prod: { vars: { ENV: "prod" } } } })
+      );
+      assert.throws(
+        () => validateDeployConfig(cfgSiteEnvDefault, fx.checkout, { envName: "prod" }),
+        /site\["entry-point"\] is not tracked by git/
+      );
       rmSync(join(fx.checkout, "apps", "api", "workers-site"), { recursive: true, force: true });
+
+      // Untracked or .wrangler-ignored site.bucket must be refused.
+      mkdirSync(join(fx.checkout, "apps", "api", ".wrangler", "public"), { recursive: true });
+      writeFileSync(join(fx.checkout, "apps", "api", ".wrangler", "public", "index.html"), "<html/>\n");
+      const cfgSiteUntrackedBucket = join(fx.checkout, "apps", "api", "site-untracked-bucket.jsonc");
+      writeFileSync(
+        cfgSiteUntrackedBucket,
+        JSON.stringify({ name: "flow", site: { bucket: ".wrangler/public", "entry-point": "../static-assets" } })
+      );
+      assert.throws(() => validateDeployConfig(cfgSiteUntrackedBucket, fx.checkout), /site\.bucket is not tracked by git/);
+      rmSync(join(fx.checkout, "apps", "api", ".wrangler"), { recursive: true, force: true });
 
       const cfgSiteExplicit = join(fx.checkout, "apps", "api", "site-explicit.jsonc");
       writeFileSync(
@@ -727,6 +779,8 @@ describe("resolveCloudflareAccount and formatted summaries", () => {
       validated.effectiveConfig.triggers = { crons: ["0 * * * *"] };
       validated.effectiveConfig.migrations = [{ tag: "v1", new_sqlite_classes: ["Workspace"] }];
       validated.effectiveConfig.r2_buckets = [{ binding: "ATTACHMENTS", bucket_name: "acme-att" }];
+      validated.effectiveConfig.kv_namespaces = [{ binding: "CACHE", id: "kv_1" }];
+      validated.effectiveConfig.d1_databases = [{ binding: "DB", database_name: "acme-db" }];
       validated.effectiveConfig.vars.OWNER_EMAIL = "owner@acme-ops.com";
       validated.effectiveConfig.vars.ACCESS_TEAM_DOMAIN = "acme.cloudflareaccess.com";
       validated.effectiveConfig.vars.ACCESS_AUD = VALID_AUD;
@@ -769,7 +823,8 @@ describe("resolveCloudflareAccount and formatted summaries", () => {
       );
       assert.match(dialog, /Crons: 0 \* \* \* \*/);
       assert.match(dialog, /Migrations: v1\(new_sqlite:Workspace\)/);
-      assert.match(dialog, /Bindings: R2\[ATTACHMENTS:acme-att\], Crons\[0 \* \* \* \*\]/);
+      assert.match(dialog, /Bindings: R2\[ATTACHMENTS:acme-att\], KV\[CACHE\], D1\[DB:acme-db\]/);
+      assert.equal(/Bindings:.*Crons/.test(dialog), false);
       assert.match(
         dialog,
         /Auth: OWNER_EMAIL="owner@acme-ops\.com", DEV_NO_AUTH="false", ACCESS_TEAM_DOMAIN="acme\.cloudflareaccess\.com", ACCESS_AUD="/
