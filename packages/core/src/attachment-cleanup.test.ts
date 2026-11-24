@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { type StoredObject, fakeCtx, fakeR2Bucket } from "./testkit.js";
 
 // ---------------------------------------------------------------------------
 // deleteTask drops `attachments` rows, which are the only record of an
@@ -10,97 +11,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // `cloudflare:workers` is stubbed so the real Workspace runs against
 // node:sqlite, and R2 is a tiny in-memory stand-in.
 // ---------------------------------------------------------------------------
-
-vi.mock("cloudflare:workers", () => ({
-  DurableObject: class {
-    ctx: unknown;
-    env: unknown;
-    constructor(ctx: unknown, env: unknown) {
-      this.ctx = ctx;
-      this.env = env;
-    }
-  },
-}));
-
-function sqliteStorage(db: DatabaseSync): SqlStorage {
-  const exec = (query: string, ...params: unknown[]): unknown => {
-    // Turn.emit's INSERT ... RETURNING seq needs .all()/.one() too because
-    // deleteTask and createAttachment go through the normal turn machinery
-    // and emit deltas.
-    const isRead = /^\s*SELECT/i.test(query) || /\bRETURNING\b/i.test(query);
-    if (!isRead) {
-      db.prepare(query).run(...(params as never[]));
-      return { toArray: () => [], one: () => undefined };
-    }
-    const rows = db.prepare(query).all(...(params as never[]));
-    return {
-      toArray: () => rows,
-      one: () => {
-        if (rows.length !== 1) throw new Error(`expected 1 row, got ${rows.length}`);
-        return rows[0];
-      },
-    };
-  };
-  return { exec } as unknown as SqlStorage;
-}
-
-function fakeCtx(db: DatabaseSync): DurableObjectState {
-  return {
-    id: { toString: () => "do_test" },
-    storage: {
-      sql: sqliteStorage(db),
-      getAlarm: async () => null,
-      setAlarm: async () => undefined,
-      // Migrations run inside storage.transactionSync in production; emulate
-      // its throws-roll-back contract with a node:sqlite savepoint (explicit
-      // savepoints are legal here, unlike in workerd's sql.exec).
-      transactionSync: <T,>(fn: () => T): T => {
-        db.prepare("SAVEPOINT _txn").run();
-        try {
-          const result = fn();
-          db.prepare("RELEASE _txn").run();
-          return result;
-        } catch (err) {
-          db.prepare("ROLLBACK TO _txn").run();
-          db.prepare("RELEASE _txn").run();
-          throw err;
-        }
-      },
-    },
-    blockConcurrencyWhile: async <T>(fn: () => Promise<T> | T): Promise<T> => fn(),
-    waitUntil: () => undefined,
-    getWebSockets: () => [],
-    acceptWebSocket: () => undefined,
-  } as unknown as DurableObjectState;
-}
-
-interface StoredObject {
-  key: string;
-  body: ArrayBuffer;
-}
-
-/** Minimal in-memory R2Bucket: enough of put/list/delete for the backup +
- *  sweep jobs. */
-function fakeR2Bucket() {
-  const objects = new Map<string, StoredObject>();
-  const bucket = {
-    async put(key: string, value: ArrayBuffer) {
-      objects.set(key, { key, body: value });
-      return undefined;
-    },
-    async list(opts?: { prefix?: string; cursor?: string }) {
-      const prefix = opts?.prefix ?? "";
-      const matches = [...objects.values()]
-        .filter((o) => o.key.startsWith(prefix))
-        .sort((a, b) => a.key.localeCompare(b.key));
-      return { objects: matches.map((o) => ({ key: o.key })), truncated: false, cursor: undefined };
-    },
-    async delete(keys: string | string[]) {
-      for (const k of Array.isArray(keys) ? keys : [keys]) objects.delete(k);
-    },
-  };
-  return { bucket: bucket as unknown as R2Bucket, objects };
-}
 
 async function freshWorkspace(bucket: R2Bucket) {
   const { Workspace } = await import("./index.js");

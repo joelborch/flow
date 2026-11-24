@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   AUDIT_PRUNE_BATCH,
   AUDIT_PRUNE_MAX_BATCHES,
@@ -7,63 +7,7 @@ import {
   AUTOMATION_RUNS_RETENTION,
   CHANGES_RETENTION,
 } from "./index.js";
-
-vi.mock("cloudflare:workers", () => ({
-  DurableObject: class {
-    ctx: unknown;
-    env: unknown;
-    constructor(ctx: unknown, env: unknown) {
-      this.ctx = ctx;
-      this.env = env;
-    }
-  },
-}));
-
-function sqliteStorage(db: DatabaseSync): SqlStorage {
-  const exec = (query: string, ...params: unknown[]): unknown => {
-    const isRead = /^\s*SELECT/i.test(query) || /RETURNING/i.test(query);
-    if (!isRead) {
-      const result = db.prepare(query).run(...(params as never[])) as { changes?: number | bigint };
-      return { toArray: () => [], one: () => undefined, rowsWritten: Number(result.changes ?? 0) };
-    }
-    const rows = db.prepare(query).all(...(params as never[]));
-    return {
-      toArray: () => rows,
-      one: () => {
-        if (rows.length !== 1) throw new Error(`expected 1 row, got ${rows.length}`);
-        return rows[0];
-      },
-    };
-  };
-  return { exec } as unknown as SqlStorage;
-}
-
-function fakeCtx(db: DatabaseSync): DurableObjectState {
-  return {
-    id: { toString: () => "do_test" },
-    storage: {
-      sql: sqliteStorage(db),
-      getAlarm: async () => null,
-      setAlarm: async () => undefined,
-      transactionSync: <T,>(fn: () => T): T => {
-        db.prepare("SAVEPOINT _txn").run();
-        try {
-          const result = fn();
-          db.prepare("RELEASE _txn").run();
-          return result;
-        } catch (err) {
-          db.prepare("ROLLBACK TO _txn").run();
-          db.prepare("RELEASE _txn").run();
-          throw err;
-        }
-      },
-    },
-    blockConcurrencyWhile: async <T>(fn: () => Promise<T> | T): Promise<T> => fn(),
-    waitUntil: () => undefined,
-    getWebSockets: () => [],
-    acceptWebSocket: () => undefined,
-  } as unknown as DurableObjectState;
-}
+import { fakeCtx } from "./testkit.js";
 
 async function freshWorkspace() {
   const { Workspace } = await import("./index.js");

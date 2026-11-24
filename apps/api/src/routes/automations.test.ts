@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { Hono } from "hono";
-import type { AutomationRunLog, Role, User } from "@flow/shared";
-import type { AppEnv, AuthContext, Env } from "../env.js";
-import { onError } from "../errors.js";
+import type { AutomationRunLog, Role } from "@flow/shared";
 import { automationRoutes, RunsQuery, runsPage } from "./automations.js";
+import { authedApp, workspaceEnv } from "./testkit.js";
 
 const run = (id: number): AutomationRunLog => ({
   id,
@@ -73,41 +71,13 @@ describe("runsPage", () => {
 // like the writes always were. Real routes, stubbed DO binding.
 // ---------------------------------------------------------------------------
 
-const userOf = (role: Role): User => ({
-  id: `us_${role}`,
-  email: `${role}@example.com`,
-  name: role,
-  role,
-  deactivated: false,
-  createdAt: 1_700_000_000_000,
-});
-
-const authOf = (role: Role): AuthContext => ({
-  user: userOf(role),
-  apiKey: null,
-  actor: { userId: `us_${role}`, via: "api", apiKeyId: null, automationRuleId: null },
-});
-
 const rule = { id: "ar_1", name: "Rule one" };
-const stub = {
+const env = workspaceEnv({
   listAutomations: async () => [rule],
   listAutomationRuns: async () => [],
-};
+});
 
-const env = {
-  WORKSPACE: { idFromName: () => ({}), get: () => stub },
-} as unknown as Env;
-
-function appAs(role: Role): Hono<AppEnv> {
-  const app = new Hono<AppEnv>();
-  app.onError(onError);
-  app.use("*", async (c, next) => {
-    c.set("auth", authOf(role));
-    return next();
-  });
-  app.route("/api", automationRoutes);
-  return app;
-}
+const appAs = (role: Role) => authedApp(role, automationRoutes);
 
 const READS = [
   "/api/automations",

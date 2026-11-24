@@ -1,39 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { Hono } from "hono";
-import type { User } from "@flow/shared";
-import type { AppEnv, AuthContext, Env } from "../env.js";
-import { onError } from "../errors.js";
 import { taskRoutes, TASK_DETAILS_MAX } from "./tasks.js";
+import { authedApp, workspaceEnv } from "./testkit.js";
 
 // POST /api/tasks/details is the bulk form of GET /api/tasks/:taskId. The
 // per-task visibility rules are tested on the DO in visibility-storage.test.ts;
 // here the DO is a stub.
 
-const user: User = {
-  id: "us_member",
-  email: "member@example.com",
-  name: "member",
-  role: "member",
-  deactivated: false,
-  createdAt: 1_700_000_000_000,
-};
-
-const auth: AuthContext = {
-  user,
-  apiKey: null,
-  actor: { userId: user.id, via: "api", apiKeyId: null, automationRuleId: null },
-};
-
 function setup() {
   const getTaskDetails = vi.fn(async (ids: string[]) => ({ details: [], errors: ids.map((taskId) => ({ taskId, error: "nope" })) }));
-  const env = { WORKSPACE: { idFromName: () => ({}), get: () => ({ getTaskDetails }) } } as unknown as Env;
-  const app = new Hono<AppEnv>();
-  app.onError(onError);
-  app.use("*", async (c, next) => {
-    c.set("auth", auth);
-    return next();
-  });
-  app.route("/api", taskRoutes);
+  const env = workspaceEnv({ getTaskDetails });
+  const app = authedApp("member", taskRoutes);
   const post = (body: unknown) =>
     app.request(
       "/api/tasks/details",

@@ -7,6 +7,7 @@ import {
   type ServerMsg,
 } from "@flow/shared";
 import { resyncFloor } from "./sync-floor.js";
+import { fakeCtx } from "./testkit.js";
 
 // ---------------------------------------------------------------------------
 // Mutations that change who can see something must resync, not just patch.
@@ -21,67 +22,6 @@ import { resyncFloor } from "./sync-floor.js";
 //
 // Same real-Workspace-over-node:sqlite harness as visibility-storage.test.ts.
 // ---------------------------------------------------------------------------
-
-vi.mock("cloudflare:workers", () => ({
-  DurableObject: class {
-    ctx: unknown;
-    env: unknown;
-    constructor(ctx: unknown, env: unknown) {
-      this.ctx = ctx;
-      this.env = env;
-    }
-  },
-}));
-
-function sqliteStorage(db: DatabaseSync): SqlStorage {
-  const exec = (query: string, ...params: unknown[]): unknown => {
-    const returnsRows = /^\s*SELECT/i.test(query) || /RETURNING/i.test(query);
-    if (!returnsRows) {
-      db.prepare(query).run(...(params as never[]));
-      return { toArray: () => [], one: () => undefined };
-    }
-    const rows = db.prepare(query).all(...(params as never[]));
-    return {
-      toArray: () => rows,
-      one: () => {
-        if (rows.length !== 1) throw new Error(`expected 1 row, got ${rows.length}`);
-        return rows[0];
-      },
-    };
-  };
-  return { exec } as unknown as SqlStorage;
-}
-
-function fakeCtx(db: DatabaseSync): DurableObjectState {
-  const sockets: WebSocket[] = [];
-  return {
-    id: { toString: () => "do_test" },
-    storage: {
-      sql: sqliteStorage(db),
-      getAlarm: async () => null,
-      setAlarm: async () => undefined,
-      transactionSync: <T,>(fn: () => T): T => {
-        db.prepare("SAVEPOINT _txn").run();
-        try {
-          const result = fn();
-          db.prepare("RELEASE _txn").run();
-          return result;
-        } catch (err) {
-          db.prepare("ROLLBACK TO _txn").run();
-          db.prepare("RELEASE _txn").run();
-          throw err;
-        }
-      },
-    },
-    blockConcurrencyWhile: async <T>(fn: () => Promise<T> | T): Promise<T> => fn(),
-    waitUntil: () => undefined,
-    // Closed sockets drop out, as they do from the real getWebSockets().
-    getWebSockets: () => sockets.filter((ws) => !(ws as unknown as { closed: boolean }).closed),
-    acceptWebSocket: (ws: WebSocket) => {
-      sockets.push(ws);
-    },
-  } as unknown as DurableObjectState;
-}
 
 interface FakeSocket {
   ws: WebSocket;

@@ -2,7 +2,7 @@
 // straight through the store's optimistic updateTask; there is no local mirror
 // of task fields, so a WS delta from anyone else lands here too.
 import type { ComponentChildren } from "preact";
-import { useMemo, useRef, useState } from "preact/hooks";
+import { useRef, useState } from "preact/hooks";
 import type { Priority } from "@flow/shared";
 import { me, updateTask, users, type StoreTask } from "../store/index.js";
 import { isClosed, statusesOf, statusOfTask, userById } from "../shell/data.js";
@@ -10,7 +10,7 @@ import { cn, formatDue, fromDateInput, isOverdue, toDateInput } from "../shell/f
 import { isSnoozed, snoozePreset, snoozeUntilLabel, visibleTags } from "../lib/fmt.js";
 import {
   Avatar, Chip, Menu, MenuItem, PRIORITIES, PRIORITY_COLOR,
-  PRIORITY_LABEL, PriorityFlag, Search, StatusDot, TagIcon, X,
+  PRIORITY_LABEL, PriorityFlag, StatusDot, TagIcon, UserSearchMenu, X,
 } from "../shell/ui.js";
 
 const FIELD =
@@ -79,96 +79,33 @@ export function StatusPicker({ task }: { task: StoreTask }) {
 // --- assignee --------------------------------------------------------------
 
 export function AssigneePicker({ task }: { task: StoreTask }) {
-  const [q, setQ] = useState("");
   const assignee = userById(task.assigneeId);
-  const all = users.value;
-
-  const matches = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    const active = all.filter((u) => !u.deactivated || u.id === task.assigneeId);
-    if (!needle) return active.slice(0, 50);
-    return active
-      .filter((u) => u.name.toLowerCase().includes(needle) || u.email.toLowerCase().includes(needle))
-      .slice(0, 50);
-  }, [q, all, task.assigneeId]);
-
   return (
-    <Menu
+    <UserSearchMenu
       label="Change assignee"
-      width="w-64"
+      users={users.value}
+      selectedId={task.assigneeId}
+      unassignedLabel="Unassigned"
+      onSelect={(assigneeId) => void updateTask({ taskId: task.id, assigneeId })}
       trigger={() => (
         <span class={FIELD}>
           <Avatar user={assignee} size="sm" />
           <span class={cn("truncate", !assignee && EMPTY)}>{assignee ? assignee.name : "Unassigned"}</span>
         </span>
       )}
-    >
-      {(close) => (
-        <div>
-          <div class="flex items-center gap-1.5 border-b border-line px-2 pb-1.5 text-faint">
-            <Search class="h-3.5 w-3.5" />
-            <input
-              autofocus
-              value={q}
-              placeholder="Assign to…"
-              onInput={(e) => setQ((e.currentTarget as HTMLInputElement).value)}
-              class="w-full bg-transparent py-1 text-[16px] text-text placeholder:text-faint focus:outline-none sm:text-[13px]"
-            />
-          </div>
-          <div class="scroll-y max-h-64 overflow-y-auto pt-1">
-            <MenuItem
-              selected={task.assigneeId === null}
-              onClick={() => {
-                close();
-                void updateTask({ taskId: task.id, assigneeId: null });
-              }}
-            >
-              <span class="text-muted">Unassigned</span>
-            </MenuItem>
-            {matches.map((u) => (
-              <button
-                key={u.id}
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  close();
-                  void updateTask({ taskId: task.id, assigneeId: u.id });
-                }}
-                class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[13px] text-text hover:bg-bg sm:py-1.5"
-              >
-                <Avatar user={u} size="sm" />
-                <span class="min-w-0 flex-1 truncate">{u.name}</span>
-                {u.id === task.assigneeId && <span class="text-[11px] text-faint">assigned</span>}
-              </button>
-            ))}
-            {matches.length === 0 && <p class="px-2 py-2 text-[13px] text-faint">No one matches “{q}”.</p>}
-          </div>
-        </div>
-      )}
-    </Menu>
+    />
   );
 }
 
 // --- turn (waitingOn): whose move it is, separate from who owns the task ----
 
 export function WaitingOnPicker({ task }: { task: StoreTask }) {
-  const [q, setQ] = useState("");
   const [note, setNote] = useState("");
   const current = userById(task.waitingOn);
   const owner = userById(task.assigneeId);
-  const all = users.value;
   const meId = me.value?.id;
   // With no turn passed, the move is the owner's.
   const holderId = task.waitingOn ?? task.assigneeId;
-
-  const matches = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    const active = all.filter((u) => !u.deactivated || u.id === task.waitingOn);
-    if (!needle) return active.slice(0, 50);
-    return active
-      .filter((u) => u.name.toLowerCase().includes(needle) || u.email.toLowerCase().includes(needle))
-      .slice(0, 50);
-  }, [q, all, task.waitingOn]);
 
   // One-click target: back to whoever assigned it, otherwise to the owner.
   // Never me, and never whoever already has the turn.
@@ -191,9 +128,16 @@ export function WaitingOnPicker({ task }: { task: StoreTask }) {
 
   return (
     <div class="flex flex-wrap items-center gap-1">
-      <Menu
+      <UserSearchMenu
         label="Change whose turn it is"
-        width="w-64"
+        users={users.value}
+        selectedId={task.waitingOn}
+        selectedLabel="current"
+        placeholder="Pass the turn to…"
+        listClass="max-h-56 py-1"
+        onSelect={(userId) => {
+          if (userId !== null) pass(userId);
+        }}
         trigger={() => (
           <span class={FIELD}>
             {current ? <Avatar user={current} size="sm" /> : null}
@@ -202,38 +146,8 @@ export function WaitingOnPicker({ task }: { task: StoreTask }) {
             </span>
           </span>
         )}
-      >
-        {(close) => (
-          <div>
-            <div class="flex items-center gap-1.5 border-b border-line px-2 pb-1.5 text-faint">
-              <Search class="h-3.5 w-3.5" />
-              <input
-                autofocus
-                value={q}
-                placeholder="Pass the turn to…"
-                onInput={(e) => setQ((e.currentTarget as HTMLInputElement).value)}
-                class="w-full bg-transparent py-1 text-[16px] text-text placeholder:text-faint focus:outline-none sm:text-[13px]"
-              />
-            </div>
-            <div class="scroll-y max-h-56 overflow-y-auto py-1">
-              {matches.map((u) => (
-                <button
-                  key={u.id}
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    close();
-                    pass(u.id);
-                  }}
-                  class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[13px] text-text hover:bg-bg sm:py-1.5"
-                >
-                  <Avatar user={u} size="sm" />
-                  <span class="min-w-0 flex-1 truncate">{u.name}</span>
-                  {u.id === task.waitingOn && <span class="text-[11px] text-faint">current</span>}
-                </button>
-              ))}
-              {matches.length === 0 && <p class="px-2 py-2 text-[13px] text-faint">No one matches “{q}”.</p>}
-            </div>
+        footer={(close) => (
+          <>
             <div class="border-t border-line px-2 pt-2">
               <input
                 value={note}
@@ -259,9 +173,9 @@ export function WaitingOnPicker({ task }: { task: StoreTask }) {
                 </MenuItem>
               </div>
             ) : null}
-          </div>
+          </>
         )}
-      </Menu>
+      />
       {quickTarget ? (
         <button
           type="button"

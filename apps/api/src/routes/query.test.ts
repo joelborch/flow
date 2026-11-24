@@ -1,38 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { Hono } from "hono";
-import type { Role, User } from "@flow/shared";
-import type { AppEnv, AuthContext, Env } from "../env.js";
-import { onError } from "../errors.js";
+import type { Role } from "@flow/shared";
 import { queryRoutes } from "./query.js";
+import { authedApp, workspaceEnv } from "./testkit.js";
 
 // POST /api/query is open to every signed-in user and passes the caller's id to
 // the DO, which scopes the views and rate-limits members. The SQL gate and the
 // scoping are tested in packages/core/src/query.test.ts; here the DO is a stub.
 
-const userOf = (role: Role): User => ({
-  id: `us_${role}`,
-  email: `${role}@example.com`,
-  name: role,
-  role,
-  deactivated: false,
-  createdAt: 1_700_000_000_000,
-});
-
-const authOf = (role: Role): AuthContext => ({
-  user: userOf(role),
-  apiKey: null,
-  actor: { userId: `us_${role}`, via: "api", apiKeyId: null, automationRuleId: null },
-});
-
 function setup(role: Role, runQuery = vi.fn(async () => ({ columns: ["n"], rows: [[2]], truncated: false }))) {
-  const env = { WORKSPACE: { idFromName: () => ({}), get: () => ({ runQuery }) } } as unknown as Env;
-  const app = new Hono<AppEnv>();
-  app.onError(onError);
-  app.use("*", async (c, next) => {
-    c.set("auth", authOf(role));
-    return next();
-  });
-  app.route("/api", queryRoutes);
+  const env = workspaceEnv({ runQuery });
+  const app = authedApp(role, queryRoutes);
   const post = (body: unknown) =>
     app.request(
       "/api/query",

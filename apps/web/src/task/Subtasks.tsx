@@ -1,6 +1,6 @@
 // Asana-style checklist: done/not-done plus optional
 // assignee and due date. No statuses — that's the board's job, not a step's.
-import { useMemo, useRef, useState } from "preact/hooks";
+import { useRef, useState } from "preact/hooks";
 import type { Subtask, User } from "@flow/shared";
 import { LIMITS } from "@flow/shared/limits";
 import {
@@ -13,7 +13,7 @@ import {
 } from "../store/index.js";
 import { userById } from "../shell/data.js";
 import { cn, formatDue, isOverdue } from "../shell/format.js";
-import { Avatar, Menu, MenuItem, NoteLines, PersonIcon, Plus, SectionLabel, Search } from "../shell/ui.js";
+import { Avatar, NoteLines, PersonIcon, Plus, SectionLabel, UserSearchMenu } from "../shell/ui.js";
 import { isSubmitChord, useAutogrow } from "./autogrow.js";
 
 /** Inline plain-text editor for a step's note. Saves on blur or ⌘/Ctrl+Enter;
@@ -54,23 +54,14 @@ function NoteEditor({ subtask, onClose }: { subtask: Subtask; onClose: () => voi
 }
 
 function SubtaskAssignee({ subtask, assignee }: { subtask: Subtask; assignee: User | undefined }) {
-  const [q, setQ] = useState("");
-  const all = users.value;
-
-  const matches = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    const active = all.filter((u) => !u.deactivated || u.id === subtask.assigneeId);
-    if (!needle) return active.slice(0, 50);
-    return active
-      .filter((u) => u.name.toLowerCase().includes(needle) || u.email.toLowerCase().includes(needle))
-      .slice(0, 50);
-  }, [q, all, subtask.assigneeId]);
-
   return (
-    <Menu
+    <UserSearchMenu
       label={assignee ? `Assigned to ${assignee.name}` : "Assign subtask"}
-      width="w-64"
       align="right"
+      users={users.value}
+      selectedId={subtask.assigneeId}
+      unassignedLabel="Unassigned"
+      onSelect={(userId) => void setSubtaskAssignee(subtask.id, userId)}
       trigger={({ open }) =>
         assignee ? (
           <span class="flex shrink-0 items-center">
@@ -89,50 +80,7 @@ function SubtaskAssignee({ subtask, assignee }: { subtask: Subtask; assignee: Us
           </span>
         )
       }
-    >
-      {(close) => (
-        <div>
-          <div class="flex items-center gap-1.5 border-b border-line px-2 pb-1.5 text-faint">
-            <Search class="h-3.5 w-3.5" />
-            <input
-              autofocus
-              value={q}
-              placeholder="Assign to…"
-              onInput={(e) => setQ((e.currentTarget as HTMLInputElement).value)}
-              class="w-full bg-transparent py-1 text-[16px] text-text placeholder:text-faint focus:outline-none sm:text-[13px]"
-            />
-          </div>
-          <div class="scroll-y max-h-64 overflow-y-auto pt-1">
-            <MenuItem
-              selected={subtask.assigneeId === null}
-              onClick={() => {
-                close();
-                void setSubtaskAssignee(subtask.id, null);
-              }}
-            >
-              <span class="text-muted">Unassigned</span>
-            </MenuItem>
-            {matches.map((u) => (
-              <button
-                key={u.id}
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  close();
-                  void setSubtaskAssignee(subtask.id, u.id);
-                }}
-                class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[13px] text-text hover:bg-bg sm:py-1.5"
-              >
-                <Avatar user={u} size="sm" />
-                <span class="min-w-0 flex-1 truncate">{u.name}</span>
-                {u.id === subtask.assigneeId && <span class="text-[11px] text-faint">assigned</span>}
-              </button>
-            ))}
-            {matches.length === 0 && <p class="px-2 py-2 text-[13px] text-faint">No one matches “{q}”.</p>}
-          </div>
-        </div>
-      )}
-    </Menu>
+    />
   );
 }
 

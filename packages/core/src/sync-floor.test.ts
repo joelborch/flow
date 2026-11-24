@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { runMigrations } from "./schema.js";
 import { REPLAY_GAP_LIMIT, bumpResyncFloor, needsSnapshot, resyncFloor } from "./sync-floor.js";
+import { sqliteStorage } from "./testkit.js";
 
 // ---------------------------------------------------------------------------
 // The resync floor exists because delta-less mutations — seedSandbox,
@@ -14,31 +15,6 @@ import { REPLAY_GAP_LIMIT, bumpResyncFloor, needsSnapshot, resyncFloor } from ".
 // node:sqlite, through the actual production migrations, so the sync_meta DDL
 // and the upsert are exercised for real.
 // ---------------------------------------------------------------------------
-
-/**
- * Adapter: node:sqlite's DatabaseSync speaking just enough of the DO's
- * SqlStorage interface (exec → { toArray, one }) for schema.ts and
- * sync-floor.ts. Same idea as visibility.test.ts's stub, but backed by a real
- * database so DDL, ON CONFLICT and persistence are the genuine article.
- */
-function sqliteStorage(db: DatabaseSync): SqlStorage {
-  const exec = (query: string, ...params: unknown[]): unknown => {
-    const isRead = /^\s*SELECT/i.test(query);
-    if (!isRead) {
-      db.prepare(query).run(...(params as never[]));
-      return { toArray: () => [], one: () => undefined };
-    }
-    const rows = db.prepare(query).all(...(params as never[]));
-    return {
-      toArray: () => rows,
-      one: () => {
-        if (rows.length !== 1) throw new Error(`expected 1 row, got ${rows.length}`);
-        return rows[0];
-      },
-    };
-  };
-  return { exec } as unknown as SqlStorage;
-}
 
 // No failure paths here, so a plain invoke stands in for transactionSync.
 const txn = (fn: () => void): void => fn();

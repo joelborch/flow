@@ -8,6 +8,7 @@ import {
   runMigrations,
   seedJobs,
 } from "./schema.js";
+import { savepointTxn, sqliteStorage } from "./testkit.js";
 
 // ---------------------------------------------------------------------------
 // A migration failure must not brick the workspace. applyMigrations wraps each
@@ -29,41 +30,6 @@ import {
 // skip a genuinely new migration. It now checks that every known id is
 // actually present in the applied set.
 // ---------------------------------------------------------------------------
-
-function sqliteStorage(db: DatabaseSync, log?: string[]): SqlStorage {
-  const exec = (query: string, ...params: unknown[]): unknown => {
-    log?.push(query);
-    const isRead = /^\s*SELECT/i.test(query);
-    if (!isRead) {
-      db.prepare(query).run(...(params as never[]));
-      return { toArray: () => [], one: () => undefined };
-    }
-    const rows = db.prepare(query).all(...(params as never[]));
-    return {
-      toArray: () => rows,
-      one: () => {
-        if (rows.length !== 1) throw new Error(`expected 1 row, got ${rows.length}`);
-        return rows[0];
-      },
-    };
-  };
-  return { exec } as unknown as SqlStorage;
-}
-
-/** node:sqlite stand-in for ctx.storage.transactionSync: throws roll back. */
-function savepointTxn(db: DatabaseSync): MigrationTxn {
-  return (fn) => {
-    db.prepare("SAVEPOINT _txn").run();
-    try {
-      fn();
-      db.prepare("RELEASE _txn").run();
-    } catch (err) {
-      db.prepare("ROLLBACK TO _txn").run();
-      db.prepare("RELEASE _txn").run();
-      throw err;
-    }
-  };
-}
 
 function freshDb(): { sql: SqlStorage; txn: MigrationTxn } {
   const db = new DatabaseSync(":memory:");

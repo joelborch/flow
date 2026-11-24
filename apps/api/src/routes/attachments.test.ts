@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { Hono } from "hono";
 import type { Attachment } from "@flow/shared";
-import type { AppEnv, AuthContext, Env } from "../env.js";
-import { onError } from "../errors.js";
+import { authOf, authedApp, workspaceEnv } from "./testkit.js";
 import {
   ATTACHMENT_CSP,
   attachmentKey,
@@ -184,18 +182,7 @@ describe("GET /api/attachments/:id — download headers", () => {
     createdAt: 1_700_000_000_000,
   });
 
-  const auth: AuthContext = {
-    user: {
-      id: "us_admin",
-      email: "admin@example.com",
-      name: "admin",
-      role: "admin",
-      deactivated: false,
-      createdAt: 1_700_000_000_000,
-    },
-    apiKey: null,
-    actor: { userId: "us_admin", via: "ui", apiKeyId: null, automationRuleId: null },
-  };
+  const auth = authOf("admin", "ui");
 
   /**
    * A stored object as a pre-fix upload left it: `inline` disposition and the
@@ -225,17 +212,8 @@ describe("GET /api/attachments/:id — download headers", () => {
       getAttachment: async () => meta,
       getTaskDetail: async () => ({ attachments: [meta] }),
     };
-    const env = {
-      WORKSPACE: { idFromName: () => ({}), get: () => stub },
-      ATTACHMENTS: r2With(meta, opts),
-    } as unknown as Env;
-    const app = new Hono<AppEnv>();
-    app.onError(onError);
-    app.use("*", async (c, next) => {
-      c.set("auth", auth);
-      return next();
-    });
-    app.route("/api", attachmentRoutes);
+    const env = workspaceEnv(stub, { ATTACHMENTS: r2With(meta, opts) });
+    const app = authedApp(auth, attachmentRoutes);
     return app.request(`/api/attachments/${meta.id}`, init, env);
   }
 

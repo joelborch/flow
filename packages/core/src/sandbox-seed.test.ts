@@ -2,70 +2,17 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { CreateTaskInput } from "@flow/shared";
 import { SANDBOX_MEMBER_ID, SANDBOX_WRITES_PER_MINUTE, SandboxBusy, SandboxWriteBudget } from "./sandbox-seed.js";
+import { fakeCtx } from "./testkit.js";
 
 // The public sandbox's starting workspace and the three DO behaviours only the
 // sandbox uses: direct seeding, no recurring jobs, and wipeSandbox.
-
-vi.mock("cloudflare:workers", () => ({
-  DurableObject: class {
-    ctx: unknown;
-    env: unknown;
-    constructor(ctx: unknown, env: unknown) {
-      this.ctx = ctx;
-      this.env = env;
-    }
-  },
-}));
-
-function sqliteStorage(db: DatabaseSync): SqlStorage {
-  const exec = (query: string, ...params: unknown[]): unknown => {
-    if (!/^\s*SELECT/i.test(query) && !/RETURNING/i.test(query)) {
-      db.prepare(query).run(...(params as never[]));
-      return { toArray: () => [], one: () => undefined };
-    }
-    const rows = db.prepare(query).all(...(params as never[]));
-    return {
-      toArray: () => rows,
-      one: () => {
-        if (rows.length !== 1) throw new Error(`expected 1 row, got ${rows.length}`);
-        return rows[0];
-      },
-    };
-  };
-  return { exec } as unknown as SqlStorage;
-}
 
 async function freshWorkspace(env: Record<string, unknown>) {
   const { Workspace } = await import("./index.js");
   const db = new DatabaseSync(":memory:");
   const deleteAll = vi.fn(async () => undefined);
   const deleteAlarm = vi.fn(async () => undefined);
-  const ctx = {
-    id: { toString: () => "do_test" },
-    storage: {
-      sql: sqliteStorage(db),
-      getAlarm: async () => null,
-      setAlarm: async () => undefined,
-      deleteAll,
-      deleteAlarm,
-      transactionSync: <T,>(fn: () => T): T => {
-        db.prepare("SAVEPOINT _txn").run();
-        try {
-          const result = fn();
-          db.prepare("RELEASE _txn").run();
-          return result;
-        } catch (err) {
-          db.prepare("ROLLBACK TO _txn").run();
-          db.prepare("RELEASE _txn").run();
-          throw err;
-        }
-      },
-    },
-    blockConcurrencyWhile: async <T,>(fn: () => Promise<T> | T): Promise<T> => fn(),
-    waitUntil: () => undefined,
-    getWebSockets: () => [],
-    acceptWebSocket: () => undefined,
-  } as unknown as DurableObjectState;
+  const ctx = fakeCtx(db, { deleteAll, deleteAlarm });
   const ws = new Workspace(ctx, { SIDE_EFFECTS: { sendBatch: async () => undefined }, ...env } as never);
   // The constructor's migration runs inside blockConcurrencyWhile; let it settle.
   await new Promise((r) => setTimeout(r, 0));

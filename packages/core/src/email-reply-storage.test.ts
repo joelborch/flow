@@ -10,6 +10,7 @@ import {
 } from "@flow/shared";
 import type { SideEffectPayload } from "./automation/types.js";
 import type { IngestEmailInput } from "./email-intake.js";
+import { fakeCtx } from "./testkit.js";
 
 // ---------------------------------------------------------------------------
 // Email replies against the real Workspace class: a person in the app (or an
@@ -22,65 +23,6 @@ import type { IngestEmailInput } from "./email-intake.js";
 //
 // Same real-Workspace-over-node:sqlite harness as email-intake-storage.test.ts.
 // ---------------------------------------------------------------------------
-
-vi.mock("cloudflare:workers", () => ({
-  DurableObject: class {
-    ctx: unknown;
-    env: unknown;
-    constructor(ctx: unknown, env: unknown) {
-      this.ctx = ctx;
-      this.env = env;
-    }
-  },
-}));
-
-function sqliteStorage(db: DatabaseSync): SqlStorage {
-  const exec = (query: string, ...params: unknown[]): unknown => {
-    const returnsRows = /^\s*SELECT/i.test(query) || /RETURNING/i.test(query);
-    if (!returnsRows) {
-      db.prepare(query).run(...(params as never[]));
-      return { toArray: () => [], one: () => undefined };
-    }
-    const rows = db.prepare(query).all(...(params as never[]));
-    return {
-      toArray: () => rows,
-      one: () => {
-        if (rows.length !== 1) throw new Error(`expected 1 row, got ${rows.length}`);
-        return rows[0];
-      },
-    };
-  };
-  return { exec } as unknown as SqlStorage;
-}
-
-function fakeCtx(db: DatabaseSync, sockets: WebSocket[]): DurableObjectState {
-  return {
-    id: { toString: () => "do_test" },
-    storage: {
-      sql: sqliteStorage(db),
-      getAlarm: async () => null,
-      setAlarm: async () => undefined,
-      transactionSync: <T,>(fn: () => T): T => {
-        db.prepare("SAVEPOINT _txn").run();
-        try {
-          const result = fn();
-          db.prepare("RELEASE _txn").run();
-          return result;
-        } catch (err) {
-          db.prepare("ROLLBACK TO _txn").run();
-          db.prepare("RELEASE _txn").run();
-          throw err;
-        }
-      },
-    },
-    blockConcurrencyWhile: async <T>(fn: () => Promise<T> | T): Promise<T> => fn(),
-    waitUntil: () => undefined,
-    getWebSockets: () => sockets,
-    acceptWebSocket: (ws: WebSocket) => {
-      sockets.push(ws);
-    },
-  } as unknown as DurableObjectState;
-}
 
 const OWNER = "us_owner";
 /** What the Worker's email() handler passes. */
@@ -95,7 +37,7 @@ async function seeded(env: { EMAIL_INTAKE_REPLY?: string } = { EMAIL_INTAKE_REPL
   const db = new DatabaseSync(":memory:");
   const sockets: WebSocket[] = [];
   const sendBatch = vi.fn(async (_batch: Array<{ body: unknown }>) => undefined);
-  const ws = new Workspace(fakeCtx(db, sockets), { SIDE_EFFECTS: { sendBatch }, ...env } as never);
+  const ws = new Workspace(fakeCtx(db, { sockets }), { SIDE_EFFECTS: { sendBatch }, ...env } as never);
 
   ws.upsertUser({ id: OWNER, email: "owner@example.com", name: "Owner", role: "owner" }, OWNER);
   const space = ws.createSpace(CreateSpaceInput.parse({ name: "Ops", visibility: "workspace" }), OWNER);

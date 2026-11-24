@@ -1,37 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { Hono } from "hono";
-import type { User } from "@flow/shared";
-import type { AppEnv, AuthContext, Env } from "../env.js";
-import { onError } from "../errors.js";
 import { taskRoutes } from "./tasks.js";
+import { authOf, authedApp, workspaceEnv } from "./testkit.js";
 
-const user: User = {
-  id: "us_member",
-  email: "member@example.com",
-  name: "member",
-  role: "member",
-  deactivated: false,
-  createdAt: 1_700_000_000_000,
-};
-
-const auth: AuthContext = {
-  user,
-  apiKey: null,
-  actor: { userId: "us_member", via: "api", apiKeyId: null, automationRuleId: null },
-};
+const auth = authOf("member");
 
 function createTestApp(stub: Record<string, unknown>) {
-  const app = new Hono<AppEnv>();
-  app.onError(onError);
-  app.use("*", async (c, next) => {
-    c.set("auth", auth);
-    return next();
-  });
-  app.route("/api", taskRoutes);
-  const env = {
-    WORKSPACE: { idFromName: () => ({}), get: () => stub },
-  } as unknown as Env;
-  return { app, env };
+  return {
+    app: authedApp(auth, taskRoutes),
+    env: workspaceEnv(stub),
+  };
 }
 
 describe("PATCH /api/subtasks/:subtaskId", () => {

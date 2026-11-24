@@ -2,7 +2,7 @@
 // chips. One accent (#5b5bd6) is used across the whole app; everything else is
 // restrained neutrals.
 import type { ComponentChildren, RefObject, VNode } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { Priority, User } from "@flow/shared";
 import { avatarHue, initials, PRIORITY_COLOR, PRIORITY_LABEL } from "../lib/fmt.js";
 import { cn } from "./format.js";
@@ -375,6 +375,92 @@ export function MenuItem({
       <span class="min-w-0 flex-1 truncate">{children}</span>
       {selected && <Check class="h-3.5 w-3.5 text-accent" />}
     </button>
+  );
+}
+
+export function UserSearchMenu({
+  label,
+  align = "left",
+  trigger,
+  users,
+  selectedId,
+  selectedLabel = "assigned",
+  placeholder = "Assign to…",
+  unassignedLabel,
+  listClass = "max-h-64 pt-1",
+  onSelect,
+  footer,
+}: {
+  label: string;
+  align?: "left" | "right";
+  trigger: (state: { open: boolean }) => ComponentChildren;
+  users: readonly User[];
+  selectedId: string | null;
+  selectedLabel?: string;
+  placeholder?: string;
+  unassignedLabel?: string;
+  listClass?: string;
+  onSelect: (userId: string | null) => void;
+  footer?: (close: () => void) => ComponentChildren;
+}) {
+  const [q, setQ] = useState("");
+  const matches = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const active = users.filter((u) => !u.deactivated || u.id === selectedId);
+    if (!needle) return active.slice(0, 50);
+    return active
+      .filter((u) => u.name.toLowerCase().includes(needle) || u.email.toLowerCase().includes(needle))
+      .slice(0, 50);
+  }, [q, users, selectedId]);
+
+  return (
+    <Menu label={label} width="w-64" align={align} trigger={trigger}>
+      {(close) => (
+        <div>
+          <div class="flex items-center gap-1.5 border-b border-line px-2 pb-1.5 text-faint">
+            <Search class="h-3.5 w-3.5" />
+            <input
+              autofocus
+              value={q}
+              placeholder={placeholder}
+              onInput={(e) => setQ((e.currentTarget as HTMLInputElement).value)}
+              class="w-full bg-transparent py-1 text-[16px] text-text placeholder:text-faint focus:outline-none sm:text-[13px]"
+            />
+          </div>
+          <div class={cn("scroll-y overflow-y-auto", listClass)}>
+            {unassignedLabel && (
+              <MenuItem
+                selected={selectedId === null}
+                onClick={() => {
+                  close();
+                  onSelect(null);
+                }}
+              >
+                <span class="text-muted">{unassignedLabel}</span>
+              </MenuItem>
+            )}
+            {matches.map((u) => (
+              <button
+                key={u.id}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  close();
+                  onSelect(u.id);
+                }}
+                class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[13px] text-text hover:bg-bg sm:py-1.5"
+              >
+                <Avatar user={u} size="sm" />
+                <span class="min-w-0 flex-1 truncate">{u.name}</span>
+                {u.id === selectedId && <span class="text-[11px] text-faint">{selectedLabel}</span>}
+              </button>
+            ))}
+            {matches.length === 0 && <p class="px-2 py-2 text-[13px] text-faint">No one matches “{q}”.</p>}
+          </div>
+          {footer?.(close)}
+        </div>
+      )}
+    </Menu>
   );
 }
 

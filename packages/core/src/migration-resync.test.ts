@@ -1,12 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   CHANGES_SPACE_ID_MIGRATION_ID,
   MIGRATIONS,
-  type MigrationTxn,
   applyMigrations,
 } from "./schema.js";
 import { resyncFloor } from "./sync-floor.js";
+import { fakeCtx, savepointTxn, sqliteStorage } from "./testkit.js";
 
 // ---------------------------------------------------------------------------
 // `changes` rows written before core-0007-changes-space-id have no stored
@@ -20,77 +20,6 @@ import { resyncFloor } from "./sync-floor.js";
 //
 // Same real-Workspace-over-node:sqlite harness as import-batch.test.ts.
 // ---------------------------------------------------------------------------
-
-vi.mock("cloudflare:workers", () => ({
-  DurableObject: class {
-    ctx: unknown;
-    env: unknown;
-    constructor(ctx: unknown, env: unknown) {
-      this.ctx = ctx;
-      this.env = env;
-    }
-  },
-}));
-
-function sqliteStorage(db: DatabaseSync): SqlStorage {
-  const exec = (query: string, ...params: unknown[]): unknown => {
-    const isRead = /^\s*SELECT/i.test(query) || /\bRETURNING\b/i.test(query);
-    if (!isRead) {
-      db.prepare(query).run(...(params as never[]));
-      return { toArray: () => [], one: () => undefined };
-    }
-    const rows = db.prepare(query).all(...(params as never[]));
-    return {
-      toArray: () => rows,
-      one: () => {
-        if (rows.length !== 1) throw new Error(`expected 1 row, got ${rows.length}`);
-        return rows[0];
-      },
-    };
-  };
-  return { exec } as unknown as SqlStorage;
-}
-
-function savepointTxn(db: DatabaseSync): MigrationTxn {
-  return (fn) => {
-    db.prepare("SAVEPOINT _txn").run();
-    try {
-      fn();
-      db.prepare("RELEASE _txn").run();
-    } catch (err) {
-      db.prepare("ROLLBACK TO _txn").run();
-      db.prepare("RELEASE _txn").run();
-      throw err;
-    }
-  };
-}
-
-function fakeCtx(db: DatabaseSync): DurableObjectState {
-  return {
-    id: { toString: () => "do_test" },
-    storage: {
-      sql: sqliteStorage(db),
-      getAlarm: async () => null,
-      setAlarm: async () => undefined,
-      transactionSync: <T,>(fn: () => T): T => {
-        db.prepare("SAVEPOINT _txn").run();
-        try {
-          const result = fn();
-          db.prepare("RELEASE _txn").run();
-          return result;
-        } catch (err) {
-          db.prepare("ROLLBACK TO _txn").run();
-          db.prepare("RELEASE _txn").run();
-          throw err;
-        }
-      },
-    },
-    blockConcurrencyWhile: async <T>(fn: () => Promise<T> | T): Promise<T> => fn(),
-    waitUntil: () => undefined,
-    getWebSockets: () => [],
-    acceptWebSocket: () => undefined,
-  } as unknown as DurableObjectState;
-}
 
 /**
  * A database in the exact pre-deploy prod state: every migration up to (but

@@ -1,26 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Hono } from "hono";
-import type { EmailIntake, Role, User } from "@flow/shared";
-import type { AppEnv, AuthContext, Env } from "../env.js";
-import { onError } from "../errors.js";
+import type { EmailIntake, Role } from "@flow/shared";
 import { emailIntakeRoutes } from "./email-intake.js";
+import { authOf, authedApp, workspaceEnv } from "./testkit.js";
 
 // Real routes and the real workspace() error mapping, over a stubbed DO binding.
-
-const userOf = (role: Role): User => ({
-  id: `us_${role}`,
-  email: `${role}@example.com`,
-  name: role,
-  role,
-  deactivated: false,
-  createdAt: 1_700_000_000_000,
-});
-
-const authOf = (role: Role): AuthContext => ({
-  user: userOf(role),
-  apiKey: null,
-  actor: { userId: `us_${role}`, via: "ui", apiKeyId: null, automationRuleId: null },
-});
 
 const intake: EmailIntake = {
   listId: "ls_acme",
@@ -32,23 +15,10 @@ const intake: EmailIntake = {
 
 let stub: { listEmailIntakes: ReturnType<typeof vi.fn>; setEmailIntake: ReturnType<typeof vi.fn> };
 
-function envWith(domain?: string): Env {
-  return {
-    WORKSPACE: { idFromName: () => ({}), get: () => stub },
-    ...(domain === undefined ? {} : { EMAIL_INTAKE_DOMAIN: domain }),
-  } as unknown as Env;
-}
+const envWith = (domain?: string) =>
+  workspaceEnv(stub, domain === undefined ? {} : { EMAIL_INTAKE_DOMAIN: domain });
 
-function appAs(role: Role): Hono<AppEnv> {
-  const app = new Hono<AppEnv>();
-  app.onError(onError);
-  app.use("*", async (c, next) => {
-    c.set("auth", authOf(role));
-    return next();
-  });
-  app.route("/api", emailIntakeRoutes);
-  return app;
-}
+const appAs = (role: Role) => authedApp(role, emailIntakeRoutes);
 
 const put = (body: unknown) => ({
   method: "PUT",
