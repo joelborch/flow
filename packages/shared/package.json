@@ -7,7 +7,11 @@
   "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./limits": "./src/limits.ts"
+    "./limits": "./src/limits.ts",
+    "./placeholder-email": {
+      "types": "./src/placeholder-email.d.ts",
+      "default": "./src/placeholder-email.mjs"
+    }
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

@@ -1,16 +1,16 @@
 // One-click deploy config for the "Deploy to Cloudflare" button and self-hosters
 // deploying into their own Cloudflare account (`pnpm run build && pnpm --filter
 // @flow/api exec wrangler deploy --config ../../wrangler.jsonc`, never against
-// this checkout's production Worker — Joel's production uses macOS-guarded
-// `pnpm run deploy` with gitignored apps/api/wrangler.jsonc and never falls back
-// to this file).
+// an existing checkout's production Worker — production checkouts deploy via
+// macOS-guarded `pnpm run deploy` with gitignored apps/api/wrangler.jsonc and
+// never fall back to this file).
 //
-// Names the Worker "flow-selfhost-example" so a self-hoster deploying from this
-// template never collides with an existing "flow" Worker. Serves Flow from a
-// *.workers.dev hostname with sign-in unconfigured until ACCESS_TEAM_DOMAIN,
-// ACCESS_AUD and OWNER_EMAIL are set in the Worker's Settings → Variables; for
-// a custom domain and email sending, copy apps/api/wrangler.example.jsonc to
-// apps/api/wrangler.jsonc instead (see docs/SELF_HOSTING.md).
+// Names the Worker "flow-selfhost-example" with its own bucket and queues so
+// self-hosters deploying from this template never collide with existing "flow"
+// resources. Serves Flow from a *.workers.dev hostname with sign-in
+// unconfigured until ACCESS_TEAM_DOMAIN, ACCESS_AUD and OWNER_EMAIL are set
+// under Settings → Variables; for a custom domain and email sending, copy
+// apps/api/wrangler.example.jsonc to apps/api/wrangler.jsonc (docs/SELF_HOSTING.md).
 {
   "$schema": "./apps/api/node_modules/wrangler/config-schema.json",
   "name": "flow-selfhost-example",
@@ -32,12 +32,16 @@
   // No send_email binding here: it needs Email Sending onboarding first, and
   // EMAIL_DRY_RUN keeps every send a log line until then. Add it from
   // apps/api/wrangler.example.jsonc when you're ready to send mail.
-  "r2_buckets": [{ "binding": "ATTACHMENTS", "bucket_name": "flow-attachments" }],
+  "r2_buckets": [{ "binding": "ATTACHMENTS", "bucket_name": "flow-selfhost-example-attachments" }],
   "queues": {
-    "producers": [{ "binding": "SIDE_EFFECTS", "queue": "flow-side-effects" }],
+    "producers": [{ "binding": "SIDE_EFFECTS", "queue": "flow-selfhost-example-side-effects" }],
     "consumers": [
-      { "queue": "flow-side-effects", "max_retries": 5, "dead_letter_queue": "flow-dlq" },
-      { "queue": "flow-dlq", "max_retries": 3 }
+      {
+        "queue": "flow-selfhost-example-side-effects",
+        "max_retries": 5,
+        "dead_letter_queue": "flow-selfhost-example-dlq"
+      },
+      { "queue": "flow-selfhost-example-dlq", "max_retries": 3 }
     ]
   },
   // Values you set in the dashboard (Settings → Variables) survive the

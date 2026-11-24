@@ -26,6 +26,7 @@
 // handleDeadLetterBatch: log, record, ack — no further retry queue.
 
 import { z } from "zod";
+import { isPlaceholderEmail } from "@flow/shared/placeholder-email";
 import type { SideEffectPayload } from "@flow/core/automation";
 import type { WebhookPayload } from "@flow/shared";
 import {
@@ -42,45 +43,13 @@ export const DEFAULT_EMAIL_FROM = { email: "flow@mail.example.com", name: "Flow"
 export const WEBHOOK_TIMEOUT_MS = 7_000;
 export const SIGNATURE_HEADER = "X-Flow-Signature";
 
-const PLACEHOLDER_EMAIL_DOMAINS = [
-  "example.com",
-  "example.net",
-  "example.org",
-  "example",
-  "localhost",
-  "localdomain",
-  "local",
-  "invalid",
-  "test",
-  "yourdomain.com",
-  "yourdomain.net",
-  "yourdomain.org",
-  "your-domain.com",
-  "your-domain.net",
-  "your-domain.org",
-  "mydomain.com",
-  "yourcompany.com",
-  "your-company.com",
-  "placeholder.flow",
-] as const;
+export { isPlaceholderEmail };
 
 export class EmailConfigError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "EmailConfigError";
   }
-}
-
-/** True when `email` is empty, malformed, contains template tokens, or uses a placeholder/local domain. */
-export function isPlaceholderEmail(email: string): boolean {
-  const trimmed = email.trim().toLowerCase();
-  if (!trimmed || /[<>{}\s]/.test(trimmed)) return true;
-  const at = trimmed.lastIndexOf("@");
-  if (at <= 0 || at === trimmed.length - 1) return true;
-  const domain = trimmed.slice(at + 1);
-  if (domain.startsWith(".") || domain.endsWith(".") || domain.includes("..")) return true;
-  if (PLACEHOLDER_EMAIL_DOMAINS.some((p) => domain === p || domain.endsWith(`.${p}`))) return true;
-  return !domain.includes(".");
 }
 
 /**

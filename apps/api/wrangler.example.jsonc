@@ -3,7 +3,7 @@
 // settings never end up in version control.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "flow",
+  "name": "my-flow",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],
