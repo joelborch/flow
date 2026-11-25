@@ -14,14 +14,14 @@
     "@flow/core": "workspace:*",
     "@flow/shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "hono": "^4.13.18",
+    "hono": "^4.13.19",
     "postal-mime": "^4.2.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20261113.1",
+    "@cloudflare/workers-types": "^5.20261121.1",
     "typescript": "^5.7.2",
-    "vitest": "^5.1.0",
-    "wrangler": "^4.161.0"
+    "vitest": "^5.1.1",
+    "wrangler": "^4.166.0"
   }
 }
